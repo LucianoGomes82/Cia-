@@ -3989,7 +3989,13 @@ async function doRefresh(){
       }),
     });
     if(!r.ok) return false;
-    const d = await r.json();
+    // Parse com proteção contra body vazio ou inválido
+    const txt = await r.text();
+    if(!txt) return false;
+    let d;
+    try { d = JSON.parse(txt); }
+    catch { return false; }
+    if(!d.access_token) return false;
     cfg.at = d.access_token;
     if(d.refresh_token) cfg.rt = d.refresh_token;
     // Atualiza campos visuais do Config
@@ -4089,7 +4095,15 @@ async function exchangeCode(){
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ grant_type:'authorization_code', client_id:ai, client_secret:cs, code, redirect_uri:'https://local' })
     });
-    const d = await r.json();
+    // Trata resposta com proteção contra body vazio ou inválido
+    const txt = await r.text();
+    let d = {};
+    if(txt){
+      try { d = JSON.parse(txt); }
+      catch { d = { error: 'invalid_response', detail: txt.slice(0,200) }; }
+    } else {
+      d = { error: 'empty_response', detail: `HTTP ${r.status} sem body` };
+    }
     if(d.access_token){
       document.getElementById('at').value = d.access_token;
       document.getElementById('rt').value = d.refresh_token || '';
@@ -4097,7 +4111,7 @@ async function exchangeCode(){
       saveState();
       bar.innerHTML='<div class="alert al-ok" style="display:inline-flex;padding:6px 14px">✓ Token obtido! Clique em <strong style="margin-left:4px">Salvar e conectar</strong>.</div>';
     } else {
-      const msg = d.message||d.error||JSON.stringify(d);
+      const msg = d.message||d.detail||d.error||JSON.stringify(d);
       bar.innerHTML=`<div class="alert al-err" style="display:inline-flex;flex-direction:column;padding:8px 14px;gap:4px"><span>Falha ao obter token</span><small style="opacity:.7">${msg}</small>${d.error==='invalid_grant'?'<small style="opacity:.8">💡 O código expirou (~2 min). Repita o passo 3 para gerar um novo.</small>':''}</div>`;
     }
   } catch(e){

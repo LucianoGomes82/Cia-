@@ -1,6 +1,5 @@
 // Cloudflare Pages Function — Proxy binário ML (PDFs de etiquetas, etc.)
 // Endpoint: GET /ml-binary?path=/shipment_labels?shipment_ids=...
-// Cloudflare Workers retorna bytes nativamente — sem precisar base64
 
 export async function onRequest(context) {
   const { request } = context;
@@ -20,7 +19,7 @@ export async function onRequest(context) {
 
   if (!mlPath) {
     return new Response(
-      JSON.stringify({ error: "path query param required" }),
+      JSON.stringify({ error: "missing_path", detail: "?path=/shipment_labels?... required" }),
       { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
     );
   }
@@ -41,7 +40,8 @@ export async function onRequest(context) {
       const errBody = await mlResp.text();
       return new Response(
         JSON.stringify({
-          error: `ML returned ${mlResp.status}`,
+          error: "ml_error",
+          status: mlResp.status,
           detail: errBody.slice(0, 1000),
         }),
         { status: mlResp.status, headers: { ...cors, "Content-Type": "application/json" } },
@@ -61,7 +61,7 @@ export async function onRequest(context) {
     });
   } catch (err) {
     return new Response(
-      JSON.stringify({ error: err.message, detail: "proxy_error" }),
+      JSON.stringify({ error: "proxy_error", detail: err.message }),
       { status: 500, headers: { ...cors, "Content-Type": "application/json" } },
     );
   }
