@@ -6502,6 +6502,54 @@ function calcLucroVenda(v){
 
 // Detecta se uma venda é de estado bloqueado
 // Retorna { isBlocked, uf } — uf normalizado se possível
+// Estima a comissão ML quando a API não retorna o valor real.
+// Usa as taxas configuradas em Config (commissionPremium / commissionClassico)
+// + fixedFee (taxa fixa por venda).
+// Returns: { mlFee, source: 'api' | 'estimated' | 'zero' }
+function estimateMLFee(order, listingTypeId){
+  const total = order.total_amount || 0;
+  const payments = order.payments || [];
+
+  // Tenta obter comissão real da API
+  let realFee = 0;
+  let foundApiFee = false;
+  for(const p of payments){
+    if(typeof p.marketplace_fee === 'number' && p.marketplace_fee > 0){
+      realFee += p.marketplace_fee;
+      foundApiFee = true;
+      continue;
+    }
+    const details = p.fee_details || [];
+    for(const f of details){
+      const amount = Number(f.amount || 0);
+      if(['mercadopago_fee','sale_fee','marketplace_fee','financing_fee'].includes(f.fee_type) && amount > 0){
+        realFee += amount;
+        foundApiFee = true;
+      }
+    }
+  }
+
+  if(foundApiFee && realFee > 0) return { mlFee: realFee, source: 'api' };
+
+  // Fallback: estima usando as taxas do Config
+  // Tipo do anúncio: gold_pro (premium) | gold_special (clássico)
+  let lt = listingTypeId || '';
+  if(!lt && order.order_items?.length){
+    lt = order.order_items[0]?.listing_type_id || '';
+  }
+  const isPremium = String(lt).toLowerCase().includes('pro');
+  const ratePct = isPremium ? (cfg.commissionPremium || 0.16) : (cfg.commissionClassico || 0.11);
+  const fixedFee = Number(cfg.fixedFee) || 0;
+
+  // Taxa fixa do ML para vendas abaixo de R$80 (regra do ML em 2025-2026)
+  // Se total >= R$80, taxa fixa é 0; senão R$6.
+  const mlFixedThreshold = 80;
+  const mlFixedFeeBR = (total < mlFixedThreshold && total > 0) ? 6 : 0;
+
+  const estimated = (total * ratePct) + mlFixedFeeBR + fixedFee;
+  return { mlFee: estimated, source: 'estimated' };
+}
+
 function isVendaInBlockedState(v){
   const blockedSet = new Set((cfg.blockedStates || []).map(s => s.toUpperCase()));
   if(blockedSet.size === 0) return { isBlocked: false, uf: null };
@@ -6851,18 +6899,15 @@ async function syncVendas(force = false){
       const payment = payments[0];
       const paymentId = payment?.id || null;
 
-      // Comissão ML: soma de fee_details[] dos pagamentos.
-      // fee_details[].fee_type tipicamente: 'mercadopago_fee', 'financing_fee',
-      // 'shipping', 'sale_fee', 'discount_fee'
-      let mlFee = 0;
+      // Comissão ML: usa fallback estimado se API não retornar valor real
+      const feeResult = estimateMLFee(order, items[0]?.listing_type_id);
+      let mlFee = feeResult.mlFee;
+      const mlFeeSource = feeResult.source;
       let mlFeeDetails = [];
       let shippingPaidBySeller = 0;  // frete bancado pelo vendedor (quando free shipping)
 
+      // Coleta detalhes pra debug e identifica frete bancado pelo vendedor
       for(const p of payments){
-        // Algumas vendas têm marketplace_fee direto no nível do payment
-        if(typeof p.marketplace_fee === 'number') mlFee += p.marketplace_fee;
-
-        // Detalhamento de taxas (mais preciso)
         const details = p.fee_details || [];
         for(const f of details){
           const amount = Number(f.amount || 0);
@@ -6871,11 +6916,6 @@ async function syncVendas(force = false){
             amount,
             payer: f.fee_payer || null,
           });
-          // Para 'mercadopago_fee'/'sale_fee' aplicáveis ao vendedor
-          if(['mercadopago_fee','sale_fee','marketplace_fee','financing_fee'].includes(f.fee_type)){
-            // Só conta se ainda não contamos via marketplace_fee
-            if(typeof p.marketplace_fee !== 'number') mlFee += amount;
-          }
           // Frete pago pelo vendedor (caso free_shipping)
           if(f.fee_type === 'shipping' && f.fee_payer === 'collector'){
             shippingPaidBySeller += amount;
@@ -6909,6 +6949,7 @@ async function syncVendas(force = false){
         total,                             // valor BRUTO (preço pago pelo comprador)
         totalLiquido,                      // valor LÍQUIDO (- comissão - frete bancado)
         mlFee,                             // só a comissão ML
+        mlFeeSource,                       // 'api' | 'estimated' — origem do valor
         shippingPaidBySeller,              // só o frete que o vendedor bancou
         mlFeeDetails,                      // breakdown das taxas (debug)
         subtotal: total - frete,
@@ -7981,19 +8022,19 @@ function orderToVenda(order){
   }
   if(!color && firstItem.title) color = extractMLColor(firstItem.title);
 
-  // Comissão ML e frete bancado pelo vendedor
+  // Comissão ML: usa fallback estimado se API não retornar valor real
+  const feeResult = estimateMLFee(order, items[0]?.listing_type_id);
+  let mlFee = feeResult.mlFee;
+  const mlFeeSource = feeResult.source;
+  let shippingPaidBySeller = 0;
+
+  // Coleta só shipping bancado pelo vendedor (mlFee já vem pronto)
   const payments = order.payments || [];
-  let mlFee = 0, shippingPaidBySeller = 0;
   for(const p of payments){
-    if(typeof p.marketplace_fee === 'number') mlFee += p.marketplace_fee;
     const details = p.fee_details || [];
     for(const f of details){
-      const amount = Number(f.amount || 0);
-      if(['mercadopago_fee','sale_fee','marketplace_fee','financing_fee'].includes(f.fee_type)){
-        if(typeof p.marketplace_fee !== 'number') mlFee += amount;
-      }
       if(f.fee_type === 'shipping' && f.fee_payer === 'collector'){
-        shippingPaidBySeller += amount;
+        shippingPaidBySeller += Number(f.amount || 0);
       }
     }
     const ps = Number(p.shipping_cost || 0);
@@ -8012,6 +8053,7 @@ function orderToVenda(order){
     total,
     totalLiquido,
     mlFee,
+    mlFeeSource,
     shippingPaidBySeller,
     subtotal: total - frete,
     frete,
@@ -8157,20 +8199,17 @@ async function loadAllVendasForPlanilha(){
       const total = order.total_amount || 0;
       const frete = order.shipping?.cost || 0;
 
-      // Comissão ML e frete bancado pelo vendedor (mesmo cálculo do syncVendas)
-      const payments = order.payments || [];
-      let mlFee = 0;
+      // Comissão ML: usa fallback estimado se API não retornar valor real
+      const feeResult = estimateMLFee(order, items[0]?.listing_type_id);
+      let mlFee = feeResult.mlFee;
+      const mlFeeSource = feeResult.source;
       let shippingPaidBySeller = 0;
+      const payments = order.payments || [];
       for(const p of payments){
-        if(typeof p.marketplace_fee === 'number') mlFee += p.marketplace_fee;
         const details = p.fee_details || [];
         for(const f of details){
-          const amount = Number(f.amount || 0);
-          if(['mercadopago_fee','sale_fee','marketplace_fee','financing_fee'].includes(f.fee_type)){
-            if(typeof p.marketplace_fee !== 'number') mlFee += amount;
-          }
           if(f.fee_type === 'shipping' && f.fee_payer === 'collector'){
-            shippingPaidBySeller += amount;
+            shippingPaidBySeller += Number(f.amount || 0);
           }
         }
         const ps = Number(p.shipping_cost || 0);
@@ -8189,6 +8228,7 @@ async function loadAllVendasForPlanilha(){
         total,
         totalLiquido,
         mlFee,
+        mlFeeSource,
         shippingPaidBySeller,
         subtotal: total - frete,
         frete,
@@ -8640,7 +8680,8 @@ function renderVendasPlanilha(items){
     const lucro = calcLucroVenda(v);
     const lucroColor = lucro > 0 ? 'var(--green)' : (lucro < 0 ? 'var(--red)' : 'var(--text3)');
     const totalLiq = (typeof v.totalLiquido === 'number') ? v.totalLiquido : v.total;
-    const tooltipBruto = `Bruto: R$${v.total.toFixed(2).replace('.',',')}\nComissão ML: -R$${(v.mlFee||0).toFixed(2).replace('.',',')}\nFrete vendedor: -R$${(v.shippingPaidBySeller||0).toFixed(2).replace('.',',')}\n────────\nLíquido: R$${totalLiq.toFixed(2).replace('.',',')}`;
+    const feeSrc = v.mlFeeSource === 'estimated' ? ' (estimada)' : '';
+    const tooltipBruto = `Bruto: R$${v.total.toFixed(2).replace('.',',')}\nComissão ML${feeSrc}: -R$${(v.mlFee||0).toFixed(2).replace('.',',')}\nFrete vendedor: -R$${(v.shippingPaidBySeller||0).toFixed(2).replace('.',',')}\n────────\nLíquido: R$${totalLiq.toFixed(2).replace('.',',')}`;
 
     // Vendas de estado bloqueado: linha cinza com badge especial, sem inputs editáveis
     const isBlocked = v._isBlockedState === true;
@@ -8654,9 +8695,11 @@ function renderVendasPlanilha(items){
     const statusColor = isBlocked ? 'var(--red)' : statusInfo.color;
 
     // Células financeiras: vazias para bloqueados
+    const isEstimated = v.mlFeeSource === 'estimated' && (v.mlFee || 0) > 0;
+    const estIcon = isEstimated ? `<span style="color:var(--amber);font-size:9px;margin-left:3px" title="Comissão estimada (API ML não retornou)">~</span>` : '';
     const totalCell = isBlocked
       ? `<td style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px" title="Estado bloqueado — não calculamos valores financeiros">—</td>`
-      : `<td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:600" title="${tooltipBruto}">${fmtBRL(totalLiq, false)}</td>`;
+      : `<td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:600" title="${tooltipBruto}">${fmtBRL(totalLiq, false)}${estIcon}</td>`;
 
     const invLucianoCell = isBlocked
       ? `<td style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px">—</td>`
