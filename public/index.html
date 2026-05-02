@@ -862,23 +862,43 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
     <div id="vendas-err" style="display:none" class="alert al-err"><span>✕</span><span id="vendas-err-msg"></span></div>
 
     <div id="vendas-content" style="display:none">
-      <!-- Métricas -->
+      <!-- Painel financeiro: linha 1 -->
       <div class="metrics" style="grid-template-columns:repeat(4,1fr)">
         <div class="metric">
-          <div class="mlabel">Vendas</div>
+          <div class="mlabel">💰 Lucro Diário</div>
+          <div class="mval g" id="vendas-lucro-dia">R$ 0,00</div>
+        </div>
+        <div class="metric">
+          <div class="mlabel">📈 Lucro Total</div>
+          <div class="mval p" id="vendas-lucro-total">R$ 0,00</div>
+        </div>
+        <div class="metric">
+          <div class="mlabel">🏦 Mercado Pago</div>
+          <div class="mval a" id="vendas-faturamento">R$ 0,00</div>
+        </div>
+        <div class="metric">
+          <div class="mlabel">⚖ Diferença</div>
+          <div class="mval r" id="vendas-diferenca">R$ 0,00</div>
+        </div>
+      </div>
+
+      <!-- Painel financeiro: linha 2 (sócios) -->
+      <div class="metrics" style="grid-template-columns:repeat(4,1fr)">
+        <div class="metric">
+          <div class="mlabel">👤 Invest. Luciano</div>
+          <div class="mval a" id="vendas-inv-luciano">R$ 0,00</div>
+        </div>
+        <div class="metric">
+          <div class="mlabel">👤 Invest. Johnny</div>
+          <div class="mval a" id="vendas-inv-johnny">R$ 0,00</div>
+        </div>
+        <div class="metric">
+          <div class="mlabel">📦 Vendas</div>
           <div class="mval g" id="vendas-total">0</div>
         </div>
         <div class="metric">
-          <div class="mlabel">Faturamento</div>
-          <div class="mval p" id="vendas-faturamento">R$0</div>
-        </div>
-        <div class="metric">
-          <div class="mlabel">Ticket médio</div>
-          <div class="mval a" id="vendas-ticket">R$0</div>
-        </div>
-        <div class="metric">
-          <div class="mlabel">Frete cobrado</div>
-          <div class="mval g" id="vendas-frete">R$0</div>
+          <div class="mlabel">🎯 Ticket Médio</div>
+          <div class="mval p" id="vendas-ticket">R$ 0,00</div>
         </div>
       </div>
 
@@ -890,6 +910,11 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <div style="font-size:11px;color:var(--text3);margin-top:3px" id="vendas-sub">Histórico de pedidos pagos</div>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <!-- Toggle de visualização -->
+            <div style="display:inline-flex;background:var(--bg2);border:1px solid var(--border);border-radius:6px;overflow:hidden">
+              <button id="vendas-view-cards" onclick="setVendasView('cards')" class="btn btn-sm" style="font-size:11px;padding:5px 10px;border-radius:0;border:0;background:var(--bg3)">📋 Cards</button>
+              <button id="vendas-view-planilha" onclick="setVendasView('planilha')" class="btn btn-sm" style="font-size:11px;padding:5px 10px;border-radius:0;border:0;background:transparent">📊 Planilha</button>
+            </div>
             <select class="sort-sel" id="vendas-period" onchange="syncVendas(true)">
               <option value="7">Últimos 7 dias</option>
               <option value="15">Últimos 15 dias</option>
@@ -899,6 +924,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <input type="text" id="vendas-search" placeholder="🔍 Buscar produto/comprador" oninput="renderVendas()"
               style="padding:6px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;width:200px">
             <button class="btn btn-sm" onclick="syncVendas(true)">↻ Atualizar</button>
+            <button class="btn btn-sm" onclick="exportVendasXLSX()" title="Exportar planilha Excel com todas as vendas e investimentos">📥 Excel</button>
           </div>
         </div>
 
@@ -6417,6 +6443,35 @@ let _vendasCacheData = null;
 let _vendasCacheTime = 0;
 const _vendasCacheTTL = 5 * 60 * 1000; // 5 min anti-503
 
+// Investimentos por venda: { orderId: { luciano: 850, johnny: 0 } }
+// Manual por enquanto — futuramente puxa do preço base do estoque
+let investimentosVendas = {};
+function loadInvestimentos(){
+  try { investimentosVendas = JSON.parse(localStorage.getItem('cia_investimentos') || '{}'); }
+  catch { investimentosVendas = {}; }
+}
+function saveInvestimentos(){
+  try { localStorage.setItem('cia_investimentos', JSON.stringify(investimentosVendas)); } catch {}
+}
+function getInvestimento(orderId, socio){
+  return investimentosVendas[String(orderId)]?.[socio] ?? 0;
+}
+function setInvestimento(orderId, socio, value){
+  const v = parseFloat(value) || 0;
+  if(!investimentosVendas[String(orderId)]) investimentosVendas[String(orderId)] = {};
+  investimentosVendas[String(orderId)][socio] = v;
+  saveInvestimentos();
+}
+function calcLucroVenda(v){
+  const total   = v.total || 0;
+  const luciano = getInvestimento(v.id, 'luciano');
+  const johnny  = getInvestimento(v.id, 'johnny');
+  return total - luciano - johnny;
+}
+
+// Modo de visualização: 'cards' (atual) ou 'planilha' (nova)
+let _vendasView = 'cards';
+
 function setVendasProgress(pct, msg){
   const bar = document.getElementById('vendas-progress-bar');
   const lbl = document.getElementById('vendas-load-msg');
@@ -6716,6 +6771,25 @@ function canPrintLabel(v){
   return { ok: true };
 }
 
+function setVendasView(mode){
+  _vendasView = mode;
+  // Atualiza visual dos botões
+  const btnCards    = document.getElementById('vendas-view-cards');
+  const btnPlanilha = document.getElementById('vendas-view-planilha');
+  if(btnCards && btnPlanilha){
+    btnCards.style.background = mode === 'cards' ? 'var(--bg3)' : 'transparent';
+    btnPlanilha.style.background = mode === 'planilha' ? 'var(--bg3)' : 'transparent';
+  }
+  renderVendas();
+}
+
+// Formata número como moeda BR
+function fmtBRL(n, withSymbol = true){
+  const v = Number(n || 0);
+  const formatted = v.toFixed(2).replace('.',',').replace(/\B(?=(\d{3})+(?!\d),)/g,'.');
+  return withSymbol ? `R$ ${formatted}` : formatted;
+}
+
 function renderVendas(){
   const list  = document.getElementById('vendas-list');
   const empty = document.getElementById('vendas-empty');
@@ -6730,22 +6804,48 @@ function renderVendas(){
     });
   }
 
-  // Métricas (sobre TODAS as vendas, não filtradas)
+  // ── Métricas financeiras (sobre TODAS as vendas, não filtradas) ──
   const total       = vendasData.length;
   const faturamento = vendasData.reduce((s,v) => s+v.total, 0);
   const totalFrete  = vendasData.reduce((s,v) => s+v.frete, 0);
   const ticket      = total > 0 ? faturamento / total : 0;
 
-  // Conta vendas elegíveis para imprimir etiqueta
+  // Investimentos por sócio (somente vendas no período)
+  const totalInvLuciano = vendasData.reduce((s,v) => s + getInvestimento(v.id, 'luciano'), 0);
+  const totalInvJohnny  = vendasData.reduce((s,v) => s + getInvestimento(v.id, 'johnny'), 0);
+  const totalInvestido  = totalInvLuciano + totalInvJohnny;
+
+  // Lucro total = soma do lucro por venda
+  const lucroTotal = vendasData.reduce((s,v) => s + calcLucroVenda(v), 0);
+
+  // Lucro diário = lucro só de vendas de HOJE
+  const hoje = new Date();
+  const hojeStr = hoje.toISOString().split('T')[0];
+  const lucroHoje = vendasData
+    .filter(v => v.date_created && v.date_created.startsWith(hojeStr))
+    .reduce((s,v) => s + calcLucroVenda(v), 0);
+
+  // Diferença Mercado Pago - investimento total (saldo bruto)
+  const diferenca = faturamento - totalInvestido;
+
+  // Métricas para etiquetas/DC-e
   const printable = vendasData.filter(v => canPrintLabel(v).ok).length;
   const blocked = vendasData.filter(v => canPrintLabel(v).blocked).length;
   const needsNF = vendasData.filter(v => canPrintLabel(v).needsInvoice).length;
   const needsNFUrgent = vendasData.filter(v => canPrintLabel(v).invoiceSeverity === 'urgent').length;
 
-  document.getElementById('vendas-total').textContent       = total;
-  document.getElementById('vendas-faturamento').textContent = `R$${faturamento.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,'.')}`;
-  document.getElementById('vendas-ticket').textContent      = `R$${ticket.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,'.')}`;
-  document.getElementById('vendas-frete').textContent       = `R$${totalFrete.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,'.')}`;
+  // Atualiza UI das métricas (linha 1)
+  const setEl = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = val; };
+  setEl('vendas-lucro-dia',   fmtBRL(lucroHoje));
+  setEl('vendas-lucro-total', fmtBRL(lucroTotal));
+  setEl('vendas-faturamento', fmtBRL(faturamento));
+  setEl('vendas-diferenca',   fmtBRL(diferenca));
+
+  // Métricas linha 2 (sócios)
+  setEl('vendas-inv-luciano', fmtBRL(totalInvLuciano));
+  setEl('vendas-inv-johnny',  fmtBRL(totalInvJohnny));
+  setEl('vendas-total',       String(total));
+  setEl('vendas-ticket',      fmtBRL(ticket));
 
   let subText = `${items.length} venda${items.length!==1?'s':''} listada${items.length!==1?'s':''}`;
   if(printable > 0) subText += ` · <span style="color:var(--green);font-weight:600">🏷 ${printable} pronta${printable!==1?'s':''} para etiqueta</span>`;
@@ -6761,6 +6861,13 @@ function renderVendas(){
   }
   empty.style.display = 'none';
 
+  // ── BRANCH: Modo Planilha ──
+  if(_vendasView === 'planilha'){
+    list.innerHTML = renderVendasPlanilha(items);
+    return;
+  }
+
+  // ── Modo Cards (default) ──
   // Cabeçalho com selecionar todos + barra de ação em lote
   const header = `
     <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;margin-bottom:8px;position:sticky;top:0;z-index:5;flex-wrap:wrap">
@@ -6908,6 +7015,204 @@ function renderVendas(){
 
   list.innerHTML = header + cards;
   updateVendaBulkBar();
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// VISÃO PLANILHA — tabela completa estilo Excel com investimentos editáveis
+// ──────────────────────────────────────────────────────────────────────
+function renderVendasPlanilha(items){
+  // Mapa de status → label amigável + cor
+  const statusMap = {
+    'paid':       { label: '💰 Pago',                       color: 'var(--green)' },
+    'shipped':    { label: '📦 Enviado',                    color: 'var(--blue)' },
+    'delivered':  { label: '✓ Entregue',                    color: 'var(--green)' },
+    'cancelled':  { label: '❌ Cancelado',                  color: 'var(--red)' },
+    'invalid':    { label: '⚠ Inválido',                    color: 'var(--red)' },
+  };
+  const subStatusMap = {
+    'delivered':       { label: '✓ Entregue',          color: 'var(--green)' },
+    'shipped':         { label: '🚚 À caminho',        color: 'var(--blue)' },
+    'ready_to_print':  { label: '🏷 Pronta',           color: 'var(--green)' },
+    'printed':         { label: '🖨 Impressa',         color: 'var(--blue)' },
+    'invoice_pending': { label: '📋 Aguardando DC-e',  color: 'var(--amber)' },
+    'cancelled':       { label: '❌ Cancelado',         color: 'var(--red)' },
+    'not_delivered':   { label: '⚠ Não entregue',      color: 'var(--red)' },
+    'handling':        { label: '⏳ Em processamento', color: 'var(--text3)' },
+  };
+
+  const rows = items.map((v, idx) => {
+    const dt = v.date_created ? new Date(v.date_created).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+    const buyerName = (v.buyer.firstName + ' ' + v.buyer.lastName).trim() || v.buyer.nickname || '—';
+    const titulo = v.firstItem.title || 'Produto';
+    const qtd = (v.items || []).reduce((s,i) => s + (i.quantity||1), 0);
+    const cidade = v.receiver.state || '—';
+    const sub = v.shipment?.substatus;
+    const statusInfo = subStatusMap[sub] || statusMap[v.status] || { label: v.status || '—', color: 'var(--text3)' };
+    const invLuciano = getInvestimento(v.id, 'luciano');
+    const invJohnny  = getInvestimento(v.id, 'johnny');
+    const lucro = calcLucroVenda(v);
+    const lucroColor = lucro > 0 ? 'var(--green)' : (lucro < 0 ? 'var(--red)' : 'var(--text3)');
+
+    return `<tr style="border-bottom:1px solid var(--border);${idx % 2 === 0 ? 'background:var(--bg2)' : ''}">
+      <td style="padding:6px 8px;text-align:center;font-weight:600;font-family:'DM Mono',monospace">${qtd}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace">${fmtBRL(v.total, false)}</td>
+      <td style="padding:6px 8px;text-align:right">
+        <input type="number" step="0.01" min="0" value="${invLuciano > 0 ? invLuciano.toFixed(2) : ''}"
+          placeholder="0,00"
+          onchange="updateInvestimento('${v.id}', 'luciano', this.value)"
+          style="width:90px;padding:3px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'DM Mono',monospace;font-size:11px;text-align:right">
+      </td>
+      <td style="padding:6px 8px;text-align:right">
+        <input type="number" step="0.01" min="0" value="${invJohnny > 0 ? invJohnny.toFixed(2) : ''}"
+          placeholder="0,00"
+          onchange="updateInvestimento('${v.id}', 'johnny', this.value)"
+          style="width:90px;padding:3px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'DM Mono',monospace;font-size:11px;text-align:right">
+      </td>
+      <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;color:${lucroColor}">${fmtBRL(lucro, false)}</td>
+      <td style="padding:6px 8px">
+        <a href="https://www.mercadolivre.com.br/vendas/${v.id}/detalhe" target="_blank" rel="noopener"
+          style="color:var(--blue);text-decoration:none;font-family:'DM Mono',monospace;font-size:10px">${v.id}</a>
+      </td>
+      <td style="padding:6px 8px;font-size:11px">${escapeHTML(titulo.slice(0,50))}${titulo.length>50?'...':''}</td>
+      <td style="padding:6px 8px;font-size:11px">${escapeHTML(buyerName)}</td>
+      <td style="padding:6px 8px;font-size:11px;color:var(--text3)">${cidade}</td>
+      <td style="padding:6px 8px;font-size:10px;white-space:nowrap;color:var(--text3)">${dt}</td>
+      <td style="padding:6px 8px;font-size:10px;font-weight:600;color:${statusInfo.color};white-space:nowrap">${statusInfo.label}</td>
+      <td style="padding:6px 8px;text-align:center">
+        <button class="btn btn-sm" onclick="showRecibo('${v.id}')" style="font-size:10px;padding:3px 6px">🧾</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px">
+    <table style="width:100%;font-size:11px;border-collapse:collapse;background:var(--bg)">
+      <thead>
+        <tr style="background:var(--bg3);border-bottom:2px solid var(--border);position:sticky;top:0;z-index:5">
+          <th style="padding:8px;text-align:center;color:var(--text2);font-weight:700;font-size:11px">Unid.</th>
+          <th style="padding:8px;text-align:right;color:var(--text2);font-weight:700;font-size:11px">Total (BRL)</th>
+          <th style="padding:8px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;background:rgba(167,139,250,.1)">Inv. Luciano</th>
+          <th style="padding:8px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;background:rgba(167,139,250,.1)">Inv. Johnny</th>
+          <th style="padding:8px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;background:rgba(62,207,142,.1)">Lucro</th>
+          <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">N.º venda</th>
+          <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">Título do anúncio</th>
+          <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">Comprador</th>
+          <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">Estado</th>
+          <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">Data</th>
+          <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">Status</th>
+          <th style="padding:8px;text-align:center;color:var(--text2);font-weight:700;font-size:11px">Ações</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>
+  <div style="margin-top:8px;padding:8px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;font-size:10px;color:var(--text3);line-height:1.5">
+    💡 <strong>Dica:</strong> clique nos campos <strong>Inv. Luciano</strong> e <strong>Inv. Johnny</strong> para preencher os valores investidos por venda. O <strong>Lucro</strong> é calculado automaticamente: <code>Total ML − Inv. Luciano − Inv. Johnny</code>.
+  </div>`;
+}
+
+// Atualiza investimento de uma venda (chamado pelo onchange dos inputs)
+function updateInvestimento(orderId, socio, value){
+  setInvestimento(orderId, socio, value);
+  // Re-renderiza só as métricas (mais leve que renderizar toda a tabela)
+  renderVendas();
+}
+
+// Exporta planilha XLSX completa com todas as vendas
+async function exportVendasXLSX(){
+  if(!vendasData.length){ alert('Sem vendas para exportar.'); return; }
+
+  // Carrega SheetJS dinamicamente se não estiver carregado
+  if(typeof XLSX === 'undefined'){
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  const subStatusMap = {
+    'delivered':       'Entregue',
+    'shipped':         'À caminho',
+    'ready_to_print':  'Etiqueta pronta',
+    'printed':         'Etiqueta impressa',
+    'invoice_pending': 'Aguardando DC-e',
+    'cancelled':       'Cancelado',
+    'not_delivered':   'Não entregue',
+    'handling':        'Em processamento',
+  };
+
+  // Linhas de dados
+  const rows = vendasData.map(v => {
+    const dt = v.date_created ? new Date(v.date_created) : null;
+    const dtStr = dt ? `${dt.toLocaleDateString('pt-BR')} ${dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : '';
+    const buyerName = (v.buyer.firstName + ' ' + v.buyer.lastName).trim() || v.buyer.nickname || '';
+    const qtd = (v.items || []).reduce((s,i) => s + (i.quantity||1), 0);
+    const sub = v.shipment?.substatus;
+    return [
+      qtd,                                          // Unidade
+      v.total,                                      // Total (BRL)
+      getInvestimento(v.id, 'luciano'),             // Inv. Luciano
+      getInvestimento(v.id, 'johnny'),              // Inv. Johnny
+      calcLucroVenda(v),                            // Lucro
+      String(v.id),                                 // N.º de venda
+      v.firstItem.title || '',                      // Título do anúncio
+      buyerName,                                    // Dados pessoais
+      v.receiver.state || '',                       // Estado
+      dtStr,                                        // Data da venda
+      subStatusMap[sub] || v.status || '',          // Estado do pedido
+    ];
+  });
+
+  // Totais (rodapé)
+  const totalQtd       = rows.reduce((s,r) => s + (r[0]||0), 0);
+  const totalFat       = vendasData.reduce((s,v) => s + (v.total||0), 0);
+  const totalLuciano   = vendasData.reduce((s,v) => s + getInvestimento(v.id, 'luciano'), 0);
+  const totalJohnny    = vendasData.reduce((s,v) => s + getInvestimento(v.id, 'johnny'), 0);
+  const totalLucro     = vendasData.reduce((s,v) => s + calcLucroVenda(v), 0);
+
+  const aoa = [
+    ['Vendas Mercado Livre — Listas CIA'],
+    [`Exportado em: ${new Date().toLocaleString('pt-BR')}`],
+    [],
+    ['Unidade', 'Total (BRL)', 'Inv. Luciano', 'Inv. Johnny', 'Lucro', 'N.º de venda', 'Título do anúncio', 'Dados pessoais ou da empresa', 'Estado', 'Data da venda', 'Estado do pedido'],
+    ...rows,
+    [],
+    ['TOTAIS:', totalFat, totalLuciano, totalJohnny, totalLucro],
+    [],
+    ['Resumo financeiro'],
+    ['Faturamento total', totalFat],
+    ['Investimento Luciano', totalLuciano],
+    ['Investimento Johnny', totalJohnny],
+    ['Investimento total', totalLuciano + totalJohnny],
+    ['Lucro total', totalLucro],
+    ['Quantidade de vendas', vendasData.length],
+    ['Total de unidades', totalQtd],
+  ];
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+  // Larguras das colunas
+  ws['!cols'] = [
+    { wch: 8 },  // Unidade
+    { wch: 12 }, // Total
+    { wch: 13 }, // Inv. Luciano
+    { wch: 13 }, // Inv. Johnny
+    { wch: 12 }, // Lucro
+    { wch: 18 }, // Nº venda
+    { wch: 50 }, // Título
+    { wch: 30 }, // Comprador
+    { wch: 18 }, // Estado
+    { wch: 18 }, // Data
+    { wch: 20 }, // Status
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Vendas');
+
+  const today = new Date().toISOString().split('T')[0];
+  XLSX.writeFile(wb, `Vendas-CIA-${today}.xlsx`);
 }
 
 // Abre todas as DC-es pendentes em abas separadas (um clique por vez no botão Emitir DC-e em cada aba)
@@ -9350,6 +9655,7 @@ function renderCompras(){
 loadState();
 loadEstoqueFromStorage();
 loadAnunciosPlanejados();
+loadInvestimentos();
 
 // Restaura aba ativa se veio de reload por troca de conta
 try {
