@@ -864,19 +864,19 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
     <div id="vendas-content" style="display:none">
       <!-- Painel financeiro: linha 1 -->
       <div class="metrics" style="grid-template-columns:repeat(4,1fr)">
-        <div class="metric">
+        <div class="metric" title="Lucro das vendas feitas HOJE: Total ML líquido - Inv. Luciano - Inv. Johnny">
           <div class="mlabel">💰 Lucro Diário</div>
           <div class="mval g" id="vendas-lucro-dia">R$ 0,00</div>
         </div>
-        <div class="metric">
+        <div class="metric" title="Lucro acumulado no período: Total ML líquido - investimentos">
           <div class="mlabel">📈 Lucro Total</div>
           <div class="mval p" id="vendas-lucro-total">R$ 0,00</div>
         </div>
-        <div class="metric">
+        <div class="metric" title="Total LÍQUIDO recebido (já descontado comissão ML e frete bancado pelo vendedor)">
           <div class="mlabel">🏦 Mercado Pago</div>
           <div class="mval a" id="vendas-faturamento">R$ 0,00</div>
         </div>
-        <div class="metric">
+        <div class="metric" title="Mercado Pago - Investimento total. Saldo bruto disponível antes de cobrar lucros.">
           <div class="mlabel">⚖ Diferença</div>
           <div class="mval r" id="vendas-diferenca">R$ 0,00</div>
         </div>
@@ -924,7 +924,10 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <input type="text" id="vendas-search" placeholder="🔍 Buscar produto/comprador" oninput="renderVendas()"
               style="padding:6px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;width:200px">
             <button class="btn btn-sm" onclick="syncVendas(true)">↻ Atualizar</button>
-            <button class="btn btn-sm" onclick="exportVendasXLSX()" title="Exportar planilha Excel com todas as vendas e investimentos">📥 Excel</button>
+            <button class="btn btn-sm" onclick="syncVendasIncremental()" title="Sincroniza vendas novas + atualiza status das em trânsito (incremental, leve)" style="background:rgba(62,207,142,.15);color:var(--green);border:1px solid var(--green)">🔄 Sync</button>
+            <button class="btn btn-sm" onclick="document.getElementById('vendas-import-file').click()" title="Importar XLSX de vendas exportado do Mercado Livre" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📥 Importar XLSX ML</button>
+            <input type="file" id="vendas-import-file" accept=".xlsx,.xls" style="display:none" onchange="importVendasFromXLSX(event)">
+            <button class="btn btn-sm" onclick="exportVendasXLSX()" title="Exportar planilha Excel com todas as vendas e investimentos">📤 Exportar XLSX</button>
           </div>
         </div>
 
@@ -1330,6 +1333,8 @@ function switchAccount(id){
   _comprasCacheTime = 0;
   if(typeof _vendasCacheData !== 'undefined'){ _vendasCacheData = null; _vendasCacheTime = 0; }
   if(typeof vendasData !== 'undefined') vendasData = [];
+  if(typeof vendasDataFull !== 'undefined') vendasDataFull = null;
+  if(typeof _vendasFullCacheTime !== 'undefined') _vendasFullCacheTime = 0;
   if(typeof _selectedVendaIds !== 'undefined') _selectedVendaIds.clear();
   if(typeof posVendaData !== 'undefined') posVendaData = [];
   if(typeof _posVendaCacheTime !== 'undefined') _posVendaCacheTime = 0;
@@ -6438,7 +6443,9 @@ window.showComprasDebug = function(){
 // ════════════════════════════════════════════════════════════════════════════
 // ABA VENDAS — Lista de pedidos pagos com botão de gerar recibo por venda
 // ════════════════════════════════════════════════════════════════════════════
-let vendasData = [];
+let vendasData = [];           // Dataset usado pelos Cards (até 200 vendas)
+let vendasDataFull = null;     // Dataset completo (todas as vendas) — só carrega quando entrar na Planilha
+let _vendasFullLoading = false;
 let _vendasCacheData = null;
 let _vendasCacheTime = 0;
 const _vendasCacheTTL = 5 * 60 * 1000; // 5 min anti-503
@@ -6463,10 +6470,42 @@ function setInvestimento(orderId, socio, value){
   saveInvestimentos();
 }
 function calcLucroVenda(v){
-  const total   = v.total || 0;
+  // Se é venda de estado bloqueado, não conta no lucro (só fica para acompanhamento)
+  if(v._excludeFromFinancials) return 0;
+  // Lucro = Total Líquido (já descontado comissão ML e frete bancado pelo vendedor)
+  // menos os investimentos dos sócios
+  const totalLiq = (typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0);
   const luciano = getInvestimento(v.id, 'luciano');
   const johnny  = getInvestimento(v.id, 'johnny');
-  return total - luciano - johnny;
+  return totalLiq - luciano - johnny;
+}
+
+// Detecta se uma venda é de estado bloqueado
+// Retorna { isBlocked, uf } — uf normalizado se possível
+function isVendaInBlockedState(v){
+  const blockedSet = new Set((cfg.blockedStates || []).map(s => s.toUpperCase()));
+  if(blockedSet.size === 0) return { isBlocked: false, uf: null };
+
+  // Tenta extrair UF de várias fontes
+  let raw = v.receiver?.state || '';
+  if(typeof raw === 'object') raw = raw.id || raw.name || '';
+  raw = String(raw).trim();
+
+  // Normaliza ("São Paulo" → "SP", "MG" → "MG", "BR-MG" → "MG")
+  const uf = normalizeStateUF(raw);
+  if(uf && blockedSet.has(uf)) return { isBlocked: true, uf };
+  return { isBlocked: false, uf };
+}
+
+// Aplica flags de estado bloqueado em um array de vendas
+function applyBlockedStateFlags(vendas){
+  for(const v of vendas){
+    const { isBlocked, uf } = isVendaInBlockedState(v);
+    v._isBlockedState = isBlocked;
+    v._blockedUF = uf;
+    v._excludeFromFinancials = isBlocked; // Estado bloqueado = não conta no financeiro
+  }
+  return vendas;
 }
 
 // Modo de visualização: 'cards' (atual) ou 'planilha' (nova)
@@ -6595,13 +6634,58 @@ async function syncVendas(force = false){
       }
       if(!color && firstItem.title) color = extractMLColor(firstItem.title);
 
-      // Total e frete
+      // ── Cálculos financeiros ────────────────────────────────────────
+      // Total bruto = preço pago pelo comprador (inclui frete que ele pagou)
       const total = order.total_amount || 0;
+
+      // Frete: se vendedor pagou (free shipping), 0 (custo já está embutido na comissão).
+      // Se comprador pagou, é informado em order.shipping.cost ou payments[0].shipping_cost
       const frete = order.shipping?.cost || shipment?.shipping_option?.cost || 0;
 
-      // Pagamento
-      const payment = (order.payments || [])[0];
+      // Pagamentos: somar todas as taxas (comissão ML, custo financeiro, etc.)
+      const payments = order.payments || [];
+      const payment = payments[0];
       const paymentId = payment?.id || null;
+
+      // Comissão ML: soma de fee_details[] dos pagamentos.
+      // fee_details[].fee_type tipicamente: 'mercadopago_fee', 'financing_fee',
+      // 'shipping', 'sale_fee', 'discount_fee'
+      let mlFee = 0;
+      let mlFeeDetails = [];
+      let shippingPaidBySeller = 0;  // frete bancado pelo vendedor (quando free shipping)
+
+      for(const p of payments){
+        // Algumas vendas têm marketplace_fee direto no nível do payment
+        if(typeof p.marketplace_fee === 'number') mlFee += p.marketplace_fee;
+
+        // Detalhamento de taxas (mais preciso)
+        const details = p.fee_details || [];
+        for(const f of details){
+          const amount = Number(f.amount || 0);
+          mlFeeDetails.push({
+            type: f.fee_type || f.type || 'unknown',
+            amount,
+            payer: f.fee_payer || null,
+          });
+          // Para 'mercadopago_fee'/'sale_fee' aplicáveis ao vendedor
+          if(['mercadopago_fee','sale_fee','marketplace_fee','financing_fee'].includes(f.fee_type)){
+            // Só conta se ainda não contamos via marketplace_fee
+            if(typeof p.marketplace_fee !== 'number') mlFee += amount;
+          }
+          // Frete pago pelo vendedor (caso free_shipping)
+          if(f.fee_type === 'shipping' && f.fee_payer === 'collector'){
+            shippingPaidBySeller += amount;
+          }
+        }
+
+        // Frete bancado pelo vendedor pode aparecer como shipping_cost negativo
+        const ps = Number(p.shipping_cost || 0);
+        if(ps < 0) shippingPaidBySeller += Math.abs(ps);
+      }
+
+      // Valor líquido recebido = total - comissão ML - frete bancado pelo vendedor
+      // (Não desconta o frete que o COMPRADOR pagou — esse já está em total)
+      const totalLiquido = total - mlFee - shippingPaidBySeller;
 
       // Endereço de entrega
       const recv = shipment?.receiver_address || {};
@@ -6618,7 +6702,11 @@ async function syncVendas(force = false){
         items,
         firstItem,
         color,
-        total,
+        total,                             // valor BRUTO (preço pago pelo comprador)
+        totalLiquido,                      // valor LÍQUIDO (- comissão - frete bancado)
+        mlFee,                             // só a comissão ML
+        shippingPaidBySeller,              // só o frete que o vendedor bancou
+        mlFeeDetails,                      // breakdown das taxas (debug)
         subtotal: total - frete,
         frete,
         paymentId,
@@ -6771,7 +6859,7 @@ function canPrintLabel(v){
   return { ok: true };
 }
 
-function setVendasView(mode){
+async function setVendasView(mode){
   _vendasView = mode;
   // Atualiza visual dos botões
   const btnCards    = document.getElementById('vendas-view-cards');
@@ -6780,7 +6868,978 @@ function setVendasView(mode){
     btnCards.style.background = mode === 'cards' ? 'var(--bg3)' : 'transparent';
     btnPlanilha.style.background = mode === 'planilha' ? 'var(--bg3)' : 'transparent';
   }
+
+  // Se entrou na Planilha pela primeira vez (ou cache expirou), tenta carregar do IndexedDB
+  if(mode === 'planilha'){
+    if(!vendasDataFull && !_vendasFullLoading){
+      // Tenta IndexedDB primeiro (planilha importada)
+      try {
+        const imported = await loadImportedVendas();
+        if(imported && imported.length > 0){
+          vendasDataFull = imported;
+          _vendasFullCacheTime = Date.now();
+          renderVendas();
+          return;
+        }
+      } catch(e){ console.warn('Erro ao ler IndexedDB:', e); }
+
+      // Sem dados importados — mostra UI orientando a importar (em vez de buscar via API)
+      const list = document.getElementById('vendas-list');
+      if(list){
+        list.innerHTML = `
+          <div style="padding:30px;text-align:center;background:var(--bg2);border:1px solid var(--border);border-radius:8px">
+            <div style="font-size:32px;margin-bottom:10px">📊</div>
+            <div style="font-size:14px;font-weight:600;margin-bottom:6px">Visão Planilha — Histórico Completo</div>
+            <div style="font-size:11px;color:var(--text3);margin-bottom:18px;line-height:1.6">
+              Para usar essa visão, importe a planilha XLSX de vendas que o Mercado Livre disponibiliza.<br>
+              Vá em <strong>Vender → Vendas → Exportar</strong> no painel ML, baixe o arquivo, e clique em "📥 Importar XLSX ML" no topo desta aba.
+            </div>
+            <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+              <button onclick="document.getElementById('vendas-import-file').click()" class="btn btn-p" style="font-size:12px;padding:8px 16px">📥 Importar XLSX agora</button>
+              <button onclick="setVendasView('cards')" class="btn btn-sm" style="font-size:12px;padding:8px 16px">← Voltar para Cards</button>
+              <button onclick="loadAllVendasForPlanilha()" class="btn btn-sm" style="font-size:12px;padding:8px 16px;opacity:.7" title="Buscar via API ML (lento, pode levar minutos)">🌐 Buscar via API</button>
+            </div>
+          </div>`;
+      }
+      return;
+    }
+  }
+
   renderVendas();
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// CARREGA TODO O HISTÓRICO DE VENDAS (para a Planilha)
+// ──────────────────────────────────────────────────────────────────────
+const _vendasFullCacheTTL = 10 * 60 * 1000; // 10 min
+let _vendasFullCacheTime = 0;
+let _vendasFullCancel = false;
+
+// ──────────────────────────────────────────────────────────────────────
+// IMPORTAÇÃO DE PLANILHA DE VENDAS (Mercado Livre)
+// O ML disponibiliza um XLSX com todas as vendas. Importamos uma vez
+// e mesclamos com os investimentos salvos em localStorage por order_id.
+// ──────────────────────────────────────────────────────────────────────
+
+// IndexedDB para armazenar histórico de vendas importadas
+const VENDAS_DB = 'cia_vendas_db';
+const VENDAS_STORE = 'vendas_imported';
+let _vendasDB = null;
+
+function openVendasDB(){
+  return new Promise((resolve, reject) => {
+    if(_vendasDB) return resolve(_vendasDB);
+    const req = indexedDB.open(VENDAS_DB, 1);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if(!db.objectStoreNames.contains(VENDAS_STORE)){
+        db.createObjectStore(VENDAS_STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = (e) => { _vendasDB = e.target.result; resolve(_vendasDB); };
+    req.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function saveImportedVendas(vendas){
+  const db = await openVendasDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(VENDAS_STORE, 'readwrite');
+    const store = tx.objectStore(VENDAS_STORE);
+    // Limpa store antes de inserir (sempre substituímos por completo na importação)
+    store.clear();
+    for(const v of vendas){
+      try { store.put(v); } catch(e){ console.warn('Falha ao salvar venda', v.id, e); }
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function loadImportedVendas(){
+  try {
+    const db = await openVendasDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(VENDAS_STORE, 'readonly');
+      const store = tx.objectStore(VENDAS_STORE);
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => resolve([]);
+    });
+  } catch { return []; }
+}
+
+async function getLastImportInfo(){
+  try {
+    const meta = JSON.parse(localStorage.getItem('cia_vendas_import_meta') || 'null');
+    return meta;
+  } catch { return null; }
+}
+function saveImportInfo(count){
+  try {
+    localStorage.setItem('cia_vendas_import_meta', JSON.stringify({
+      count,
+      importedAt: new Date().toISOString(),
+    }));
+  } catch {}
+}
+
+// ── Parser do XLSX do Mercado Livre ─────────────────────────────────────
+async function importVendasFromXLSX(event){
+  const file = event.target.files[0];
+  event.target.value = ''; // permite reimportar mesmo arquivo
+  if(!file) return;
+
+  // Carrega SheetJS se ainda não carregado
+  if(typeof XLSX === 'undefined'){
+    const ok = confirm('Vou carregar a biblioteca de planilhas (SheetJS, ~300KB). Continuar?');
+    if(!ok) return;
+    try {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    } catch(e){
+      alert('❌ Erro ao carregar biblioteca de planilhas. Verifique sua conexão.');
+      return;
+    }
+  }
+
+  // Lê o arquivo
+  const buffer = await file.arrayBuffer();
+  let workbook;
+  try {
+    workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
+  } catch(e){
+    alert(`❌ Erro ao ler XLSX: ${e.message}\n\nVerifique se o arquivo está no formato Excel (.xlsx) exportado do Mercado Livre.`);
+    return;
+  }
+
+  // ML usa primeira aba "Vendas BR" (ou similar)
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+
+  // Procura linha de cabeçalho (busca "N.º de venda" ou variantes)
+  let headerRow = -1;
+  const headerHints = ['n.º de venda', 'numero da venda', 'order id', 'numero do pedido'];
+  for(let i = 0; i < Math.min(aoa.length, 15); i++){
+    const row = aoa[i] || [];
+    const firstCol = String(row[0] || '').toLowerCase().trim();
+    if(headerHints.some(h => firstCol.includes(h))){
+      headerRow = i;
+      break;
+    }
+  }
+  if(headerRow === -1){
+    alert(`❌ Não encontrei a linha de cabeçalho.\n\nVerifique se a planilha foi exportada do Mercado Livre. A primeira coluna deve ser "N.º de venda".`);
+    return;
+  }
+
+  const headers = (aoa[headerRow] || []).map(h => String(h || '').toLowerCase().trim());
+  const dataRows = aoa.slice(headerRow + 1);
+
+  // Mapeia colunas (suporta múltiplas grafias / colunas duplicadas — usa a primeira)
+  const findCol = (candidates) => {
+    for(const c of candidates){
+      const idx = headers.indexOf(c);
+      if(idx !== -1) return idx;
+    }
+    return -1;
+  };
+
+  const cols = {
+    orderId:   findCol(['n.º de venda', 'numero da venda', 'numero do pedido']),
+    date:      findCol(['data da venda', 'data']),
+    statusDesc:findCol(['estado', 'status']),                       // "Entregue", "À caminho", etc
+    statusFull:findCol(['descrição do status']),                    // "Chegou em..."
+    units:     findCol(['unidades']),
+    revProduct:findCol(['receita por produtos (brl)']),             // bruto produto
+    revShip:   findCol(['receita por envio (brl)']),                // frete cobrado do comprador
+    feeML:     findCol(['tarifa de venda e impostos (brl)']),       // negativo
+    feeShip:   findCol(['tarifas de envio (brl)']),                 // negativo
+    discount:  findCol(['descontos e bônus']),
+    refund:    findCol(['cancelamentos e reembolsos (brl)']),
+    total:     findCol(['total (brl)']),                            // VALOR LÍQUIDO
+    productId: findCol(['# de anúncio', 'numero do anuncio']),
+    title:     findCol(['título do anúncio', 'titulo do anuncio']),
+    variation: findCol(['variação', 'variacao']),
+    unitPrice: findCol(['preço unitário de venda do anúncio (brl)']),
+    listingType:findCol(['tipo de anúncio', 'tipo de anuncio']),
+    nfe:       findCol(['nf-e em anexo']),
+    buyerName: findCol(['dados pessoais ou da empresa']),
+    buyerDoc:  findCol(['tipo e número do documento']),
+    address:   findCol(['endereço']),
+    // O XLSX tem colunas duplicadas — vamos pegar todas as ocorrências de Cidade/Estado/CEP
+    // Geralmente Cidade/Estado/CEP aparecem após "Endereço" do comprador
+    deliveryMethod: findCol(['forma de entrega']),
+    trackingDate:   findCol(['data a caminho']),
+    deliveryDate:   findCol(['data de entrega']),
+    trackingNumber: findCol(['número de rastreamento', 'numero de rastreamento']),
+    moneyReleased:  findCol(['dinheiro liberado']),
+    claimOpen:      findCol(['reclamação aberta']),
+    claimClosed:    findCol(['reclamação encerrada']),
+  };
+
+  // Cidade/Estado/CEP duplicados — pega o segundo (do comprador, não da nota)
+  const allCidadeIdxs = headers.map((h,i) => h === 'cidade' ? i : -1).filter(i => i >= 0);
+  const allEstadoIdxs = headers.map((h,i) => h === 'estado' ? i : -1).filter(i => i >= 0);
+  const allCepIdxs = headers.map((h,i) => h === 'cep' ? i : -1).filter(i => i >= 0);
+
+  cols.cidade = allCidadeIdxs[0] ?? -1;  // primeira ocorrência (comprador)
+  cols.estadoComprador = allEstadoIdxs[1] ?? allEstadoIdxs[0] ?? -1; // segunda ocorrência se houver (Estado tem 2x: status do envio + estado UF)
+  cols.cep = allCepIdxs[0] ?? -1;
+
+  if(cols.orderId === -1 || cols.total === -1){
+    alert(`❌ Colunas obrigatórias não encontradas:\n- N.º de venda: ${cols.orderId === -1 ? 'NÃO ENCONTRADA' : 'OK'}\n- Total (BRL): ${cols.total === -1 ? 'NÃO ENCONTRADA' : 'OK'}`);
+    return;
+  }
+
+  // Conta vendas com investimentos já cadastrados (para mostrar no preview)
+  const invKeys = Object.keys(investimentosVendas);
+
+  // Parser de cada linha
+  const vendas = [];
+  let parsedOk = 0;
+  let skipped = 0;
+
+  for(const row of dataRows){
+    if(!row || !row[cols.orderId]) { skipped++; continue; }
+
+    const orderId = String(row[cols.orderId]).trim();
+    if(!orderId || orderId === 'null') { skipped++; continue; }
+
+    // Data: formato "12 de março de 2026 16:58 hs."
+    const dateStr = String(row[cols.date] || '');
+    const dateISO = parseMLDateString(dateStr);
+
+    // Status (Estado = "Entregue", "Cancelado", "À caminho", etc.)
+    const status = String(row[cols.statusDesc] || '').trim();
+
+    // Total já vem LÍQUIDO no ML XLSX
+    const total = Number(row[cols.total]) || 0;
+
+    // Bruto = revProduct + revShip
+    const revProduct = Number(row[cols.revProduct]) || 0;
+    const revShip    = Number(row[cols.revShip])    || 0;
+    const feeML      = Math.abs(Number(row[cols.feeML]) || 0);  // vem negativo
+    const feeShip    = Math.abs(Number(row[cols.feeShip]) || 0);
+    const refund     = Number(row[cols.refund]) || 0;
+    const totalBruto = revProduct + revShip;
+
+    // Comprador
+    const buyerName = String(row[cols.buyerName] || '').trim();
+    const buyerDoc  = String(row[cols.buyerDoc]  || '').trim();
+    const cidade    = String(row[cols.cidade]    || '').trim();
+    const estadoFull= String(row[cols.estadoComprador] || '').trim();
+
+    // Produto
+    const productId = String(row[cols.productId] || '').trim();
+    const title     = String(row[cols.title]     || '').trim();
+    const variation = String(row[cols.variation] || '').trim();
+    const unitPrice = Number(row[cols.unitPrice]) || 0;
+    const listingType = String(row[cols.listingType] || '').trim();
+    const units     = Number(row[cols.units]) || 1;
+
+    // Cor da variação (formato: "Cor : Preto" ou "Cor: Preto")
+    let color = null;
+    if(variation){
+      const m = variation.match(/cor\s*:\s*(.+?)(?:[,;]|$)/i);
+      if(m) color = m[1].trim();
+    }
+
+    // Forma de entrega
+    const deliveryMethod = String(row[cols.deliveryMethod] || '').trim();
+
+    // Número de rastreamento + tracking
+    const trackingNumber = String(row[cols.trackingNumber] || '').trim();
+    const moneyReleased  = String(row[cols.moneyReleased] || '').trim();
+    const claimOpen      = String(row[cols.claimOpen] || '').toLowerCase() === 'sim';
+    const claimClosed    = String(row[cols.claimClosed] || '').toLowerCase() === 'sim';
+
+    // Status normalizado para nosso schema
+    const statusLower = status.toLowerCase();
+    let normalizedStatus = 'paid';
+    let normalizedSubstatus = null;
+    if(/cancel/i.test(statusLower)) normalizedStatus = 'cancelled';
+    if(/devolu|reembol/i.test(statusLower)) normalizedStatus = 'cancelled';
+    if(/entreg/i.test(statusLower)) normalizedSubstatus = 'delivered';
+    else if(/caminho|despach/i.test(statusLower)) normalizedSubstatus = 'shipped';
+    else if(/aguardando/i.test(statusLower)) normalizedSubstatus = 'invoice_pending';
+    else if(/pronto|impres/i.test(statusLower)) normalizedSubstatus = 'ready_to_print';
+
+    vendas.push({
+      id: orderId,
+      date_created: dateISO,
+      status: normalizedStatus,
+      substatus: normalizedSubstatus,
+      statusLabel: status,
+      // Financeiro
+      total,                                  // LÍQUIDO (vem direto da coluna Total BRL do ML)
+      totalLiquido: total,                    // mesma coisa — alias
+      totalBruto,
+      mlFee: feeML,
+      shippingPaidBySeller: feeShip,
+      revProduct,
+      revShip,
+      refund,
+      // Produto
+      firstItem: {
+        id: productId,
+        title,
+        thumbnail: '',
+      },
+      items: [{
+        item: { id: productId, title },
+        quantity: units,
+        unit_price: unitPrice,
+        listing_type_id: listingType,
+      }],
+      color,
+      // Comprador
+      buyer: {
+        nickname: buyerName,
+        firstName: buyerName.split(' ')[0] || '',
+        lastName:  buyerName.split(' ').slice(1).join(' ') || '',
+        docNumber: buyerDoc.replace(/^[^:]+:\s*/, ''),  // remove "CPF: " do início
+        docType:   buyerDoc.split(':')[0] || null,
+      },
+      receiver: {
+        city: cidade,
+        state: estadoFull,
+      },
+      // Logística (sem o objeto shipment completo)
+      logistic_type: deliveryMethod.toLowerCase().includes('flex') ? 'self_service' :
+                     deliveryMethod.toLowerCase().includes('full') ? 'fulfillment' :
+                     deliveryMethod.toLowerCase().includes('agência') ? 'cross_docking' : null,
+      shipment: trackingNumber ? {
+        id: trackingNumber,
+        substatus: normalizedSubstatus,
+      } : null,
+      // Sinalizadores
+      claimOpen,
+      claimClosed,
+      moneyReleased,
+      _imported: true,
+    });
+    parsedOk++;
+  }
+
+  if(parsedOk === 0){
+    alert(`❌ Nenhuma venda válida encontrada na planilha.\n\nVerifique se é o XLSX exportado do Mercado Livre.`);
+    return;
+  }
+
+  // Conta sobreposição com investimentos
+  const idsImported = new Set(vendas.map(v => v.id));
+  const matchingInvs = invKeys.filter(k => idsImported.has(k)).length;
+
+  // Preview
+  const ok = confirm(
+    `📥 Importar ${parsedOk} venda${parsedOk > 1 ? 's' : ''}?\n\n` +
+    `Período: ${vendas[vendas.length-1]?.date_created?.slice(0,10) || '?'} → ${vendas[0]?.date_created?.slice(0,10) || '?'}\n` +
+    (matchingInvs > 0 ? `\n💰 ${matchingInvs} dessas vendas já têm investimentos cadastrados (serão preservados!)\n` : '') +
+    (skipped > 0 ? `\n⚠ ${skipped} linha${skipped>1?'s':''} ignorada${skipped>1?'s':''} (sem ID)\n` : '') +
+    `\nA importação SUBSTITUI o dataset atual da Planilha. Os investimentos NÃO são perdidos.`
+  );
+  if(!ok) return;
+
+  // Salva no IndexedDB
+  try {
+    // Aplica flags de estado bloqueado
+    applyBlockedStateFlags(vendas);
+
+    // Marca origem
+    for(const v of vendas){
+      v._source = v._source || 'xlsx';
+      v._firstSeenAt = v._firstSeenAt || new Date().toISOString();
+      v._lastUpdatedAt = new Date().toISOString();
+    }
+
+    await saveImportedVendas(vendas);
+    saveImportInfo(parsedOk);
+
+    // Atualiza meta para que próxima sync incremental saiba a data base
+    saveSyncMeta({
+      lastSyncDate: new Date().toISOString(),
+      lastSyncOrderId: vendas[0]?.id || null,
+      totalVendas: vendas.length,
+    });
+
+    vendasDataFull = vendas;
+    _vendasFullCacheTime = Date.now();
+
+    const blockedCount = vendas.filter(v => v._isBlockedState).length;
+    alert(`✅ Importação concluída!\n\n${parsedOk} vendas salvas.${blockedCount > 0 ? `\n⚠ ${blockedCount} são de estados bloqueados (só acompanhamento).` : ''}\n\nUse o botão "📊 Planilha" para visualizar.`);
+
+    // Vai automaticamente pra Planilha
+    setVendasView('planilha');
+  } catch(e){
+    alert(`❌ Erro ao salvar: ${e.message}`);
+  }
+}
+
+// Parser de data ML: "12 de março de 2026 16:58 hs." → ISO
+function parseMLDateString(s){
+  if(!s) return null;
+  const months = {
+    'janeiro': '01', 'fevereiro': '02', 'março': '03', 'abril': '04',
+    'maio': '05', 'junho': '06', 'julho': '07', 'agosto': '08',
+    'setembro': '09', 'outubro': '10', 'novembro': '11', 'dezembro': '12',
+  };
+  // "12 de março de 2026 16:58 hs."
+  const m = s.match(/(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})\s+(\d{1,2}):(\d{2})/i);
+  if(m){
+    const day   = m[1].padStart(2,'0');
+    const month = months[m[2].toLowerCase()] || '01';
+    const year  = m[3];
+    const hour  = m[4].padStart(2,'0');
+    const min   = m[5];
+    return `${year}-${month}-${day}T${hour}:${min}:00.000-03:00`;
+  }
+  return null;
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// SINCRONIZAÇÃO INCREMENTAL DE VENDAS
+// Estratégia:
+// - Pega lastSyncDate do localStorage
+// - Etapa 1: busca vendas NOVAS via API (date_from = lastSyncDate)
+// - Etapa 2: atualiza STATUS de vendas em trânsito (não-finalizadas)
+// - Aplica flags de estado bloqueado
+// - Salva tudo no IndexedDB
+// ──────────────────────────────────────────────────────────────────────
+
+const SYNC_META_KEY = 'cia_vendas_sync_meta';
+
+function getSyncMeta(){
+  try {
+    return JSON.parse(localStorage.getItem(SYNC_META_KEY) || 'null') || {
+      lastSyncDate: null,    // ISO string
+      lastSyncOrderId: null,
+      totalVendas: 0,
+    };
+  } catch {
+    return { lastSyncDate: null, lastSyncOrderId: null, totalVendas: 0 };
+  }
+}
+
+function saveSyncMeta(meta){
+  try { localStorage.setItem(SYNC_META_KEY, JSON.stringify(meta)); } catch {}
+}
+
+// Lista de substatuses que indicam venda EM TRÂNSITO (precisa atualizar status)
+const SUBSTATUS_FINAIS = new Set(['delivered', 'cancelled', 'not_delivered']);
+
+function isVendaEmTransito(v){
+  // Estado bloqueado: continua atualizando status (a gente quer saber se foi cancelada)
+  // Só excluímos quem JÁ está em status final
+  const sub = v.shipment?.substatus || v.substatus;
+  if(sub && SUBSTATUS_FINAIS.has(sub)) return false;
+  // Se status do pedido já é cancelled, finalizou
+  if(v.status === 'cancelled') return false;
+  return true;
+}
+
+let _syncRunning = false;
+
+async function syncVendasIncremental(silent = false){
+  if(_syncRunning) {
+    if(!silent) alert('Sincronização já em andamento, aguarde...');
+    return;
+  }
+  if(!cfg.at){
+    if(!silent) alert('Conecte sua conta ML em Config primeiro.');
+    return;
+  }
+
+  _syncRunning = true;
+  const showProgress = !silent;
+
+  // UI: notificação visual no topo
+  let progressBox = null;
+  if(showProgress){
+    progressBox = document.createElement('div');
+    progressBox.style.cssText = 'position:fixed;bottom:20px;right:20px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px 18px;box-shadow:0 6px 20px rgba(0,0,0,.4);z-index:10000;min-width:280px;max-width:360px;font-size:12px';
+    progressBox.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <span class="spinner"></span>
+        <strong style="font-size:13px">🔄 Sincronizando vendas</strong>
+      </div>
+      <div id="sync-msg" style="font-size:11px;color:var(--text2);line-height:1.5;margin-bottom:8px">Iniciando...</div>
+      <div style="height:4px;background:var(--bg3);border-radius:2px;overflow:hidden">
+        <div id="sync-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--purple),var(--blue));transition:width .3s ease"></div>
+      </div>
+    `;
+    document.body.appendChild(progressBox);
+  }
+  const setMsg = (msg, pct) => {
+    if(!progressBox) return;
+    const m = progressBox.querySelector('#sync-msg');
+    const b = progressBox.querySelector('#sync-bar');
+    if(m) m.textContent = msg;
+    if(b && typeof pct === 'number') b.style.width = `${Math.min(100, pct)}%`;
+  };
+
+  const result = { newVendas: 0, statusUpdated: 0, errors: 0 };
+
+  try {
+    // Carrega dataset existente
+    setMsg('Carregando dados existentes...', 5);
+    const existing = await loadImportedVendas();
+    const existingMap = new Map(existing.map(v => [String(v.id), v]));
+
+    // Pega meta da última sync
+    const meta = getSyncMeta();
+
+    // Identifica usuário
+    const meR = await proxyFetch('/users/me');
+    if(meR.status === 401 || meR.status === 403){
+      const ok = await doRefresh();
+      if(!ok) throw new Error('Token expirado. Reconecte em Config.');
+    } else if(!meR.ok) throw new Error(`Erro ao conectar: ${meR.status}`);
+    const me = await meR.json();
+
+    // ── ETAPA 1: Busca vendas NOVAS desde lastSyncDate ──
+    setMsg('Buscando vendas novas...', 10);
+    let dateFromStr;
+    if(meta.lastSyncDate){
+      // Usa última sync menos 1 dia (pra garantir que pega vendas que demoraram a aparecer)
+      const dt = new Date(meta.lastSyncDate);
+      dt.setDate(dt.getDate() - 1);
+      dateFromStr = dt.toISOString().split('T')[0] + 'T00:00:00.000-00:00';
+    } else {
+      // Primeira sync: pega últimos 30 dias
+      const dt = new Date();
+      dt.setDate(dt.getDate() - 30);
+      dateFromStr = dt.toISOString().split('T')[0] + 'T00:00:00.000-00:00';
+    }
+
+    const baseQuery = `/orders/search?seller=${me.id}&order.status=paid&order.date_created.from=${encodeURIComponent(dateFromStr)}&sort=date_desc`;
+    const firstR = await proxyFetch(`${baseQuery}&limit=50&offset=0`);
+    if(!firstR.ok) throw new Error(`HTTP ${firstR.status} ao listar vendas`);
+    const firstD = await firstR.json();
+    const totalNovas = firstD.paging?.total || 0;
+    let novasOrders = firstD.results || [];
+
+    // Páginas extras se necessário
+    if(totalNovas > 50){
+      const totalPages = Math.min(Math.ceil(totalNovas / 50), 20); // hard cap 1000 vendas novas
+      for(let p = 1; p < totalPages; p++){
+        const r = await proxyFetch(`${baseQuery}&limit=50&offset=${p*50}`);
+        if(r.ok){
+          const d = await r.json();
+          novasOrders = novasOrders.concat(d.results || []);
+        }
+        await new Promise(res => setTimeout(res, 200));
+        setMsg(`Listando vendas novas... ${novasOrders.length}/${totalNovas}`, 10 + (p / totalPages) * 30);
+      }
+    }
+
+    // Processa orders → schema do app
+    setMsg(`Processando ${novasOrders.length} vendas...`, 40);
+    const novasMap = new Map();
+    for(const order of novasOrders){
+      const v = orderToVenda(order);
+      novasMap.set(String(v.id), v);
+    }
+
+    // Conta quantas são realmente novas (não estavam no IndexedDB)
+    let trulyNew = 0;
+    for(const [id, v] of novasMap){
+      if(!existingMap.has(id)) trulyNew++;
+    }
+    result.newVendas = trulyNew;
+
+    // ── ETAPA 2: Atualiza STATUS de vendas em trânsito ──
+    const emTransito = existing.filter(v => isVendaEmTransito(v) && !novasMap.has(String(v.id)));
+    setMsg(`Atualizando status de ${emTransito.length} vendas em trânsito...`, 50);
+
+    const BATCH = 8;
+    let processed = 0;
+    for(let i = 0; i < emTransito.length; i += BATCH){
+      const batch = emTransito.slice(i, i + BATCH);
+      const promises = batch.map(async (vAntiga) => {
+        try {
+          const r = await proxyFetch(`/orders/${vAntiga.id}`);
+          if(!r.ok) return null;
+          const order = await r.json();
+          // Só atualiza campos mutáveis: status, substatus, dinheiro liberado
+          const novo = orderToVenda(order);
+          // Preserva campos do XLSX se existirem (CPF, endereço completo, etc.)
+          const merged = {
+            ...vAntiga,
+            status: novo.status,
+            substatus: novo.substatus,
+            shipment: novo.shipment || vAntiga.shipment,
+            _lastUpdatedAt: new Date().toISOString(),
+          };
+          // Detecta se status mudou
+          const sub1 = vAntiga.shipment?.substatus || vAntiga.substatus;
+          const sub2 = novo.shipment?.substatus || novo.substatus;
+          if(sub1 !== sub2 || vAntiga.status !== novo.status){
+            result.statusUpdated++;
+          }
+          return merged;
+        } catch(e){
+          result.errors++;
+          return null;
+        }
+      });
+      const updated = await Promise.all(promises);
+      for(const u of updated){
+        if(u) existingMap.set(String(u.id), u);
+      }
+      processed += batch.length;
+      setMsg(`Atualizando status... ${processed}/${emTransito.length}`, 50 + (processed / Math.max(1,emTransito.length)) * 35);
+      await new Promise(res => setTimeout(res, 200));
+    }
+
+    // Mescla: novas + existentes
+    setMsg('Mesclando dados...', 88);
+    for(const [id, v] of novasMap){
+      const existed = existingMap.get(id);
+      if(existed){
+        // Mescla preservando campos do XLSX se vieram
+        existingMap.set(id, {
+          ...existed,
+          ...v,
+          // Preserva campos detalhados do XLSX
+          buyer: { ...v.buyer, ...existed.buyer },
+          receiver: { ...v.receiver, ...existed.receiver },
+          _lastUpdatedAt: new Date().toISOString(),
+        });
+      } else {
+        existingMap.set(id, {
+          ...v,
+          _firstSeenAt: new Date().toISOString(),
+          _lastUpdatedAt: new Date().toISOString(),
+          _source: 'api',
+        });
+      }
+    }
+
+    const allVendas = Array.from(existingMap.values());
+    applyBlockedStateFlags(allVendas);
+
+    // Salva no IndexedDB
+    setMsg('Salvando no banco...', 95);
+    await saveImportedVendas(allVendas);
+
+    // Atualiza meta
+    saveSyncMeta({
+      lastSyncDate: new Date().toISOString(),
+      lastSyncOrderId: novasMap.size > 0 ? Array.from(novasMap.keys())[0] : meta.lastSyncOrderId,
+      totalVendas: allVendas.length,
+    });
+
+    // Atualiza dataset em memória
+    vendasDataFull = allVendas;
+    _vendasFullCacheTime = Date.now();
+
+    setMsg(`✓ ${result.newVendas} novas, ${result.statusUpdated} atualizadas`, 100);
+
+    // Re-render se está na visão Planilha
+    if(_vendasView === 'planilha') renderVendas();
+
+    // Mantém notif por 3s
+    if(progressBox){
+      setTimeout(() => progressBox.remove(), 3000);
+    }
+  } catch(e){
+    if(progressBox){
+      progressBox.innerHTML = `<div style="color:var(--red)">❌ ${humanizeError(e.message)}</div>
+        <button onclick="this.parentElement.remove()" class="btn btn-sm" style="font-size:10px;margin-top:6px">Fechar</button>`;
+      setTimeout(() => progressBox.remove(), 8000);
+    }
+    if(!silent) console.error('Sync falhou:', e);
+  } finally {
+    _syncRunning = false;
+  }
+
+  return result;
+}
+
+// Converte um order da API ML para o schema interno (mesmo do syncVendas mas standalone)
+function orderToVenda(order){
+  const items = order.order_items || [];
+  const firstItem = items[0]?.item || {};
+  const total = order.total_amount || 0;
+  const frete = order.shipping?.cost || 0;
+
+  // Cor da variação
+  let color = null;
+  const varAttrs = items[0]?.item?.variation_attributes || [];
+  for(const va of varAttrs){
+    if(/color|cor/i.test(va.id || va.name || '')){ color = va.value_name; break; }
+  }
+  if(!color && firstItem.title) color = extractMLColor(firstItem.title);
+
+  // Comissão ML e frete bancado pelo vendedor
+  const payments = order.payments || [];
+  let mlFee = 0, shippingPaidBySeller = 0;
+  for(const p of payments){
+    if(typeof p.marketplace_fee === 'number') mlFee += p.marketplace_fee;
+    const details = p.fee_details || [];
+    for(const f of details){
+      const amount = Number(f.amount || 0);
+      if(['mercadopago_fee','sale_fee','marketplace_fee','financing_fee'].includes(f.fee_type)){
+        if(typeof p.marketplace_fee !== 'number') mlFee += amount;
+      }
+      if(f.fee_type === 'shipping' && f.fee_payer === 'collector'){
+        shippingPaidBySeller += amount;
+      }
+    }
+    const ps = Number(p.shipping_cost || 0);
+    if(ps < 0) shippingPaidBySeller += Math.abs(ps);
+  }
+  const totalLiquido = total - mlFee - shippingPaidBySeller;
+
+  return {
+    id: String(order.id),
+    date_created: order.date_created,
+    status: order.status,
+    substatus: order.shipping?.substatus || null,
+    items,
+    firstItem,
+    color,
+    total,
+    totalLiquido,
+    mlFee,
+    shippingPaidBySeller,
+    subtotal: total - frete,
+    frete,
+    paymentId: payments[0]?.id || null,
+    buyer: {
+      id:        order.buyer?.id,
+      nickname:  order.buyer?.nickname || '',
+      firstName: order.buyer?.first_name || '',
+      lastName:  order.buyer?.last_name  || '',
+      docType:   order.buyer?.billing_info?.doc_type    || null,
+      docNumber: order.buyer?.billing_info?.doc_number  || null,
+    },
+    receiver: {
+      state: order.shipping?.receiver_address?.state?.id ||
+             order.shipping?.receiver_address?.state?.name || '',
+      city:  order.shipping?.receiver_address?.city?.name || '',
+    },
+    logistic_type: order.shipping?.logistic_type || null,
+    shipment: order.shipping?.id ? {
+      id: order.shipping.id,
+      substatus: order.shipping?.substatus || null,
+      receiver_address: order.shipping?.receiver_address || {},
+    } : null,
+    _source: 'api',
+  };
+}
+
+async function loadAllVendasForPlanilha(){
+  if(!cfg.at){ alert('Conecte sua conta ML em Config primeiro.'); return; }
+  if(_vendasFullLoading) return;
+
+  _vendasFullLoading = true;
+  _vendasFullCancel = false;
+
+  // Mostra UI de progresso na lista
+  const list = document.getElementById('vendas-list');
+  if(list){
+    list.innerHTML = `
+      <div id="full-loading-card" style="padding:24px;text-align:center;background:var(--bg2);border:1px solid var(--border);border-radius:8px">
+        <div style="display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:14px">
+          <span class="spinner"></span>
+          <span style="font-size:13px;color:var(--text2)">Carregando histórico completo de vendas...</span>
+        </div>
+        <div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;margin-bottom:10px">
+          <div id="full-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--purple),var(--blue));transition:width .3s ease"></div>
+        </div>
+        <div id="full-progress-text" style="font-size:11px;color:var(--text3);margin-bottom:10px">Conectando...</div>
+        <button onclick="cancelLoadAllVendas()" class="btn btn-sm" style="font-size:11px">⏸ Cancelar</button>
+      </div>`;
+  }
+
+  const setProg = (pct, msg) => {
+    const bar = document.getElementById('full-progress-bar');
+    const txt = document.getElementById('full-progress-text');
+    if(bar) bar.style.width = `${Math.min(100, pct)}%`;
+    if(txt) txt.textContent = msg;
+  };
+
+  try {
+    setProg(2, 'Autenticando...');
+    const meR = await proxyFetch('/users/me');
+    if(meR.status === 401 || meR.status === 403){
+      const ok = await doRefresh();
+      if(!ok) throw new Error('Token expirado. Reconecte em Config.');
+    } else if(!meR.ok) throw new Error(`Erro ao conectar: ${meR.status}`);
+    const me = await meR.json();
+    if(_vendasFullCancel) throw new Error('CANCELLED');
+
+    // Sem date_from: pega tudo
+    const baseQuery = `/orders/search?seller=${me.id}&order.status=paid&sort=date_desc`;
+
+    setProg(5, 'Contando vendas...');
+    const firstR = await proxyFetch(`${baseQuery}&limit=50&offset=0`);
+    if(!firstR.ok) throw new Error(`HTTP ${firstR.status} ao listar vendas`);
+    const firstD = await firstR.json();
+    const totalVendas = firstD.paging?.total || 0;
+    let allOrders = firstD.results || [];
+
+    if(totalVendas === 0){
+      vendasDataFull = [];
+      _vendasFullCacheTime = Date.now();
+      _vendasFullLoading = false;
+      renderVendas();
+      return;
+    }
+
+    setProg(10, `Encontradas ${totalVendas} vendas. Baixando páginas...`);
+
+    // ML tem limite teórico de offset+limit ≤ 1000 em alguns endpoints — vamos ser conservadores
+    const HARD_CAP = 5000;  // limite duro pra não travar tudo
+    const realTarget = Math.min(totalVendas, HARD_CAP);
+    const totalPages = Math.ceil(realTarget / 50);
+
+    // Busca em batches de 4 páginas paralelas (anti-503)
+    const PAGES_PER_BATCH = 4;
+    let pagesLoaded = 1; // primeira já foi
+
+    for(let startPage = 1; startPage < totalPages; startPage += PAGES_PER_BATCH){
+      if(_vendasFullCancel) throw new Error('CANCELLED');
+
+      const endPage = Math.min(startPage + PAGES_PER_BATCH, totalPages);
+      const promises = [];
+      for(let p = startPage; p < endPage; p++){
+        promises.push(
+          proxyFetch(`${baseQuery}&limit=50&offset=${p*50}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(d => d?.results || [])
+            .catch(() => [])
+        );
+      }
+      const results = await Promise.all(promises);
+      for(const batch of results) allOrders = allOrders.concat(batch);
+
+      pagesLoaded += promises.length;
+      const pct = 10 + (pagesLoaded / totalPages) * 60;
+      setProg(pct, `Listando vendas... ${allOrders.length}/${realTarget}`);
+
+      // Pausa entre batches pra não estourar rate limit
+      if(endPage < totalPages){
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+
+    if(_vendasFullCancel) throw new Error('CANCELLED');
+    if(allOrders.length > HARD_CAP) allOrders = allOrders.slice(0, HARD_CAP);
+
+    setProg(75, `Processando ${allOrders.length} vendas...`);
+
+    // ── Processa as orders SEM buscar shipments (planilha não precisa) ──
+    // Diferença vs syncVendas: aqui não fazemos GET /shipments/{id} (economiza ~50% das chamadas)
+    const enriched = allOrders.map(order => {
+      const items     = order.order_items || [];
+      const firstItem = items[0]?.item || {};
+
+      // Cor da variação
+      let color = null;
+      const varAttrs = items[0]?.item?.variation_attributes || [];
+      for(const va of varAttrs){
+        if(/color|cor/i.test(va.id || va.name || '')){ color = va.value_name; break; }
+      }
+      if(!color && firstItem.title) color = extractMLColor(firstItem.title);
+
+      const total = order.total_amount || 0;
+      const frete = order.shipping?.cost || 0;
+
+      // Comissão ML e frete bancado pelo vendedor (mesmo cálculo do syncVendas)
+      const payments = order.payments || [];
+      let mlFee = 0;
+      let shippingPaidBySeller = 0;
+      for(const p of payments){
+        if(typeof p.marketplace_fee === 'number') mlFee += p.marketplace_fee;
+        const details = p.fee_details || [];
+        for(const f of details){
+          const amount = Number(f.amount || 0);
+          if(['mercadopago_fee','sale_fee','marketplace_fee','financing_fee'].includes(f.fee_type)){
+            if(typeof p.marketplace_fee !== 'number') mlFee += amount;
+          }
+          if(f.fee_type === 'shipping' && f.fee_payer === 'collector'){
+            shippingPaidBySeller += amount;
+          }
+        }
+        const ps = Number(p.shipping_cost || 0);
+        if(ps < 0) shippingPaidBySeller += Math.abs(ps);
+      }
+      const totalLiquido = total - mlFee - shippingPaidBySeller;
+
+      return {
+        id: order.id,
+        date_created: order.date_created,
+        status: order.status,
+        substatus: null, // sem shipment fetch
+        items,
+        firstItem,
+        color,
+        total,
+        totalLiquido,
+        mlFee,
+        shippingPaidBySeller,
+        subtotal: total - frete,
+        frete,
+        paymentId: payments[0]?.id || null,
+        buyer: {
+          id:        order.buyer?.id,
+          nickname:  order.buyer?.nickname || '',
+          firstName: order.buyer?.first_name || '',
+          lastName:  order.buyer?.last_name  || '',
+          docType:   order.buyer?.billing_info?.doc_type    || null,
+          docNumber: order.buyer?.billing_info?.doc_number  || null,
+        },
+        receiver: {
+          state: order.shipping?.receiver_address?.state?.id ||
+                 order.shipping?.receiver_address?.state?.name || '',
+          city:  order.shipping?.receiver_address?.city?.name || '',
+        },
+        logistic_type: order.shipping?.logistic_type || null,
+        shipment: null,
+        order,
+      };
+    });
+
+    setProg(95, 'Salvando cache...');
+
+    vendasDataFull = enriched;
+    _vendasFullCacheTime = Date.now();
+
+    setProg(100, `✓ ${enriched.length} vendas carregadas!`);
+
+    // Pequeno delay pra mostrar 100% antes de renderizar
+    await new Promise(r => setTimeout(r, 300));
+
+    _vendasFullLoading = false;
+    renderVendas();
+  } catch(e){
+    _vendasFullLoading = false;
+    if(e.message === 'CANCELLED'){
+      // Voltou pros cards
+      _vendasView = 'cards';
+      setVendasView('cards');
+      return;
+    }
+    const list = document.getElementById('vendas-list');
+    if(list){
+      list.innerHTML = `<div class="alert al-err" style="padding:14px"><span>✕</span><span>${humanizeError(e.message)}</span></div>
+        <button onclick="setVendasView('cards')" class="btn btn-sm" style="margin-top:10px">← Voltar para Cards</button>
+        <button onclick="loadAllVendasForPlanilha()" class="btn btn-sm" style="margin-top:10px;margin-left:6px">↻ Tentar novamente</button>`;
+    }
+  }
+}
+
+function cancelLoadAllVendas(){
+  _vendasFullCancel = true;
 }
 
 // Formata número como moeda BR
@@ -6795,8 +7854,11 @@ function renderVendas(){
   const empty = document.getElementById('vendas-empty');
   if(!list) return;
 
+  // Escolhe dataset: cards usa vendasData (200 mais recentes), planilha usa vendasDataFull (histórico completo)
+  const sourceData = (_vendasView === 'planilha' && vendasDataFull) ? vendasDataFull : vendasData;
+
   const search = (document.getElementById('vendas-search')?.value || '').toLowerCase().trim();
-  let items = vendasData;
+  let items = sourceData;
   if(search){
     items = items.filter(v => {
       const blob = `${v.firstItem.title||''} ${v.buyer.firstName} ${v.buyer.lastName} ${v.buyer.nickname} ${v.id}`.toLowerCase();
@@ -6804,31 +7866,37 @@ function renderVendas(){
     });
   }
 
-  // ── Métricas financeiras (sobre TODAS as vendas, não filtradas) ──
-  const total       = vendasData.length;
-  const faturamento = vendasData.reduce((s,v) => s+v.total, 0);
-  const totalFrete  = vendasData.reduce((s,v) => s+v.frete, 0);
-  const ticket      = total > 0 ? faturamento / total : 0;
+  // ── Métricas financeiras: filtra vendas que NÃO são de estado bloqueado ──
+  const validForFinancials = sourceData.filter(v => !v._excludeFromFinancials);
+  const blockedCount = sourceData.length - validForFinancials.length;
 
-  // Investimentos por sócio (somente vendas no período)
-  const totalInvLuciano = vendasData.reduce((s,v) => s + getInvestimento(v.id, 'luciano'), 0);
-  const totalInvJohnny  = vendasData.reduce((s,v) => s + getInvestimento(v.id, 'johnny'), 0);
+  const total          = sourceData.length;
+  const totalValid     = validForFinancials.length;
+  const faturamentoBruto = validForFinancials.reduce((s,v) => s + (v.total || 0), 0);
+  const faturamentoLiq   = validForFinancials.reduce((s,v) => s + ((typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0)), 0);
+  const totalMlFee     = validForFinancials.reduce((s,v) => s + (v.mlFee || 0), 0);
+  const totalFreteVend = validForFinancials.reduce((s,v) => s + (v.shippingPaidBySeller || 0), 0);
+  const ticket         = totalValid > 0 ? faturamentoLiq / totalValid : 0;
+
+  // Investimentos por sócio (sobre dataset financeiro válido)
+  const totalInvLuciano = validForFinancials.reduce((s,v) => s + getInvestimento(v.id, 'luciano'), 0);
+  const totalInvJohnny  = validForFinancials.reduce((s,v) => s + getInvestimento(v.id, 'johnny'), 0);
   const totalInvestido  = totalInvLuciano + totalInvJohnny;
 
-  // Lucro total = soma do lucro por venda
-  const lucroTotal = vendasData.reduce((s,v) => s + calcLucroVenda(v), 0);
+  // Lucro total = soma do lucro por venda (calcLucroVenda já retorna 0 para bloqueadas)
+  const lucroTotal = sourceData.reduce((s,v) => s + calcLucroVenda(v), 0);
 
-  // Lucro diário = lucro só de vendas de HOJE
+  // Lucro diário = lucro só de vendas de HOJE (também respeita bloqueio)
   const hoje = new Date();
   const hojeStr = hoje.toISOString().split('T')[0];
-  const lucroHoje = vendasData
+  const lucroHoje = sourceData
     .filter(v => v.date_created && v.date_created.startsWith(hojeStr))
     .reduce((s,v) => s + calcLucroVenda(v), 0);
 
-  // Diferença Mercado Pago - investimento total (saldo bruto)
-  const diferenca = faturamento - totalInvestido;
+  // Diferença = Mercado Pago (líquido) - investimento total
+  const diferenca = faturamentoLiq - totalInvestido;
 
-  // Métricas para etiquetas/DC-e
+  // Métricas para etiquetas/DC-e (só faz sentido nos cards, que tem shipment data)
   const printable = vendasData.filter(v => canPrintLabel(v).ok).length;
   const blocked = vendasData.filter(v => canPrintLabel(v).blocked).length;
   const needsNF = vendasData.filter(v => canPrintLabel(v).needsInvoice).length;
@@ -6838,7 +7906,7 @@ function renderVendas(){
   const setEl = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = val; };
   setEl('vendas-lucro-dia',   fmtBRL(lucroHoje));
   setEl('vendas-lucro-total', fmtBRL(lucroTotal));
-  setEl('vendas-faturamento', fmtBRL(faturamento));
+  setEl('vendas-faturamento', fmtBRL(faturamentoLiq));
   setEl('vendas-diferenca',   fmtBRL(diferenca));
 
   // Métricas linha 2 (sócios)
@@ -6847,11 +7915,31 @@ function renderVendas(){
   setEl('vendas-total',       String(total));
   setEl('vendas-ticket',      fmtBRL(ticket));
 
+  // Texto do subtítulo
+  const isFull = (_vendasView === 'planilha' && vendasDataFull);
   let subText = `${items.length} venda${items.length!==1?'s':''} listada${items.length!==1?'s':''}`;
-  if(printable > 0) subText += ` · <span style="color:var(--green);font-weight:600">🏷 ${printable} pronta${printable!==1?'s':''} para etiqueta</span>`;
-  if(needsNF > 0) subText += ` · <span style="color:var(--blue);font-weight:600">📋 ${needsNF} aguardando DC-e</span>`;
-  if(needsNFUrgent > 0) subText += ` · <span style="color:var(--red);font-weight:700">🚨 ${needsNFUrgent} DC-e travada${needsNFUrgent>1?'s':''} (>24h)</span>`;
-  if(blocked > 0) subText += ` · <span style="color:var(--red);font-weight:600">🚫 ${blocked} estado${blocked!==1?'s':''} bloqueado${blocked!==1?'s':''}</span>`;
+  if(isFull){
+    subText += ` <span style="color:var(--blue);font-weight:600">📊 Histórico completo</span>`;
+    // Adiciona contador de bloqueadas (só na planilha)
+    if(blockedCount > 0){
+      subText += ` · <span style="color:var(--red);font-weight:600" title="Vendas para estados bloqueados — só acompanhamento">🚫 ${blockedCount} estado${blockedCount>1?'s':''} bloqueado${blockedCount>1?'s':''}</span>`;
+    }
+    // Info da última sync
+    const meta = getSyncMeta();
+    if(meta.lastSyncDate){
+      const dt = new Date(meta.lastSyncDate);
+      const ago = Math.floor((Date.now() - dt.getTime()) / 60000);
+      const agoStr = ago < 1 ? 'agora' : ago < 60 ? `${ago}min` : ago < 1440 ? `${Math.floor(ago/60)}h` : `${Math.floor(ago/1440)}d`;
+      const color = ago > 1440 ? 'var(--amber)' : 'var(--text3)';
+      subText += ` · <span style="color:${color};font-size:10px">🔄 sync há ${agoStr}</span>`;
+    }
+  } else if(_vendasView === 'cards'){
+    subText += ` <span style="color:var(--text3)">(últimas ${vendasData.length})</span>`;
+  }
+  if(printable > 0 && _vendasView === 'cards') subText += ` · <span style="color:var(--green);font-weight:600">🏷 ${printable} pronta${printable!==1?'s':''} para etiqueta</span>`;
+  if(needsNF > 0 && _vendasView === 'cards') subText += ` · <span style="color:var(--blue);font-weight:600">📋 ${needsNF} aguardando DC-e</span>`;
+  if(needsNFUrgent > 0 && _vendasView === 'cards') subText += ` · <span style="color:var(--red);font-weight:700">🚨 ${needsNFUrgent} DC-e travada${needsNFUrgent>1?'s':''} (>24h)</span>`;
+  if(blocked > 0 && _vendasView === 'cards') subText += ` · <span style="color:var(--red);font-weight:600">🚫 ${blocked} estado${blocked!==1?'s':''} bloqueado${blocked!==1?'s':''}</span>`;
   document.getElementById('vendas-sub').innerHTML = subText;
 
   if(!items.length){
@@ -7052,23 +8140,53 @@ function renderVendasPlanilha(items){
     const invJohnny  = getInvestimento(v.id, 'johnny');
     const lucro = calcLucroVenda(v);
     const lucroColor = lucro > 0 ? 'var(--green)' : (lucro < 0 ? 'var(--red)' : 'var(--text3)');
+    const totalLiq = (typeof v.totalLiquido === 'number') ? v.totalLiquido : v.total;
+    const tooltipBruto = `Bruto: R$${v.total.toFixed(2).replace('.',',')}\nComissão ML: -R$${(v.mlFee||0).toFixed(2).replace('.',',')}\nFrete vendedor: -R$${(v.shippingPaidBySeller||0).toFixed(2).replace('.',',')}\n────────\nLíquido: R$${totalLiq.toFixed(2).replace('.',',')}`;
 
-    return `<tr style="border-bottom:1px solid var(--border);${idx % 2 === 0 ? 'background:var(--bg2)' : ''}">
+    // Vendas de estado bloqueado: linha cinza com badge especial, sem inputs editáveis
+    const isBlocked = v._isBlockedState === true;
+    const rowBg = isBlocked ? 'rgba(239,68,68,.04)' : (idx % 2 === 0 ? 'var(--bg2)' : '');
+    const rowOpacity = isBlocked ? '0.6' : '1';
+
+    // Status para vendas bloqueadas: prefixa com 🚫
+    const statusLabel = isBlocked
+      ? `🚫 ${escapeHTML(v._blockedUF || 'Bloqueado')} · ${statusInfo.label}`
+      : statusInfo.label;
+    const statusColor = isBlocked ? 'var(--red)' : statusInfo.color;
+
+    // Células financeiras: vazias para bloqueados
+    const totalCell = isBlocked
+      ? `<td style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px" title="Estado bloqueado — não calculamos valores financeiros">—</td>`
+      : `<td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:600" title="${tooltipBruto}">${fmtBRL(totalLiq, false)}</td>`;
+
+    const invLucianoCell = isBlocked
+      ? `<td style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px">—</td>`
+      : `<td style="padding:6px 8px;text-align:right">
+          <input type="number" step="0.01" min="0" value="${invLuciano > 0 ? invLuciano.toFixed(2) : ''}"
+            placeholder="0,00"
+            onchange="updateInvestimento('${v.id}', 'luciano', this.value)"
+            style="width:90px;padding:3px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'DM Mono',monospace;font-size:11px;text-align:right">
+        </td>`;
+
+    const invJohnnyCell = isBlocked
+      ? `<td style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px">—</td>`
+      : `<td style="padding:6px 8px;text-align:right">
+          <input type="number" step="0.01" min="0" value="${invJohnny > 0 ? invJohnny.toFixed(2) : ''}"
+            placeholder="0,00"
+            onchange="updateInvestimento('${v.id}', 'johnny', this.value)"
+            style="width:90px;padding:3px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'DM Mono',monospace;font-size:11px;text-align:right">
+        </td>`;
+
+    const lucroCell = isBlocked
+      ? `<td style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px">—</td>`
+      : `<td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;color:${lucroColor}">${fmtBRL(lucro, false)}</td>`;
+
+    return `<tr style="border-bottom:1px solid var(--border);background:${rowBg};opacity:${rowOpacity}">
       <td style="padding:6px 8px;text-align:center;font-weight:600;font-family:'DM Mono',monospace">${qtd}</td>
-      <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace">${fmtBRL(v.total, false)}</td>
-      <td style="padding:6px 8px;text-align:right">
-        <input type="number" step="0.01" min="0" value="${invLuciano > 0 ? invLuciano.toFixed(2) : ''}"
-          placeholder="0,00"
-          onchange="updateInvestimento('${v.id}', 'luciano', this.value)"
-          style="width:90px;padding:3px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'DM Mono',monospace;font-size:11px;text-align:right">
-      </td>
-      <td style="padding:6px 8px;text-align:right">
-        <input type="number" step="0.01" min="0" value="${invJohnny > 0 ? invJohnny.toFixed(2) : ''}"
-          placeholder="0,00"
-          onchange="updateInvestimento('${v.id}', 'johnny', this.value)"
-          style="width:90px;padding:3px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'DM Mono',monospace;font-size:11px;text-align:right">
-      </td>
-      <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;color:${lucroColor}">${fmtBRL(lucro, false)}</td>
+      ${totalCell}
+      ${invLucianoCell}
+      ${invJohnnyCell}
+      ${lucroCell}
       <td style="padding:6px 8px">
         <a href="https://www.mercadolivre.com.br/vendas/${v.id}/detalhe" target="_blank" rel="noopener"
           style="color:var(--blue);text-decoration:none;font-family:'DM Mono',monospace;font-size:10px">${v.id}</a>
@@ -7077,22 +8195,34 @@ function renderVendasPlanilha(items){
       <td style="padding:6px 8px;font-size:11px">${escapeHTML(buyerName)}</td>
       <td style="padding:6px 8px;font-size:11px;color:var(--text3)">${cidade}</td>
       <td style="padding:6px 8px;font-size:10px;white-space:nowrap;color:var(--text3)">${dt}</td>
-      <td style="padding:6px 8px;font-size:10px;font-weight:600;color:${statusInfo.color};white-space:nowrap">${statusInfo.label}</td>
+      <td style="padding:6px 8px;font-size:10px;font-weight:600;color:${statusColor};white-space:nowrap">${statusLabel}</td>
       <td style="padding:6px 8px;text-align:center">
         <button class="btn btn-sm" onclick="showRecibo('${v.id}')" style="font-size:10px;padding:3px 6px">🧾</button>
       </td>
     </tr>`;
   }).join('');
 
+  // Info da última importação (assíncrono, mas não bloqueante)
+  let importInfoHTML = '';
+  try {
+    const meta = JSON.parse(localStorage.getItem('cia_vendas_import_meta') || 'null');
+    if(meta){
+      const dt = new Date(meta.importedAt);
+      const ago = Math.floor((Date.now() - dt.getTime()) / (1000 * 60));
+      const agoStr = ago < 60 ? `${ago} min` : ago < 1440 ? `${Math.floor(ago/60)}h` : `${Math.floor(ago/1440)}d`;
+      importInfoHTML = `<span style="color:var(--blue);font-weight:600">📥 ${meta.count} vendas importadas há ${agoStr}</span> · `;
+    }
+  } catch {}
+
   return `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px">
     <table style="width:100%;font-size:11px;border-collapse:collapse;background:var(--bg)">
       <thead>
         <tr style="background:var(--bg3);border-bottom:2px solid var(--border);position:sticky;top:0;z-index:5">
           <th style="padding:8px;text-align:center;color:var(--text2);font-weight:700;font-size:11px">Unid.</th>
-          <th style="padding:8px;text-align:right;color:var(--text2);font-weight:700;font-size:11px">Total (BRL)</th>
+          <th style="padding:8px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;background:rgba(96,165,250,.1)" title="Total Líquido = Bruto - Comissão ML - Frete bancado pelo vendedor.&#10;Esse é o valor que entra na conta do Mercado Pago.">Total ML</th>
           <th style="padding:8px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;background:rgba(167,139,250,.1)">Inv. Luciano</th>
           <th style="padding:8px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;background:rgba(167,139,250,.1)">Inv. Johnny</th>
-          <th style="padding:8px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;background:rgba(62,207,142,.1)">Lucro</th>
+          <th style="padding:8px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;background:rgba(62,207,142,.1)" title="Lucro = Total ML (líquido) - Inv. Luciano - Inv. Johnny">Lucro</th>
           <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">N.º venda</th>
           <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">Título do anúncio</th>
           <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">Comprador</th>
@@ -7106,7 +8236,7 @@ function renderVendasPlanilha(items){
     </table>
   </div>
   <div style="margin-top:8px;padding:8px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;font-size:10px;color:var(--text3);line-height:1.5">
-    💡 <strong>Dica:</strong> clique nos campos <strong>Inv. Luciano</strong> e <strong>Inv. Johnny</strong> para preencher os valores investidos por venda. O <strong>Lucro</strong> é calculado automaticamente: <code>Total ML − Inv. Luciano − Inv. Johnny</code>.
+    ${importInfoHTML}💡 <strong>Fórmula:</strong> <code>Total ML</code> já é o valor LÍQUIDO recebido (Bruto − Comissão − Frete vendedor). <code>Lucro = Total ML − Inv. Luciano − Inv. Johnny</code>. Os investimentos ficam salvos por nº de venda — reimporte a planilha quantas vezes quiser, eles não se perdem.
   </div>`;
 }
 
@@ -7119,8 +8249,20 @@ function updateInvestimento(orderId, socio, value){
 
 // Exporta planilha XLSX completa com todas as vendas
 async function exportVendasXLSX(){
-  if(!vendasData.length){ alert('Sem vendas para exportar.'); return; }
+  // Usa dataset completo se disponível, senão dataset cards
+  const dataToExport = vendasDataFull || vendasData;
+  if(!dataToExport.length){ alert('Sem vendas para exportar.'); return; }
 
+  // Se está em cards e tem dataset completo carregado, pergunta qual usar
+  if(_vendasView === 'cards' && vendasDataFull && vendasDataFull.length > vendasData.length){
+    const useFull = confirm(`Você tem ${vendasDataFull.length} vendas no histórico completo (cache) e ${vendasData.length} no modo Cards.\n\nClique OK para exportar TODAS (${vendasDataFull.length}), ou Cancelar para exportar só as ${vendasData.length} dos Cards.`);
+    if(useFull) return await exportVendasXLSXInternal(vendasDataFull);
+    else        return await exportVendasXLSXInternal(vendasData);
+  }
+  return await exportVendasXLSXInternal(dataToExport);
+}
+
+async function exportVendasXLSXInternal(dataset){
   // Carrega SheetJS dinamicamente se não estiver carregado
   if(typeof XLSX === 'undefined'){
     await new Promise((resolve, reject) => {
@@ -7144,50 +8286,60 @@ async function exportVendasXLSX(){
   };
 
   // Linhas de dados
-  const rows = vendasData.map(v => {
+  const rows = dataset.map(v => {
     const dt = v.date_created ? new Date(v.date_created) : null;
     const dtStr = dt ? `${dt.toLocaleDateString('pt-BR')} ${dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : '';
     const buyerName = (v.buyer.firstName + ' ' + v.buyer.lastName).trim() || v.buyer.nickname || '';
     const qtd = (v.items || []).reduce((s,i) => s + (i.quantity||1), 0);
     const sub = v.shipment?.substatus;
+    const totalLiq = (typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0);
     return [
       qtd,                                          // Unidade
-      v.total,                                      // Total (BRL)
+      v.total,                                      // Bruto
+      v.mlFee || 0,                                 // Comissão ML
+      v.shippingPaidBySeller || 0,                  // Frete vendedor
+      totalLiq,                                     // Total ML (líquido)
       getInvestimento(v.id, 'luciano'),             // Inv. Luciano
       getInvestimento(v.id, 'johnny'),              // Inv. Johnny
       calcLucroVenda(v),                            // Lucro
       String(v.id),                                 // N.º de venda
-      v.firstItem.title || '',                      // Título do anúncio
-      buyerName,                                    // Dados pessoais
+      v.firstItem.title || '',                      // Título
+      buyerName,                                    // Comprador
       v.receiver.state || '',                       // Estado
-      dtStr,                                        // Data da venda
-      subStatusMap[sub] || v.status || '',          // Estado do pedido
+      dtStr,                                        // Data
+      subStatusMap[sub] || v.status || '',          // Status pedido
     ];
   });
 
   // Totais (rodapé)
   const totalQtd       = rows.reduce((s,r) => s + (r[0]||0), 0);
-  const totalFat       = vendasData.reduce((s,v) => s + (v.total||0), 0);
-  const totalLuciano   = vendasData.reduce((s,v) => s + getInvestimento(v.id, 'luciano'), 0);
-  const totalJohnny    = vendasData.reduce((s,v) => s + getInvestimento(v.id, 'johnny'), 0);
-  const totalLucro     = vendasData.reduce((s,v) => s + calcLucroVenda(v), 0);
+  const totalBruto     = dataset.reduce((s,v) => s + (v.total||0), 0);
+  const totalComissao  = dataset.reduce((s,v) => s + (v.mlFee||0), 0);
+  const totalFreteVend = dataset.reduce((s,v) => s + (v.shippingPaidBySeller||0), 0);
+  const totalLiquido   = dataset.reduce((s,v) => s + ((typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total||0)), 0);
+  const totalLuciano   = dataset.reduce((s,v) => s + getInvestimento(v.id, 'luciano'), 0);
+  const totalJohnny    = dataset.reduce((s,v) => s + getInvestimento(v.id, 'johnny'), 0);
+  const totalLucro     = dataset.reduce((s,v) => s + calcLucroVenda(v), 0);
 
   const aoa = [
     ['Vendas Mercado Livre — Listas CIA'],
     [`Exportado em: ${new Date().toLocaleString('pt-BR')}`],
     [],
-    ['Unidade', 'Total (BRL)', 'Inv. Luciano', 'Inv. Johnny', 'Lucro', 'N.º de venda', 'Título do anúncio', 'Dados pessoais ou da empresa', 'Estado', 'Data da venda', 'Estado do pedido'],
+    ['Unidade', 'Bruto (BRL)', 'Comissão ML', 'Frete Vendedor', 'Total ML (Líquido)', 'Inv. Luciano', 'Inv. Johnny', 'Lucro', 'N.º de venda', 'Título do anúncio', 'Comprador', 'Estado', 'Data da venda', 'Status'],
     ...rows,
     [],
-    ['TOTAIS:', totalFat, totalLuciano, totalJohnny, totalLucro],
+    ['TOTAIS:', totalBruto, totalComissao, totalFreteVend, totalLiquido, totalLuciano, totalJohnny, totalLucro],
     [],
     ['Resumo financeiro'],
-    ['Faturamento total', totalFat],
-    ['Investimento Luciano', totalLuciano],
-    ['Investimento Johnny', totalJohnny],
-    ['Investimento total', totalLuciano + totalJohnny],
+    ['Faturamento bruto (preço pago pelo comprador)', totalBruto],
+    ['(-) Comissão ML', totalComissao],
+    ['(-) Frete bancado pelo vendedor', totalFreteVend],
+    ['Faturamento líquido (Mercado Pago)', totalLiquido],
+    ['(-) Investimento Luciano', totalLuciano],
+    ['(-) Investimento Johnny', totalJohnny],
     ['Lucro total', totalLucro],
-    ['Quantidade de vendas', vendasData.length],
+    [],
+    ['Quantidade de vendas', dataset.length],
     ['Total de unidades', totalQtd],
   ];
 
@@ -7197,7 +8349,10 @@ async function exportVendasXLSX(){
   // Larguras das colunas
   ws['!cols'] = [
     { wch: 8 },  // Unidade
-    { wch: 12 }, // Total
+    { wch: 12 }, // Bruto
+    { wch: 12 }, // Comissão
+    { wch: 14 }, // Frete vendedor
+    { wch: 14 }, // Total ML Líquido
     { wch: 13 }, // Inv. Luciano
     { wch: 13 }, // Inv. Johnny
     { wch: 12 }, // Lucro
@@ -9656,6 +10811,31 @@ loadState();
 loadEstoqueFromStorage();
 loadAnunciosPlanejados();
 loadInvestimentos();
+
+// Carrega vendas importadas (IndexedDB) em background pra ficarem prontas na visão Planilha
+loadImportedVendas().then(imported => {
+  if(imported && imported.length > 0){
+    // Re-aplica flags de estado bloqueado (cfg.blockedStates pode ter mudado)
+    applyBlockedStateFlags(imported);
+    vendasDataFull = imported;
+    _vendasFullCacheTime = Date.now();
+
+    // ── AUTO-SYNC INCREMENTAL ao abrir o app (silencioso) ──
+    // Espera 3s para não competir com sync de outras abas e só roda se:
+    //   - Tem token configurado
+    //   - Última sync foi há mais de 30 minutos (evita rajadas)
+    setTimeout(() => {
+      if(!cfg.at) return;
+      const meta = getSyncMeta();
+      const lastSync = meta.lastSyncDate ? new Date(meta.lastSyncDate).getTime() : 0;
+      const minutesSince = (Date.now() - lastSync) / 60000;
+      if(minutesSince > 30){
+        console.log(`[auto-sync] Última sync há ${Math.round(minutesSince)} min. Sincronizando...`);
+        syncVendasIncremental(false).catch(e => console.warn('Auto-sync falhou:', e));
+      }
+    }, 3000);
+  }
+}).catch(() => {});
 
 // Restaura aba ativa se veio de reload por troca de conta
 try {
