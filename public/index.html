@@ -925,7 +925,8 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
               style="padding:6px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;width:200px">
             <button class="btn btn-sm" onclick="syncVendas(true)">↻ Atualizar</button>
             <button class="btn btn-sm" onclick="syncVendasIncremental()" title="Sincroniza vendas novas + atualiza status das em trânsito (incremental, leve)" style="background:rgba(62,207,142,.15);color:var(--green);border:1px solid var(--green)">🔄 Sync</button>
-            <button class="btn btn-sm" onclick="document.getElementById('vendas-import-file').click()" title="Importar XLSX de vendas exportado do Mercado Livre" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📥 Importar XLSX ML</button>
+            <button class="btn btn-sm" onclick="openNovoLancamentoModal()" title="Adicionar lançamento manual: aporte, retirada, despesa, etc." style="background:rgba(245,158,11,.15);color:var(--amber);border:1px solid var(--amber)">+ Lançamento</button>
+            <button class="btn btn-sm" onclick="document.getElementById('vendas-import-file').click()" title="Importa XLSX de 2 formatos:&#10;• Planilha de vendas exportada do Mercado Livre (importa todas as vendas)&#10;• Planilha exportada por este app (atualiza apenas investimentos)" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📥 Importar XLSX</button>
             <input type="file" id="vendas-import-file" accept=".xlsx,.xls" style="display:none" onchange="importVendasFromXLSX(event)">
             <button class="btn btn-sm" onclick="exportVendasXLSX()" title="Exportar planilha Excel com todas as vendas e investimentos">📤 Exportar XLSX</button>
           </div>
@@ -6469,6 +6470,25 @@ function setInvestimento(orderId, socio, value){
   investimentosVendas[String(orderId)][socio] = v;
   saveInvestimentos();
 }
+
+// Retiradas por venda (mesmo schema dos investimentos, storage separado)
+let retiradasVendas = {};
+function loadRetiradas(){
+  try { retiradasVendas = JSON.parse(localStorage.getItem('cia_retiradas') || '{}'); }
+  catch { retiradasVendas = {}; }
+}
+function saveRetiradas(){
+  try { localStorage.setItem('cia_retiradas', JSON.stringify(retiradasVendas)); } catch {}
+}
+function getRetirada(orderId, socio){
+  return retiradasVendas[String(orderId)]?.[socio] ?? 0;
+}
+function setRetirada(orderId, socio, value){
+  const v = parseFloat(value) || 0;
+  if(!retiradasVendas[String(orderId)]) retiradasVendas[String(orderId)] = {};
+  retiradasVendas[String(orderId)][socio] = v;
+  saveRetiradas();
+}
 function calcLucroVenda(v){
   // Se é venda de estado bloqueado, não conta no lucro (só fica para acompanhamento)
   if(v._excludeFromFinancials) return 0;
@@ -6506,6 +6526,190 @@ function applyBlockedStateFlags(vendas){
     v._excludeFromFinancials = isBlocked; // Estado bloqueado = não conta no financeiro
   }
   return vendas;
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// LANÇAMENTOS MANUAIS — aportes, retiradas, despesas avulsas
+// ──────────────────────────────────────────────────────────────────────
+
+// Tipos pré-definidos com seus impactos
+// Sinal positivo = entra no caixa, negativo = sai
+const TIPOS_LANCAMENTO = {
+  aporte:    { label: '💸 Aporte',    icon: '💸', color: 'var(--blue)',   sign: +1, hint: 'Sócio põe dinheiro no caixa' },
+  retirada:  { label: '💰 Retirada',  icon: '💰', color: 'var(--amber)',  sign: -1, hint: 'Sócio tira dinheiro do caixa' },
+  despesa:   { label: '📋 Despesa',   icon: '📋', color: 'var(--red)',    sign: -1, hint: 'Custo operacional (ML Ads, embalagem, etc.)' },
+  receita:   { label: '🎁 Receita',   icon: '🎁', color: 'var(--green)',  sign: +1, hint: 'Entrada de dinheiro avulsa' },
+  outro:     { label: '📌 Outro',     icon: '📌', color: 'var(--text2)',  sign: 0,  hint: 'Anotação sem impacto financeiro' },
+};
+
+// Abre modal pra novo lançamento ou edição (passar lancamentoExistente para editar)
+function openNovoLancamentoModal(lancamentoExistente = null){
+  // Remove modal anterior se houver
+  document.querySelectorAll('[data-lancamento-modal]').forEach(m => m.remove());
+
+  const isEdit = !!lancamentoExistente;
+  const l = lancamentoExistente || {
+    id: 'manual_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+    _isManual: true,
+    date_created: new Date().toISOString(),
+    tipo: 'aporte',
+    description: '',
+    valorLuciano: 0,
+    valorJohnny: 0,
+  };
+
+  const modal = document.createElement('div');
+  modal.dataset.lancamentoModal = '1';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+
+  const tiposHTML = Object.entries(TIPOS_LANCAMENTO).map(([key, t]) => `
+    <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg2);border:1px solid ${l.tipo === key ? t.color : 'var(--border)'};border-radius:6px;cursor:pointer;font-size:11px;${l.tipo === key ? 'background:rgba(96,165,250,.08)' : ''}">
+      <input type="radio" name="lanc-tipo" value="${key}" ${l.tipo === key ? 'checked' : ''} style="cursor:pointer">
+      <span>${t.icon} ${t.label.replace(t.icon + ' ', '')}</span>
+    </label>
+  `).join('');
+
+  // Data formatada para input datetime-local
+  const dt = new Date(l.date_created);
+  const dtLocal = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}T${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+
+  modal.innerHTML = `<div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;max-width:500px;width:100%;padding:20px;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div>
+        <div style="font-size:15px;font-weight:700">${isEdit ? '✏️ Editar' : '➕ Novo'} Lançamento</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Aportes, retiradas, despesas e outros</div>
+      </div>
+      <button onclick="this.closest('[data-lancamento-modal]').remove()" style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px">Fechar</button>
+    </div>
+
+    <!-- Tipo -->
+    <div style="margin-bottom:14px">
+      <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:6px">Tipo do lançamento</label>
+      <div id="lanc-tipos" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px">
+        ${tiposHTML}
+      </div>
+      <div id="lanc-hint" style="font-size:10px;color:var(--text3);margin-top:6px;font-style:italic"></div>
+    </div>
+
+    <!-- Data -->
+    <div style="margin-bottom:14px">
+      <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">Data e hora</label>
+      <input type="datetime-local" id="lanc-data" value="${dtLocal}"
+        style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">📅 Padrão: agora. Pode editar se precisar registrar lançamento de outra data.</div>
+    </div>
+
+    <!-- Valores por sócio -->
+    <div style="margin-bottom:14px">
+      <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:6px">Valores</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">👤 Luciano</label>
+          <input type="number" id="lanc-luciano" value="${l.valorLuciano || ''}" step="0.01" min="0" placeholder="0,00"
+            style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace;text-align:right">
+        </div>
+        <div>
+          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">👤 Johnny</label>
+          <input type="number" id="lanc-johnny" value="${l.valorJohnny || ''}" step="0.01" min="0" placeholder="0,00"
+            style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace;text-align:right">
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--text3);margin-top:4px">💡 Pode preencher um, outro ou ambos. O efeito (entrada/saída) é definido pelo tipo escolhido acima.</div>
+    </div>
+
+    <!-- Descrição -->
+    <div style="margin-bottom:18px">
+      <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">Descrição (opcional)</label>
+      <input type="text" id="lanc-desc" value="${escapeHTML(l.description || '')}" maxlength="200" placeholder="Ex: Aporte mensal, Pagamento Mercado Ads, Retirada Pró-labore..."
+        style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+    </div>
+
+    <!-- Ações -->
+    <div style="display:flex;justify-content:space-between;gap:8px">
+      ${isEdit ? `<button onclick="excluirLancamento('${l.id}')" class="btn btn-sm" style="background:rgba(239,68,68,.1);color:var(--red);border:1px solid var(--red)">🗑 Excluir</button>` : '<div></div>'}
+      <div style="display:flex;gap:8px">
+        <button onclick="this.closest('[data-lancamento-modal]').remove()" class="btn btn-sm">Cancelar</button>
+        <button onclick="salvarLancamento('${l.id}', ${isEdit})" class="btn btn-p btn-sm">${isEdit ? '💾 Salvar' : '➕ Adicionar'}</button>
+      </div>
+    </div>
+  </div>`;
+
+  document.body.appendChild(modal);
+
+  // Atualiza hint conforme troca de tipo
+  const updateHint = () => {
+    const checked = modal.querySelector('input[name="lanc-tipo"]:checked');
+    if(!checked) return;
+    const t = TIPOS_LANCAMENTO[checked.value];
+    const hint = document.getElementById('lanc-hint');
+    if(hint && t) hint.textContent = `${t.icon} ${t.hint}`;
+    // Atualiza visual dos cards de tipo
+    modal.querySelectorAll('label[style*="background"]').forEach(lbl => {
+      const radio = lbl.querySelector('input[name="lanc-tipo"]');
+      if(!radio) return;
+      const tipo = TIPOS_LANCAMENTO[radio.value];
+      if(radio.checked){
+        lbl.style.borderColor = tipo.color;
+        lbl.style.background = 'rgba(96,165,250,.08)';
+      } else {
+        lbl.style.borderColor = 'var(--border)';
+        lbl.style.background = 'var(--bg2)';
+      }
+    });
+  };
+  modal.querySelectorAll('input[name="lanc-tipo"]').forEach(r => r.addEventListener('change', updateHint));
+  updateHint();
+}
+
+async function salvarLancamento(id, isEdit){
+  const modal = document.querySelector('[data-lancamento-modal]');
+  if(!modal) return;
+  const tipo = modal.querySelector('input[name="lanc-tipo"]:checked')?.value || 'aporte';
+  const dataStr = document.getElementById('lanc-data').value;
+  const valorLuciano = parseFloat(document.getElementById('lanc-luciano').value) || 0;
+  const valorJohnny  = parseFloat(document.getElementById('lanc-johnny').value)  || 0;
+  const description  = document.getElementById('lanc-desc').value.trim();
+
+  if(valorLuciano === 0 && valorJohnny === 0){
+    alert('Preencha pelo menos um valor (Luciano ou Johnny).');
+    return;
+  }
+
+  const dateISO = dataStr ? new Date(dataStr).toISOString() : new Date().toISOString();
+
+  const lancamento = {
+    id,
+    _isManual: true,
+    tipo,
+    date_created: dateISO,
+    description,
+    valorLuciano,
+    valorJohnny,
+    valorTotal: valorLuciano + valorJohnny,
+    sign: TIPOS_LANCAMENTO[tipo]?.sign || 0,
+  };
+
+  try {
+    await saveLancamentoManual(lancamento);
+    await loadLancamentosManuais();
+    modal.remove();
+    renderVendas();
+  } catch(e){
+    alert(`❌ Erro ao salvar: ${e.message}`);
+  }
+}
+
+async function excluirLancamento(id){
+  if(!confirm('Excluir este lançamento? Não pode ser desfeito.')) return;
+  try {
+    await deleteLancamentoManual(id);
+    await loadLancamentosManuais();
+    document.querySelectorAll('[data-lancamento-modal]').forEach(m => m.remove());
+    renderVendas();
+  } catch(e){
+    alert(`❌ Erro ao excluir: ${e.message}`);
+  }
 }
 
 // Modo de visualização: 'cards' (atual) ou 'planilha' (nova)
@@ -6892,7 +7096,7 @@ async function setVendasView(mode){
             <div style="font-size:14px;font-weight:600;margin-bottom:6px">Visão Planilha — Histórico Completo</div>
             <div style="font-size:11px;color:var(--text3);margin-bottom:18px;line-height:1.6">
               Para usar essa visão, importe a planilha XLSX de vendas que o Mercado Livre disponibiliza.<br>
-              Vá em <strong>Vender → Vendas → Exportar</strong> no painel ML, baixe o arquivo, e clique em "📥 Importar XLSX ML" no topo desta aba.
+              Vá em <strong>Vender → Vendas → Exportar</strong> no painel ML, baixe o arquivo, e clique em "📥 Importar XLSX" no topo desta aba.
             </div>
             <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
               <button onclick="document.getElementById('vendas-import-file').click()" class="btn btn-p" style="font-size:12px;padding:8px 16px">📥 Importar XLSX agora</button>
@@ -6924,20 +7128,63 @@ let _vendasFullCancel = false;
 // IndexedDB para armazenar histórico de vendas importadas
 const VENDAS_DB = 'cia_vendas_db';
 const VENDAS_STORE = 'vendas_imported';
+const MANUAL_STORE = 'lancamentos_manuais';
 let _vendasDB = null;
 
 function openVendasDB(){
   return new Promise((resolve, reject) => {
     if(_vendasDB) return resolve(_vendasDB);
-    const req = indexedDB.open(VENDAS_DB, 1);
+    const req = indexedDB.open(VENDAS_DB, 2);  // versão 2 para criar novo store
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
       if(!db.objectStoreNames.contains(VENDAS_STORE)){
         db.createObjectStore(VENDAS_STORE, { keyPath: 'id' });
       }
+      if(!db.objectStoreNames.contains(MANUAL_STORE)){
+        db.createObjectStore(MANUAL_STORE, { keyPath: 'id' });
+      }
     };
     req.onsuccess = (e) => { _vendasDB = e.target.result; resolve(_vendasDB); };
     req.onerror = (e) => reject(e.target.error);
+  });
+}
+
+// ── CRUD de lançamentos manuais ──────────────────────────────────────
+let lancamentosManuais = [];
+
+async function loadLancamentosManuais(){
+  try {
+    const db = await openVendasDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(MANUAL_STORE, 'readonly');
+      const store = tx.objectStore(MANUAL_STORE);
+      const req = store.getAll();
+      req.onsuccess = () => {
+        lancamentosManuais = req.result || [];
+        resolve(lancamentosManuais);
+      };
+      req.onerror = () => resolve([]);
+    });
+  } catch { return []; }
+}
+
+async function saveLancamentoManual(lanc){
+  const db = await openVendasDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(MANUAL_STORE, 'readwrite');
+    tx.objectStore(MANUAL_STORE).put(lanc);
+    tx.oncomplete = () => resolve();
+    tx.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function deleteLancamentoManual(id){
+  const db = await openVendasDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(MANUAL_STORE, 'readwrite');
+    tx.objectStore(MANUAL_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = (e) => reject(e.target.error);
   });
 }
 
@@ -6984,7 +7231,123 @@ function saveImportInfo(count){
   } catch {}
 }
 
-// ── Parser do XLSX do Mercado Livre ─────────────────────────────────────
+// ── Importa apenas investimentos da planilha exportada pelo app ────────
+async function importInvestimentosFromAppXLSX(aoa, headerRow){
+  const headers = (aoa[headerRow] || []).map(h => String(h || '').toLowerCase().trim());
+  const dataRows = aoa.slice(headerRow + 1);
+
+  const findCol = (candidates) => {
+    for(const c of candidates){
+      const idx = headers.indexOf(c);
+      if(idx !== -1) return idx;
+    }
+    return -1;
+  };
+
+  const cols = {
+    orderId:    findCol(['n.º de venda', 'numero da venda', 'n. de venda']),
+    invLuciano: findCol(['inv. luciano', 'inv luciano']),
+    invJohnny:  findCol(['inv. johnny', 'inv johnny']),
+    title:      findCol(['título do anúncio', 'titulo do anuncio']),
+    total:      findCol(['total ml (líquido)', 'total ml liquido', 'total ml']),
+  };
+
+  if(cols.orderId === -1){
+    alert(`❌ Coluna 'N.º de venda' não encontrada na planilha.\n\nCertifique-se de que está usando a planilha exportada pelo botão "📤 Exportar XLSX".`);
+    return;
+  }
+
+  if(cols.invLuciano === -1 && cols.invJohnny === -1){
+    alert(`❌ Nenhuma coluna de investimento encontrada.\n\nA planilha precisa ter pelo menos "Inv. Luciano" ou "Inv. Johnny".`);
+    return;
+  }
+
+  // Processa cada linha
+  let willUpdate = 0;       // Vendas que terão pelo menos um valor atualizado
+  let willPreserve = 0;     // Vendas onde a planilha está vazia (preservaremos atual)
+  let skipped = 0;          // Linhas inválidas
+
+  const updates = []; // { id, luciano?, johnny? } só campos preenchidos
+
+  for(const row of dataRows){
+    if(!row) continue;
+
+    const orderIdRaw = row[cols.orderId];
+    if(!orderIdRaw){ skipped++; continue; }
+
+    const orderId = String(orderIdRaw).trim();
+    // Ignora linhas de totais/resumo (não são números puros)
+    if(!/^\d+$/.test(orderId)) { skipped++; continue; }
+
+    const update = { id: orderId };
+    let hasAny = false;
+
+    // Inv. Luciano: só atualiza se planilha tiver valor preenchido (>0)
+    if(cols.invLuciano !== -1){
+      const v = row[cols.invLuciano];
+      if(v !== null && v !== undefined && v !== '' && Number(v) > 0){
+        update.luciano = Number(v);
+        hasAny = true;
+      }
+    }
+
+    // Inv. Johnny: idem
+    if(cols.invJohnny !== -1){
+      const v = row[cols.invJohnny];
+      if(v !== null && v !== undefined && v !== '' && Number(v) > 0){
+        update.johnny = Number(v);
+        hasAny = true;
+      }
+    }
+
+    if(hasAny){
+      updates.push(update);
+      willUpdate++;
+    } else {
+      willPreserve++;
+    }
+  }
+
+  if(updates.length === 0){
+    alert(`⚠ Nenhum investimento preenchido encontrado na planilha.\n\nLinhas verificadas: ${dataRows.length - skipped}\n\nPreencha as colunas "Inv. Luciano" e/ou "Inv. Johnny" antes de importar.`);
+    return;
+  }
+
+  // Confirmação
+  const ok = confirm(
+    `📊 Detectada planilha exportada pelo app\n\n` +
+    `Total de linhas: ${dataRows.length}\n` +
+    `Vendas com investimentos preenchidos: ${willUpdate}\n` +
+    `Vendas sem valores (mantidas): ${willPreserve}\n` +
+    (skipped > 0 ? `Linhas ignoradas: ${skipped}\n` : '') +
+    `\n💡 Apenas valores PREENCHIDOS na planilha serão aplicados.\n` +
+    `Vendas com células vazias preservam os valores atuais do app.\n\n` +
+    `Confirma a importação?`
+  );
+  if(!ok) return;
+
+  // Aplica as atualizações
+  let updated = 0;
+  for(const u of updates){
+    if(typeof u.luciano === 'number'){
+      setInvestimento(u.id, 'luciano', u.luciano);
+      updated++;
+    }
+    if(typeof u.johnny === 'number'){
+      setInvestimento(u.id, 'johnny', u.johnny);
+      updated++;
+    }
+  }
+
+  alert(`✅ Importação concluída!\n\n${updates.length} venda${updates.length>1?'s':''} com investimentos atualizados (${updated} valor${updated>1?'es':''}).\n\nMétricas e lucros recalculados.`);
+
+  // Re-renderiza para refletir mudanças
+  if(_vendasView === 'planilha' || _vendasView === 'cards'){
+    renderVendas();
+  }
+}
+
+
 async function importVendasFromXLSX(event){
   const file = event.target.files[0];
   event.target.value = ''; // permite reimportar mesmo arquivo
@@ -7018,27 +7381,53 @@ async function importVendasFromXLSX(event){
     return;
   }
 
-  // ML usa primeira aba "Vendas BR" (ou similar)
+  // Lê primeira aba
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
   const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
 
-  // Procura linha de cabeçalho (busca "N.º de venda" ou variantes)
+  // ── DETECÇÃO AUTOMÁTICA DO TIPO DE PLANILHA ──
+  // 1) Planilha do ML: primeira coluna "N.º de venda" (com ponto)
+  // 2) Planilha do nosso app: primeira coluna "Unidade" + tem "Inv. Luciano"/"Inv. Johnny"
+  // 3) Procura nas primeiras 15 linhas
+
+  let detectedType = null;     // 'ml' | 'app'
   let headerRow = -1;
-  const headerHints = ['n.º de venda', 'numero da venda', 'order id', 'numero do pedido'];
+  const mlHints  = ['n.º de venda', 'numero da venda', 'order id', 'numero do pedido'];
+  const appHints = ['unidade', 'unidades']; // app começa com Unidade
+
   for(let i = 0; i < Math.min(aoa.length, 15); i++){
     const row = aoa[i] || [];
     const firstCol = String(row[0] || '').toLowerCase().trim();
-    if(headerHints.some(h => firstCol.includes(h))){
+    const allCells = row.map(c => String(c || '').toLowerCase().trim());
+
+    if(mlHints.some(h => firstCol.includes(h))){
+      detectedType = 'ml';
       headerRow = i;
       break;
     }
+    // Planilha do app: tem "Unidade" + "Inv. Luciano" + "Inv. Johnny" (ou variações)
+    if(appHints.some(h => firstCol === h)){
+      const hasInvCol = allCells.some(c => c.includes('inv. luciano') || c.includes('inv luciano'));
+      if(hasInvCol){
+        detectedType = 'app';
+        headerRow = i;
+        break;
+      }
+    }
   }
+
   if(headerRow === -1){
-    alert(`❌ Não encontrei a linha de cabeçalho.\n\nVerifique se a planilha foi exportada do Mercado Livre. A primeira coluna deve ser "N.º de venda".`);
+    alert(`❌ Não foi possível detectar o tipo da planilha.\n\nFormatos aceitos:\n\n1️⃣ Planilha de vendas do Mercado Livre (primeira coluna "N.º de venda")\n2️⃣ Planilha exportada por este app (primeira coluna "Unidade" + colunas de investimento)`);
     return;
   }
 
+  // ── ROTA 1: planilha exportada pelo app (somente atualiza investimentos) ──
+  if(detectedType === 'app'){
+    return await importInvestimentosFromAppXLSX(aoa, headerRow);
+  }
+
+  // ── ROTA 2: planilha do ML (importação completa de vendas) — fluxo original ──
   const headers = (aoa[headerRow] || []).map(h => String(h || '').toLowerCase().trim());
   const dataRows = aoa.slice(headerRow + 1);
 
@@ -7258,6 +7647,13 @@ async function importVendasFromXLSX(event){
       v._firstSeenAt = v._firstSeenAt || new Date().toISOString();
       v._lastUpdatedAt = new Date().toISOString();
     }
+
+    // Ordena por data desc (mais nova primeiro)
+    vendas.sort((a, b) => {
+      const dA = a.date_created ? new Date(a.date_created).getTime() : 0;
+      const dB = b.date_created ? new Date(b.date_created).getTime() : 0;
+      return dB - dA;
+    });
 
     await saveImportedVendas(vendas);
     saveImportInfo(parsedOk);
@@ -7524,6 +7920,13 @@ async function syncVendasIncremental(silent = false){
 
     const allVendas = Array.from(existingMap.values());
     applyBlockedStateFlags(allVendas);
+
+    // Ordena por data desc (mais nova primeiro)
+    allVendas.sort((a, b) => {
+      const dA = a.date_created ? new Date(a.date_created).getTime() : 0;
+      const dB = b.date_created ? new Date(b.date_created).getTime() : 0;
+      return dB - dA;
+    });
 
     // Salva no IndexedDB
     setMsg('Salvando no banco...', 95);
@@ -7855,7 +8258,20 @@ function renderVendas(){
   if(!list) return;
 
   // Escolhe dataset: cards usa vendasData (200 mais recentes), planilha usa vendasDataFull (histórico completo)
-  const sourceData = (_vendasView === 'planilha' && vendasDataFull) ? vendasDataFull : vendasData;
+  let rawData = (_vendasView === 'planilha' && vendasDataFull) ? vendasDataFull : vendasData;
+
+  // Na visão Planilha, mescla com lançamentos manuais (aportes, retiradas, despesas)
+  if(_vendasView === 'planilha' && lancamentosManuais.length > 0){
+    rawData = [...rawData, ...lancamentosManuais];
+  }
+
+  // ── Ordena por data desc (mais nova primeiro) ──
+  // Faz cópia pra não mutar o array original
+  const sourceData = [...rawData].sort((a, b) => {
+    const dA = a.date_created ? new Date(a.date_created).getTime() : 0;
+    const dB = b.date_created ? new Date(b.date_created).getTime() : 0;
+    return dB - dA;
+  });
 
   const search = (document.getElementById('vendas-search')?.value || '').toLowerCase().trim();
   let items = sourceData;
@@ -7866,35 +8282,76 @@ function renderVendas(){
     });
   }
 
-  // ── Métricas financeiras: filtra vendas que NÃO são de estado bloqueado ──
-  const validForFinancials = sourceData.filter(v => !v._excludeFromFinancials);
-  const blockedCount = sourceData.length - validForFinancials.length;
+  // ── Métricas financeiras: separa vendas reais de lançamentos manuais ──
+  // Vendas (não bloqueadas, não manuais)
+  const vendasFinanc = sourceData.filter(v => !v._excludeFromFinancials && !v._isManual);
+  // Lançamentos manuais
+  const manuais = sourceData.filter(v => v._isManual);
+  const blockedCount = sourceData.length - vendasFinanc.length - manuais.length;
 
-  const total          = sourceData.length;
-  const totalValid     = validForFinancials.length;
-  const faturamentoBruto = validForFinancials.reduce((s,v) => s + (v.total || 0), 0);
-  const faturamentoLiq   = validForFinancials.reduce((s,v) => s + ((typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0)), 0);
-  const totalMlFee     = validForFinancials.reduce((s,v) => s + (v.mlFee || 0), 0);
-  const totalFreteVend = validForFinancials.reduce((s,v) => s + (v.shippingPaidBySeller || 0), 0);
+  const total          = sourceData.filter(v => !v._isManual).length;  // Conta só vendas reais
+  const totalValid     = vendasFinanc.length;
+  const faturamentoBruto = vendasFinanc.reduce((s,v) => s + (v.total || 0), 0);
+  const faturamentoLiq   = vendasFinanc.reduce((s,v) => s + ((typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0)), 0);
+  const totalMlFee     = vendasFinanc.reduce((s,v) => s + (v.mlFee || 0), 0);
+  const totalFreteVend = vendasFinanc.reduce((s,v) => s + (v.shippingPaidBySeller || 0), 0);
   const ticket         = totalValid > 0 ? faturamentoLiq / totalValid : 0;
 
-  // Investimentos por sócio (sobre dataset financeiro válido)
-  const totalInvLuciano = validForFinancials.reduce((s,v) => s + getInvestimento(v.id, 'luciano'), 0);
-  const totalInvJohnny  = validForFinancials.reduce((s,v) => s + getInvestimento(v.id, 'johnny'), 0);
+  // Investimentos por sócio (vendas reais)
+  const totalInvLuciano = vendasFinanc.reduce((s,v) => s + getInvestimento(v.id, 'luciano'), 0);
+  const totalInvJohnny  = vendasFinanc.reduce((s,v) => s + getInvestimento(v.id, 'johnny'), 0);
   const totalInvestido  = totalInvLuciano + totalInvJohnny;
 
-  // Lucro total = soma do lucro por venda (calcLucroVenda já retorna 0 para bloqueadas)
-  const lucroTotal = sourceData.reduce((s,v) => s + calcLucroVenda(v), 0);
+  // ── Lançamentos manuais agrupados por tipo ──
+  let totalAportes = 0, totalRetiradas = 0, totalDespesas = 0, totalReceitas = 0;
+  let aportesLuciano = 0, aportesJohnny = 0;
+  let retiradasLuciano = 0, retiradasJohnny = 0;
+  for(const m of manuais){
+    const valTotal = (m.valorLuciano || 0) + (m.valorJohnny || 0);
+    if(m.tipo === 'aporte'){
+      totalAportes += valTotal;
+      aportesLuciano += (m.valorLuciano || 0);
+      aportesJohnny  += (m.valorJohnny  || 0);
+    } else if(m.tipo === 'retirada'){
+      totalRetiradas += valTotal;
+      retiradasLuciano += (m.valorLuciano || 0);
+      retiradasJohnny  += (m.valorJohnny  || 0);
+    } else if(m.tipo === 'despesa'){
+      totalDespesas += valTotal;
+    } else if(m.tipo === 'receita'){
+      totalReceitas += valTotal;
+    }
+  }
 
-  // Lucro diário = lucro só de vendas de HOJE (também respeita bloqueio)
+  // Lucro total = vendas (já considera bloqueadas) + receitas - despesas
+  // Aportes e retiradas NÃO afetam lucro (são só fluxo de caixa)
+  const lucroVendas = sourceData.reduce((s,v) => s + (v._isManual ? 0 : calcLucroVenda(v)), 0);
+  const lucroTotal = lucroVendas + totalReceitas - totalDespesas;
+
+  // Lucro diário = lucro só de vendas de HOJE (e lançamentos de hoje também)
   const hoje = new Date();
   const hojeStr = hoje.toISOString().split('T')[0];
   const lucroHoje = sourceData
     .filter(v => v.date_created && v.date_created.startsWith(hojeStr))
-    .reduce((s,v) => s + calcLucroVenda(v), 0);
+    .reduce((s,v) => {
+      if(v._isManual){
+        if(v.tipo === 'receita') return s + ((v.valorLuciano||0) + (v.valorJohnny||0));
+        if(v.tipo === 'despesa') return s - ((v.valorLuciano||0) + (v.valorJohnny||0));
+        return s; // aportes/retiradas não afetam lucro
+      }
+      return s + calcLucroVenda(v);
+    }, 0);
 
-  // Diferença = Mercado Pago (líquido) - investimento total
-  const diferenca = faturamentoLiq - totalInvestido;
+  // Diferença / Saldo Disponível =
+  //   Mercado Pago (líquido)
+  //   + Aportes (entradas externas)
+  //   + Receitas (avulsas)
+  //   - Investimentos (custo das vendas)
+  //   - Retiradas (saídas externas)
+  //   - Despesas (custos operacionais)
+  const saldoDisponivel = faturamentoLiq + totalAportes + totalReceitas
+                        - totalInvestido - totalRetiradas - totalDespesas;
+  const diferenca = saldoDisponivel; // alias para compat
 
   // Métricas para etiquetas/DC-e (só faz sentido nos cards, que tem shipment data)
   const printable = vendasData.filter(v => canPrintLabel(v).ok).length;
@@ -7909,11 +8366,24 @@ function renderVendas(){
   setEl('vendas-faturamento', fmtBRL(faturamentoLiq));
   setEl('vendas-diferenca',   fmtBRL(diferenca));
 
-  // Métricas linha 2 (sócios)
-  setEl('vendas-inv-luciano', fmtBRL(totalInvLuciano));
-  setEl('vendas-inv-johnny',  fmtBRL(totalInvJohnny));
+  // Métricas linha 2 (sócios) — Investimento líquido = invs em vendas + aportes - retiradas
+  const invLiqLuciano = totalInvLuciano + aportesLuciano - retiradasLuciano;
+  const invLiqJohnny  = totalInvJohnny  + aportesJohnny  - retiradasJohnny;
+  setEl('vendas-inv-luciano', fmtBRL(invLiqLuciano));
+  setEl('vendas-inv-johnny',  fmtBRL(invLiqJohnny));
   setEl('vendas-total',       String(total));
   setEl('vendas-ticket',      fmtBRL(ticket));
+
+  // Tooltip explicativo nas métricas (atualizado dinamicamente)
+  const setTitle = (id, title) => { const el = document.getElementById(id)?.parentElement; if(el) el.title = title; };
+  setTitle('vendas-inv-luciano',
+    `Investimento líquido Luciano:\n+ Em vendas: ${fmtBRL(totalInvLuciano)}\n+ Aportes: ${fmtBRL(aportesLuciano)}\n- Retiradas: ${fmtBRL(retiradasLuciano)}\n= ${fmtBRL(invLiqLuciano)}`);
+  setTitle('vendas-inv-johnny',
+    `Investimento líquido Johnny:\n+ Em vendas: ${fmtBRL(totalInvJohnny)}\n+ Aportes: ${fmtBRL(aportesJohnny)}\n- Retiradas: ${fmtBRL(retiradasJohnny)}\n= ${fmtBRL(invLiqJohnny)}`);
+  setTitle('vendas-diferenca',
+    `Saldo Disponível:\n+ Mercado Pago: ${fmtBRL(faturamentoLiq)}\n+ Aportes: ${fmtBRL(totalAportes)}\n+ Receitas: ${fmtBRL(totalReceitas)}\n- Investimentos: ${fmtBRL(totalInvestido)}\n- Retiradas: ${fmtBRL(totalRetiradas)}\n- Despesas: ${fmtBRL(totalDespesas)}\n= ${fmtBRL(saldoDisponivel)}`);
+  setTitle('vendas-lucro-total',
+    `Lucro Total:\n+ Lucro vendas: ${fmtBRL(lucroVendas)}\n+ Receitas avulsas: ${fmtBRL(totalReceitas)}\n- Despesas: ${fmtBRL(totalDespesas)}\n= ${fmtBRL(lucroTotal)}`);
 
   // Texto do subtítulo
   const isFull = (_vendasView === 'planilha' && vendasDataFull);
@@ -8129,6 +8599,35 @@ function renderVendasPlanilha(items){
   };
 
   const rows = items.map((v, idx) => {
+    // ── BRANCH: linha de lançamento manual (aporte/retirada/despesa/etc.) ──
+    if(v._isManual){
+      const t = TIPOS_LANCAMENTO[v.tipo] || TIPOS_LANCAMENTO.outro;
+      const dt = v.date_created ? new Date(v.date_created).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+      const valTotal = (v.valorLuciano || 0) + (v.valorJohnny || 0);
+      const sign = t.sign;  // +1, -1 ou 0
+      const valSigned = valTotal * sign;
+      const valColor = sign > 0 ? 'var(--green)' : (sign < 0 ? 'var(--red)' : 'var(--text3)');
+      const valPrefix = sign > 0 ? '+' : (sign < 0 ? '-' : '');
+
+      return `<tr style="border-bottom:1px solid var(--border);background:rgba(245,158,11,.04);border-left:3px solid ${t.color}">
+        <td style="padding:6px 8px;text-align:center;color:${t.color};font-size:14px" title="${t.label}">${t.icon}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;color:${valColor};font-weight:600">${valPrefix}${fmtBRL(valTotal, false)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-size:11px;color:${(v.valorLuciano||0) > 0 ? valColor : 'var(--text3)'}">${(v.valorLuciano||0) > 0 ? `${valPrefix}${fmtBRL(v.valorLuciano, false)}` : '—'}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-size:11px;color:${(v.valorJohnny||0) > 0 ? valColor : 'var(--text3)'}">${(v.valorJohnny||0) > 0 ? `${valPrefix}${fmtBRL(v.valorJohnny, false)}` : '—'}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;color:${valColor}">${valPrefix}${fmtBRL(valTotal, false)}</td>
+        <td style="padding:6px 8px;font-family:'DM Mono',monospace;font-size:10px;color:var(--text3)" title="Lançamento manual">manual</td>
+        <td style="padding:6px 8px;font-size:11px;color:${t.color};font-weight:600">${t.label}${v.description ? ` — <span style="color:var(--text2);font-weight:400;font-style:italic">${escapeHTML(v.description)}</span>` : ''}</td>
+        <td style="padding:6px 8px;font-size:11px;color:var(--text3)">—</td>
+        <td style="padding:6px 8px;font-size:11px;color:var(--text3)">—</td>
+        <td style="padding:6px 8px;font-size:10px;white-space:nowrap;color:var(--text3)">${dt}</td>
+        <td style="padding:6px 8px;font-size:10px;font-weight:600;color:${t.color};white-space:nowrap">${t.label.replace(t.icon + ' ', '')}</td>
+        <td style="padding:6px 8px;text-align:center">
+          <button class="btn btn-sm" onclick="openNovoLancamentoModal(lancamentosManuais.find(l => l.id === '${v.id}'))" style="font-size:10px;padding:3px 6px" title="Editar">✏️</button>
+        </td>
+      </tr>`;
+    }
+
+    // ── Linha normal de venda ──
     const dt = v.date_created ? new Date(v.date_created).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
     const buyerName = (v.buyer.firstName + ' ' + v.buyer.lastName).trim() || v.buyer.nickname || '—';
     const titulo = v.firstItem.title || 'Produto';
@@ -8236,7 +8735,7 @@ function renderVendasPlanilha(items){
     </table>
   </div>
   <div style="margin-top:8px;padding:8px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;font-size:10px;color:var(--text3);line-height:1.5">
-    ${importInfoHTML}💡 <strong>Fórmula:</strong> <code>Total ML</code> já é o valor LÍQUIDO recebido (Bruto − Comissão − Frete vendedor). <code>Lucro = Total ML − Inv. Luciano − Inv. Johnny</code>. Os investimentos ficam salvos por nº de venda — reimporte a planilha quantas vezes quiser, eles não se perdem.
+    ${importInfoHTML}💡 <strong>Fórmula:</strong> <code>Total ML</code> já é o valor LÍQUIDO recebido (Bruto − Comissão − Frete vendedor). <code>Lucro = Total ML − Inv. Luciano − Inv. Johnny</code>. <br>📋 Você pode preencher os investimentos manualmente nesta tela ou <strong>exportar a planilha, preencher no Excel e reimportar</strong> — só os campos com valor preenchido são aplicados.
   </div>`;
 }
 
@@ -10811,6 +11310,8 @@ loadState();
 loadEstoqueFromStorage();
 loadAnunciosPlanejados();
 loadInvestimentos();
+loadRetiradas();
+loadLancamentosManuais().catch(() => {});
 
 // Carrega vendas importadas (IndexedDB) em background pra ficarem prontas na visão Planilha
 loadImportedVendas().then(imported => {
