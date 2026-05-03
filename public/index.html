@@ -8292,6 +8292,23 @@ function fmtBRL(n, withSymbol = true){
   return withSymbol ? `R$ ${formatted}` : formatted;
 }
 
+// Retorna a data como string YYYY-MM-DD considerando o fuso horário do Brasil (-03:00).
+// Funciona independentemente do fuso horário da máquina onde o app está rodando.
+// Ex: 2026-04-30T23:30:00.000Z (UTC) → "2026-04-30" no fuso BR (20:30)
+//     2026-04-30T02:30:00.000Z (UTC) → "2026-04-29" no fuso BR (23:30 do dia 29)
+function getDateStringBR(date){
+  if(!date || isNaN(date.getTime())) return '';
+  // Pega o timestamp UTC e subtrai 3h pra simular o fuso BR (-03:00)
+  // Note: Brasil não tem mais horário de verão desde 2019, sempre é -03:00
+  const utcMs = date.getTime();
+  const brMs = utcMs - (3 * 60 * 60 * 1000);
+  const br = new Date(brMs);
+  const y = br.getUTCFullYear();
+  const m = String(br.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(br.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function renderVendas(){
   const list  = document.getElementById('vendas-list');
   const empty = document.getElementById('vendas-empty');
@@ -8368,11 +8385,12 @@ function renderVendas(){
   const lucroVendas = sourceData.reduce((s,v) => s + (v._isManual ? 0 : calcLucroVenda(v)), 0);
   const lucroTotal = lucroVendas + totalReceitas - totalDespesas;
 
-  // Lucro diário = lucro só de vendas de HOJE (e lançamentos de hoje também)
-  const hoje = new Date();
-  const hojeStr = hoje.toISOString().split('T')[0];
+  // Lucro diário = lucro só de vendas/lançamentos de HOJE (fuso Brasil -03:00)
+  // Em vez de comparar string ISO (que é UTC), pegamos a data BR atual e
+  // verificamos se a data da venda (ajustada pro fuso BR) é igual.
+  const hojeBR = getDateStringBR(new Date());
   const lucroHoje = sourceData
-    .filter(v => v.date_created && v.date_created.startsWith(hojeStr))
+    .filter(v => v.date_created && getDateStringBR(new Date(v.date_created)) === hojeBR)
     .reduce((s,v) => {
       if(v._isManual){
         if(v.tipo === 'receita') return s + ((v.valorLuciano||0) + (v.valorJohnny||0));
