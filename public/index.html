@@ -926,6 +926,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <button class="btn btn-sm" onclick="syncVendas(true)">↻ Atualizar</button>
             <button class="btn btn-sm" onclick="syncVendasIncremental()" title="Sincroniza vendas novas + atualiza status das em trânsito (incremental, leve)" style="background:rgba(62,207,142,.15);color:var(--green);border:1px solid var(--green)">🔄 Sync</button>
             <button class="btn btn-sm" onclick="openNovoLancamentoModal()" title="Adicionar lançamento manual: aporte, retirada, despesa, etc." style="background:rgba(245,158,11,.15);color:var(--amber);border:1px solid var(--amber)">+ Lançamento</button>
+            <button class="btn btn-sm" onclick="diagnosticarVenda()" title="Investigar dados de uma venda específica (debug)" style="font-size:11px">🔍 Debug</button>
             <button class="btn btn-sm" onclick="document.getElementById('vendas-import-file').click()" title="Importa XLSX de 2 formatos:&#10;• Planilha de vendas exportada do Mercado Livre (importa todas as vendas)&#10;• Planilha exportada por este app (atualiza apenas investimentos)" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📥 Importar XLSX</button>
             <input type="file" id="vendas-import-file" accept=".xlsx,.xls" style="display:none" onchange="importVendasFromXLSX(event)">
             <button class="btn btn-sm" onclick="exportVendasXLSX()" title="Exportar planilha Excel com todas as vendas e investimentos">📤 Exportar XLSX</button>
@@ -6591,6 +6592,114 @@ const TIPOS_LANCAMENTO = {
 };
 
 // Abre modal pra novo lançamento ou edição (passar lancamentoExistente para editar)
+// ──────────────────────────────────────────────────────────────────────
+// DIAGNÓSTICO DE VENDAS — investiga dados crus da API
+// ──────────────────────────────────────────────────────────────────────
+async function diagnosticarVenda(orderId){
+  if(!orderId){
+    orderId = prompt('Digite o N.º da venda para diagnosticar:');
+    if(!orderId) return;
+  }
+  orderId = String(orderId).trim();
+
+  if(!cfg.at){
+    alert('Conecte sua conta ML em Config primeiro.');
+    return;
+  }
+
+  // Tenta encontrar no dataset local primeiro
+  const dataset = vendasDataFull || vendasData;
+  const localVenda = dataset.find(v => String(v.id) === orderId);
+
+  // Busca via API pra ver dados crus
+  let apiData = null;
+  let apiError = null;
+  try {
+    const r = await proxyFetch(`/orders/${orderId}`);
+    if(r.ok){
+      apiData = await r.json();
+    } else {
+      apiError = `HTTP ${r.status}`;
+    }
+  } catch(e){
+    apiError = e.message;
+  }
+
+  // Monta relatório
+  const lines = [];
+  lines.push(`📋 Diagnóstico da venda ${orderId}`);
+  lines.push('═'.repeat(60));
+  lines.push('');
+
+  // Dados locais (do storage do app)
+  if(localVenda){
+    lines.push('📦 Dados LOCAIS (no app):');
+    lines.push(`  date_created: ${localVenda.date_created || '(VAZIO)'}`);
+    lines.push(`  status: ${localVenda.status} / substatus: ${localVenda.shipment?.substatus || localVenda.substatus || '(nenhum)'}`);
+    lines.push(`  total: R$ ${(localVenda.total||0).toFixed(2)}`);
+    lines.push(`  totalLiquido: R$ ${(localVenda.totalLiquido||0).toFixed(2)}`);
+    lines.push(`  mlFee: R$ ${(localVenda.mlFee||0).toFixed(2)} (${localVenda.mlFeeSource || 'desconhecido'})`);
+    lines.push(`  shippingPaidBySeller: R$ ${(localVenda.shippingPaidBySeller||0).toFixed(2)}`);
+    lines.push(`  comprador: ${localVenda.buyer?.firstName || ''} ${localVenda.buyer?.lastName || ''} (${localVenda.buyer?.nickname || ''})`);
+    lines.push(`  estado: ${localVenda.receiver?.state || '(?)'}`);
+    lines.push(`  isBlocked: ${localVenda._isBlockedState ? 'SIM' : 'não'}`);
+    lines.push(`  origem: ${localVenda._source || '(?)'}`);
+    lines.push('');
+  } else {
+    lines.push('⚠ Não encontrada no dataset local do app');
+    lines.push('');
+  }
+
+  // Dados crus da API
+  if(apiError){
+    lines.push(`❌ Erro ao buscar via API: ${apiError}`);
+  } else if(apiData){
+    lines.push('🌐 Dados CRUS da API ML:');
+    lines.push(`  date_created: ${apiData.date_created || '(VAZIO)'}`);
+    lines.push(`  date_closed: ${apiData.date_closed || '(VAZIO)'}`);
+    lines.push(`  date_last_modified: ${apiData.date_last_modified || '(VAZIO)'}`);
+    lines.push(`  last_updated: ${apiData.last_updated || '(VAZIO)'}`);
+    lines.push(`  status: ${apiData.status}`);
+    lines.push(`  total_amount: R$ ${apiData.total_amount}`);
+    lines.push(`  payment[0].date_created: ${apiData.payments?.[0]?.date_created || '(VAZIO)'}`);
+    lines.push(`  payment[0].date_approved: ${apiData.payments?.[0]?.date_approved || '(VAZIO)'}`);
+    lines.push(`  payment[0].marketplace_fee: ${apiData.payments?.[0]?.marketplace_fee ?? '(NULL)'}`);
+    lines.push(`  payment[0].fee_details: ${JSON.stringify(apiData.payments?.[0]?.fee_details || [], null, 2)}`);
+    lines.push(`  shipping.id: ${apiData.shipping?.id || '(VAZIO)'}`);
+    lines.push(`  shipping.cost: ${apiData.shipping?.cost ?? '(NULL)'}`);
+    lines.push('');
+    lines.push(`  → Data resolvida pelo helper: ${getOrderDate(apiData) || '(VAZIO)'}`);
+  }
+
+  // Mostra modal com o relatório
+  document.querySelectorAll('[data-diag-modal]').forEach(m => m.remove());
+  const modal = document.createElement('div');
+  modal.dataset.diagModal = '1';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+  modal.innerHTML = `<div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;max-width:700px;width:100%;padding:20px;max-height:85vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div style="font-size:14px;font-weight:700">🔍 Diagnóstico: ${escapeHTML(orderId)}</div>
+      <button onclick="this.closest('[data-diag-modal]').remove()" class="btn btn-sm">Fechar</button>
+    </div>
+    <pre style="font-family:'DM Mono',monospace;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:12px;white-space:pre-wrap;word-break:break-word;line-height:1.5;color:var(--text2);max-height:60vh;overflow-y:auto">${escapeHTML(lines.join('\n'))}</pre>
+    <div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="navigator.clipboard.writeText(\`${lines.join('\\n').replace(/`/g,'').replace(/\$/g,'\\$')}\`).then(()=>this.textContent='✓ Copiado')" class="btn btn-sm">📋 Copiar relatório</button>
+      ${apiData ? `<button onclick="diagnosticarVendaRaw('${orderId}')" class="btn btn-sm">📦 Ver JSON cru</button>` : ''}
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+}
+
+function diagnosticarVendaRaw(orderId){
+  proxyFetch(`/orders/${orderId}`).then(r => r.json()).then(data => {
+    const w = window.open('', '_blank');
+    if(w){
+      w.document.write(`<pre style="font-family:monospace;padding:20px;background:#0a0a0a;color:#e0e0e0">${JSON.stringify(data, null, 2)}</pre>`);
+    }
+  });
+}
+
 function openNovoLancamentoModal(lancamentoExistente = null){
   // Remove modal anterior se houver
   document.querySelectorAll('[data-lancamento-modal]').forEach(m => m.remove());
@@ -6824,12 +6933,13 @@ async function syncVendas(force = false){
     const totalOrders = firstD.paging?.total || 0;
     let allOrders = firstD.results || [];
 
-    // Páginas adicionais em paralelo (até 200 vendas no total)
-    const MAX_VENDAS = 200;
+    // Páginas adicionais em paralelo (até 300 vendas no total)
+    const MAX_VENDAS = 300;
     const target = Math.min(totalOrders, MAX_VENDAS);
     if(target > 50){
       const pagePromises = [];
-      const pagesToFetch = Math.min(3, Math.ceil(target / 50) - 1);
+      // Limite de 5 páginas adicionais → 6 páginas no total (300 vendas)
+      const pagesToFetch = Math.min(5, Math.ceil(target / 50) - 1);
       for(let p=1; p<=pagesToFetch; p++){
         pagePromises.push(
           proxyFetch(`${baseQuery}&limit=50&offset=${p*50}`)
@@ -6936,7 +7046,7 @@ async function syncVendas(force = false){
 
       return {
         id: order.id,
-        date_created: order.date_created,
+        date_created: getOrderDate(order),
         date_closed:  order.date_closed,
         date_estimated: shipment?.shipping_option?.estimated_delivery_final?.date
                      || shipment?.shipping_option?.estimated_delivery_time?.date
@@ -8044,7 +8154,7 @@ function orderToVenda(order){
 
   return {
     id: String(order.id),
-    date_created: order.date_created,
+    date_created: getOrderDate(order),
     status: order.status,
     substatus: order.shipping?.substatus || null,
     items,
@@ -8219,7 +8329,7 @@ async function loadAllVendasForPlanilha(){
 
       return {
         id: order.id,
-        date_created: order.date_created,
+        date_created: getOrderDate(order),
         status: order.status,
         substatus: null, // sem shipment fetch
         items,
@@ -8290,6 +8400,31 @@ function fmtBRL(n, withSymbol = true){
   const v = Number(n || 0);
   const formatted = v.toFixed(2).replace('.',',').replace(/\B(?=(\d{3})+(?!\d),)/g,'.');
   return withSymbol ? `R$ ${formatted}` : formatted;
+}
+
+// Extrai a melhor data disponível de um order da API ML.
+// Tenta várias fontes em ordem de preferência.
+function getOrderDate(order){
+  if(!order) return null;
+  // Ordem de preferência
+  const candidates = [
+    order.date_created,
+    order.date_closed,
+    order.date_last_modified,
+    order.date_last_updated,
+    order.last_updated,
+    order.payments?.[0]?.date_created,
+    order.payments?.[0]?.date_approved,
+    order.shipping?.date_created,
+  ];
+  for(const c of candidates){
+    if(c && typeof c === 'string' && c.length > 0){
+      // Valida se é uma data válida
+      const d = new Date(c);
+      if(!isNaN(d.getTime())) return c;
+    }
+  }
+  return null;
 }
 
 // Retorna a data como string YYYY-MM-DD considerando o fuso horário do Brasil (-03:00).
@@ -8754,7 +8889,7 @@ function renderVendasPlanilha(items){
       <td style="padding:6px 8px;font-size:11px">${escapeHTML(titulo.slice(0,50))}${titulo.length>50?'...':''}</td>
       <td style="padding:6px 8px;font-size:11px">${escapeHTML(buyerName)}</td>
       <td style="padding:6px 8px;font-size:11px;color:var(--text3)">${cidade}</td>
-      <td style="padding:6px 8px;font-size:10px;white-space:nowrap;color:var(--text3)">${dt}</td>
+      <td style="padding:6px 8px;font-size:10px;white-space:nowrap;${v.date_created ? 'color:var(--text3)' : 'color:var(--amber);font-weight:600;cursor:pointer'}" ${v.date_created ? '' : `onclick="diagnosticarVenda('${v.id}')" title="Data ausente — clique para diagnosticar"`}>${v.date_created ? dt : '⚠ sem data'}</td>
       <td style="padding:6px 8px;font-size:10px;font-weight:600;color:${statusColor};white-space:nowrap">${statusLabel}</td>
       <td style="padding:6px 8px;text-align:center">
         <button class="btn btn-sm" onclick="showRecibo('${v.id}')" style="font-size:10px;padding:3px 6px">🧾</button>
@@ -9319,7 +9454,7 @@ window.debugPosVenda = async function(orderId){
     result.info.order = {
       id:           order.id,
       status:       order.status,
-      date_created: order.date_created,
+      date_created: getOrderDate(order),
       pack_id:      order.pack_id || null,
       buyer:        order.buyer?.nickname || (order.buyer?.first_name + ' ' + order.buyer?.last_name).trim(),
       buyerId:      order.buyer?.id,
