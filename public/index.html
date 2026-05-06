@@ -6933,12 +6933,13 @@ async function syncVendas(force = false){
     const totalOrders = firstD.paging?.total || 0;
     let allOrders = firstD.results || [];
 
-    // Páginas adicionais em paralelo (até 200 vendas no total)
-    const MAX_VENDAS = 200;
+    // Páginas adicionais em paralelo (até 300 vendas no total)
+    const MAX_VENDAS = 300;
     const target = Math.min(totalOrders, MAX_VENDAS);
     if(target > 50){
       const pagePromises = [];
-      const pagesToFetch = Math.min(3, Math.ceil(target / 50) - 1);
+      // Limite de 5 páginas adicionais → 6 páginas no total (300 vendas)
+      const pagesToFetch = Math.min(5, Math.ceil(target / 50) - 1);
       for(let p=1; p<=pagesToFetch; p++){
         pagePromises.push(
           proxyFetch(`${baseQuery}&limit=50&offset=${p*50}`)
