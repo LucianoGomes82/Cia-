@@ -534,6 +534,39 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
       </div>
     </div>
 
+    <!-- ── NOVA: Análise de Mais Vendidos via Print/OCR ─────────────────────── -->
+    <div class="card" style="background:linear-gradient(135deg,rgba(167,139,250,.04),rgba(96,165,250,.04));border:1px solid rgba(167,139,250,.2)">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+        <div>
+          <div class="sec" style="margin:0">🔥 Mais Vendidos × Lista CIA</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:3px">Suba um print da página "Mais vendidos" do ML — o app extrai os produtos e cruza com sua lista de custos</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="file" id="topsell-file" accept="image/png,image/jpeg,image/jpg,image/webp" style="display:none" onchange="processTopSellersImage(event)">
+          <button class="btn btn-sm" onclick="document.getElementById('topsell-file').click()" style="background:rgba(167,139,250,.15);color:var(--purple);border:1px solid var(--purple)">📷 Subir print</button>
+          <button class="btn btn-sm" onclick="document.getElementById('topsell-text-area').focus()" title="Cole texto manualmente (alternativa ao OCR)">📝 Colar texto</button>
+        </div>
+      </div>
+
+      <!-- Área de texto editável (visível para ajustes pós-OCR ou input manual) -->
+      <details id="topsell-textbox-wrapper" style="margin-top:6px">
+        <summary style="cursor:pointer;font-size:11px;color:var(--text3);user-select:none">📝 Lista de produtos detectados/manuais (clique para editar)</summary>
+        <textarea id="topsell-text-area" rows="8"
+          placeholder="Os produtos aparecerão aqui após o OCR.&#10;Você também pode colar manualmente: um produto por linha.&#10;&#10;Exemplo:&#10;Tablet Samsung Galaxy Tab A11+, 128gb, 6gb Ram&#10;Tablet Xiaomi Redmi Pad 2 11, 8 Gb, 256 Gb&#10;Samsung Galaxy Tab A11+ 5g 6gb, 128gb"
+          style="width:100%;margin-top:6px;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:'DM Mono',monospace;font-size:12px;resize:vertical"></textarea>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">
+          <button class="btn btn-sm" onclick="document.getElementById('topsell-text-area').value='';renderTopSellersResults([])" style="font-size:11px">🗑 Limpar</button>
+          <button class="btn btn-p btn-sm" onclick="analyzeTopSellersFromText()" style="font-size:11px">🔍 Cruzar com Lista CIA</button>
+        </div>
+      </details>
+
+      <!-- Status do OCR -->
+      <div id="topsell-status" style="display:none;margin-top:10px;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;font-size:11px"></div>
+
+      <!-- Resultados -->
+      <div id="topsell-results" style="margin-top:10px"></div>
+    </div>
+
     <!-- Resultados — só aparece após busca -->
     <div id="oport-content" style="display:none">
       <div class="metrics" style="grid-template-columns:repeat(4,1fr)">
@@ -4289,6 +4322,270 @@ function runOportQuick(q, type){
   searchOport();
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// MAIS VENDIDOS via OCR — extrai produtos de print do ML e cruza com lista CIA
+// ──────────────────────────────────────────────────────────────────────
+
+let _tesseractLoaded = false;
+
+async function loadTesseract(){
+  if(_tesseractLoaded) return;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js';
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Falha ao carregar OCR. Verifique sua conexão.'));
+    document.head.appendChild(s);
+  });
+  _tesseractLoaded = true;
+}
+
+function setTopSellersStatus(html, color = 'var(--text2)'){
+  const el = document.getElementById('topsell-status');
+  if(!el) return;
+  if(!html){ el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.style.color = color;
+  el.innerHTML = html;
+}
+
+async function processTopSellersImage(event){
+  const file = event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+
+  // Confirma carregamento de biblioteca pesada (~2MB no cdn moderno)
+  if(!_tesseractLoaded){
+    if(!confirm('Vou carregar a biblioteca de OCR (~2MB). Após o primeiro uso fica em cache. Continuar?')) return;
+  }
+
+  setTopSellersStatus('<span class="spinner" style="display:inline-block;vertical-align:middle"></span> <span>Carregando OCR...</span>', 'var(--blue)');
+
+  try {
+    await loadTesseract();
+  } catch(e){
+    setTopSellersStatus(`❌ ${e.message}`, 'var(--red)');
+    return;
+  }
+
+  setTopSellersStatus('<span class="spinner" style="display:inline-block;vertical-align:middle"></span> <span>Processando imagem... pode demorar 10-30 segundos</span>', 'var(--blue)');
+
+  try {
+    const result = await Tesseract.recognize(file, 'por', {
+      logger: (m) => {
+        if(m.status === 'recognizing text'){
+          const pct = Math.round((m.progress||0) * 100);
+          setTopSellersStatus(`<span class="spinner" style="display:inline-block;vertical-align:middle"></span> <span>Lendo imagem... ${pct}%</span>`, 'var(--blue)');
+        }
+      },
+    });
+
+    const rawText = (result?.data?.text || '').trim();
+    if(!rawText){
+      setTopSellersStatus('⚠ Não consegui ler texto da imagem. Tenta uma imagem mais nítida ou cole o texto manualmente.', 'var(--amber)');
+      return;
+    }
+
+    // Extrai os títulos prováveis de produtos da página de mais vendidos
+    const products = extractProductTitles(rawText);
+
+    // Mostra a lista no textarea pra o user editar
+    const textarea = document.getElementById('topsell-text-area');
+    if(textarea) textarea.value = products.join('\n');
+
+    // Abre o details automaticamente
+    document.getElementById('topsell-textbox-wrapper').open = true;
+
+    setTopSellersStatus(`✓ OCR concluído. ${products.length} produto${products.length !== 1 ? 's' : ''} detectado${products.length !== 1 ? 's' : ''}. <strong>Revise a lista abaixo</strong> e clique em "🔍 Cruzar com Lista CIA".`, 'var(--green)');
+
+    // Já dispara a análise automaticamente
+    if(products.length > 0) analyzeTopSellersFromText();
+  } catch(e){
+    setTopSellersStatus(`❌ Erro no OCR: ${e.message}`, 'var(--red)');
+  }
+}
+
+// Heurística para extrair só os títulos de produto do texto bruto OCR
+// Filtra: navegação, marcas isoladas, preços, info de frete, etc.
+function extractProductTitles(rawText){
+  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // Junta linhas curtas seguidas (OCR às vezes quebra um título em 2-3 linhas)
+  const merged = [];
+  let buffer = '';
+  for(const line of lines){
+    // Linhas que são RUÍDO conhecido — descarta
+    if(/^(Mais vendidos|Marcas|Filtros|Categorias|Computers|Inform[áa]tica|Tablets e|Acess[óo]rios|Pix|Frete gr[áa]tis|Aplicar|Limpar|FULL|MAIS VENDIDO|veja mais|publicidade)$/i.test(line)) continue;
+    if(/^\d+[ºª°]?\s*MAIS\s+VENDIDO/i.test(line)) continue;
+    if(/^R\$\s*[\d.,]+/i.test(line)) continue;          // preço solo
+    if(/^\d+x\s+R\$/i.test(line)) continue;             // parcelas
+    if(/^[+]?\d+\s*mil\s+vendidos$/i.test(line)) continue;
+    if(/^\d+%\s*OFF/i.test(line)) continue;
+    if(/^[★⭐]+/.test(line)) continue;
+    if(/^\d+[.,]\d/.test(line) && line.length < 6) continue;
+    // Marcas isoladas (lista lateral)
+    if(/^(Apple|Amiyo|Deasytech|Easytech|Hencdon|Lenovo|Mlli|Mlili|Mili|Multi|Positivo|Samsung|VTR ELETRONICS|Xiaomi|Motorola|Redmi|Honor|Realme|Tecno)$/i.test(line)) continue;
+
+    // Concatena linhas curtas que parecem continuação
+    if(line.length < 30 && buffer && /^[a-z0-9,]/i.test(line)){
+      buffer += ' ' + line;
+      continue;
+    }
+
+    if(buffer) merged.push(buffer);
+    buffer = line;
+  }
+  if(buffer) merged.push(buffer);
+
+  // Filtra apenas linhas que parecem título de produto
+  const TITLE_HINTS = /tablet|celular|smartphone|smartwatch|fone|caixa|tv|notebook|monitor|impressora|game|console|playstation|xbox|nintendo|relógio|earphone|airpod/i;
+  const BRAND_HINTS = /samsung|xiaomi|apple|iphone|ipad|motorola|redmi|poco|huawei|lg|sony|dell|asus|acer|lenovo|hp|jbl|nokia|positivo|amazfit|garmin/i;
+
+  const products = merged.filter(line => {
+    if(line.length < 15) return false;             // muito curto = não é título
+    if(line.length > 200) return false;            // muito longo = parágrafo
+    if(/^[A-Z\s]+$/.test(line)) return false;       // tudo maiúsculas = header
+    // Tem um indício de produto OU marca + número (ex: "Pad 2", "A11")
+    if(TITLE_HINTS.test(line)) return true;
+    if(BRAND_HINTS.test(line) && /\d/.test(line)) return true;
+    return false;
+  });
+
+  // Remove duplicatas mantendo ordem
+  const seen = new Set();
+  const unique = [];
+  for(const p of products){
+    const k = normKey(p);
+    if(!seen.has(k)){ seen.add(k); unique.push(p); }
+  }
+
+  return unique.slice(0, 50); // hard cap
+}
+
+// Cruza os produtos detectados com a lista CIA + calcula margem
+async function analyzeTopSellersFromText(){
+  const textarea = document.getElementById('topsell-text-area');
+  if(!textarea){ alert('Campo de texto não encontrado.'); return; }
+
+  const lines = textarea.value.split('\n').map(l => l.trim()).filter(l => l.length >= 10);
+  if(lines.length === 0){
+    setTopSellersStatus('⚠ Cole/digite ao menos um produto na lista acima.', 'var(--amber)');
+    return;
+  }
+
+  if(!state.products?.length){
+    setTopSellersStatus('⚠ Importe as listas CIA antes (aba Importar).', 'var(--amber)');
+    return;
+  }
+
+  setTopSellersStatus(`<span class="spinner" style="display:inline-block;vertical-align:middle"></span> <span>Cruzando ${lines.length} produto${lines.length>1?'s':''} com lista CIA...</span>`, 'var(--blue)');
+
+  // Parâmetros de margem (mesma lógica das outras telas)
+  const comissao = parseFloat(cfg.commissionClassico) || 0.11;
+  const taxaFixa = parseFloat(cfg.fixedFee) || 0;
+  const frete    = parseFloat(cfg.shippingCost) || 25;
+  const minMarg  = parseFloat(cfg.minMargin) || 10;
+
+  // Para cada produto detectado, tenta match com lista CIA
+  const results = [];
+  for(const titulo of lines){
+    const match = matchMLtoCIA(titulo);
+    if(!match || !match.product || !match.product.minPrice) continue;
+
+    const prod = match.product;
+    const custoCIA = prod.minPrice;
+    const custoML  = custoCIA * comissao + taxaFixa + frete;
+    const custoTot = custoCIA + custoML;
+    const precoSug = Math.ceil(custoTot * (1 + minMarg/100) / 5) * 5;
+    const lucroRS  = precoSug - custoTot;
+    const lucroPct = (lucroRS / custoTot) * 100;
+
+    results.push({
+      tituloDetectado: titulo,
+      product: prod,
+      custoCIA,
+      custoML: Math.round(custoML),
+      custoTot: Math.round(custoTot),
+      precoSug,
+      lucroRS: Math.round(lucroRS),
+      lucroPct: Math.round(lucroPct * 10) / 10,
+      aprovado: lucroPct >= minMarg,
+      score: match.score,
+      storeCount: prod.storeCount,
+    });
+  }
+
+  // Filtra: só os que tem custo (já garantido pelo filtro de match)
+  // Ordena por margem descendente (oportunidade)
+  results.sort((a, b) => (b.lucroPct || 0) - (a.lucroPct || 0));
+
+  if(results.length === 0){
+    setTopSellersStatus(`⚠ Nenhum dos ${lines.length} produtos detectados foi encontrado na sua lista CIA. Tente com outros prints ou verifique se sua lista está atualizada.`, 'var(--amber)');
+    document.getElementById('topsell-results').innerHTML = '';
+    return;
+  }
+
+  setTopSellersStatus(`✓ ${results.length} match${results.length>1?'s':''} encontrado${results.length>1?'s':''} de ${lines.length} produtos detectados. ${results.filter(r=>r.aprovado).length} com margem aprovada (≥${minMarg}%).`, 'var(--green)');
+
+  renderTopSellersResults(results);
+}
+
+function renderTopSellersResults(results){
+  const container = document.getElementById('topsell-results');
+  if(!container) return;
+
+  if(!results || results.length === 0){
+    container.innerHTML = '';
+    return;
+  }
+
+  const cards = results.map((r, idx) => {
+    const lucroColor = r.lucroPct >= 20 ? 'var(--green)' : r.lucroPct >= 10 ? 'var(--blue)' : 'var(--amber)';
+    const aprovBadge = r.aprovado
+      ? `<span style="background:rgba(62,207,142,.15);color:var(--green);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">✓ APROVADO</span>`
+      : `<span style="background:rgba(245,158,11,.15);color:var(--amber);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">⚠ ABAIXO</span>`;
+    const lojas = r.product.offers?.filter(o=>o.price).map(o=>`${o.store.split(' ')[0]}: R$${o.price}`).slice(0,3).join(' · ') || '';
+
+    return `<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-top:8px;background:var(--bg2)">
+      <div style="font-size:18px;font-weight:700;color:var(--text3);min-width:28px;text-align:center">${idx + 1}º</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;line-height:1.3">${escapeHTML(r.product.name)}</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:3px;font-style:italic">📷 detectado: ${escapeHTML(r.tituloDetectado.slice(0,80))}${r.tituloDetectado.length>80?'...':''}</div>
+        <div style="font-size:11px;color:var(--text2);margin-top:4px;font-family:'DM Mono',monospace">
+          💰 Custo: <strong>R$${r.custoCIA}</strong> · ML: R$${r.custoML} · Total: R$${r.custoTot}
+          ${r.storeCount > 1 ? ` · 🏪 ${r.storeCount} lojas` : ''}
+        </div>
+        ${lojas ? `<div style="font-size:10px;color:var(--text3);margin-top:2px">${escapeHTML(lojas)}</div>` : ''}
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-size:10px;color:var(--text3)">Sugestão</div>
+        <div style="font-size:15px;font-weight:700">R$ ${r.precoSug}</div>
+        <div style="font-size:11px;color:${lucroColor};font-weight:700;font-family:'DM Mono',monospace">+R$${r.lucroRS} · ${r.lucroPct}%</div>
+        <div style="margin-top:4px">${aprovBadge}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Sumário
+  const aprovados = results.filter(r => r.aprovado).length;
+  const summary = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:6px">
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;text-align:center">
+      <div style="font-size:9px;color:var(--text3);font-weight:600">DETECTADOS</div>
+      <div style="font-size:16px;font-weight:700;color:var(--text)">${results.length}</div>
+    </div>
+    <div style="background:var(--bg2);border:1px solid var(--green);border-radius:6px;padding:8px;text-align:center">
+      <div style="font-size:9px;color:var(--text3);font-weight:600">APROVADOS</div>
+      <div style="font-size:16px;font-weight:700;color:var(--green)">${aprovados}</div>
+    </div>
+    <div style="background:var(--bg2);border:1px solid var(--blue);border-radius:6px;padding:8px;text-align:center">
+      <div style="font-size:9px;color:var(--text3);font-weight:600">MELHOR MARGEM</div>
+      <div style="font-size:16px;font-weight:700;color:var(--blue)">${results[0]?.lucroPct || 0}%</div>
+    </div>
+  </div>`;
+
+  container.innerHTML = summary + cards;
+}
+
 async function searchOport(){
   const q = (document.getElementById('oport-search')?.value.trim()) || '';
 
@@ -6720,31 +7017,46 @@ async function diagnosticarVenda(orderId){
     lines.push(`  → Data resolvida pelo helper: ${getOrderDate(apiData) || '(VAZIO)'}`);
   }
 
-  // Mostra modal com o relatório
-  document.querySelectorAll('[data-diag-modal]').forEach(m => m.remove());
-  const modal = document.createElement('div');
-  modal.dataset.diagModal = '1';
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
-  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+  // Salva o relatório num atributo data-* (não escapa em template literal — mais seguro)
+  const reportText = lines.join('\n');
   modal.innerHTML = `<div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;max-width:700px;width:100%;padding:20px;max-height:85vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
       <div style="font-size:14px;font-weight:700">🔍 Diagnóstico: ${escapeHTML(orderId)}</div>
       <button onclick="this.closest('[data-diag-modal]').remove()" class="btn btn-sm">Fechar</button>
     </div>
-    <pre style="font-family:'DM Mono',monospace;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:12px;white-space:pre-wrap;word-break:break-word;line-height:1.5;color:var(--text2);max-height:60vh;overflow-y:auto">${escapeHTML(lines.join('\n'))}</pre>
+    <pre id="diag-report" style="font-family:'DM Mono',monospace;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:12px;white-space:pre-wrap;word-break:break-word;line-height:1.5;color:var(--text2);max-height:60vh;overflow-y:auto">${escapeHTML(reportText)}</pre>
     <div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">
-      <button onclick="navigator.clipboard.writeText(\`${lines.join('\\n').replace(/`/g,'').replace(/\$/g,'\\$')}\`).then(()=>this.textContent='✓ Copiado')" class="btn btn-sm">📋 Copiar relatório</button>
-      ${apiData ? `<button onclick="diagnosticarVendaRaw('${orderId}')" class="btn btn-sm">📦 Ver JSON cru</button>` : ''}
+      <button onclick="copyDiagReport(this)" class="btn btn-sm">📋 Copiar relatório</button>
+      ${apiData ? `<button onclick="diagnosticarVendaRaw('${escapeHTML(orderId)}')" class="btn btn-sm">📦 Ver JSON cru</button>` : ''}
     </div>
   </div>`;
   document.body.appendChild(modal);
+}
+
+// Copia o relatório de diagnóstico do <pre id="diag-report">
+function copyDiagReport(btn){
+  const pre = document.getElementById('diag-report');
+  if(!pre) return;
+  navigator.clipboard.writeText(pre.textContent).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✓ Copiado';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  }).catch(() => {
+    btn.textContent = '❌ Erro';
+  });
 }
 
 function diagnosticarVendaRaw(orderId){
   proxyFetch(`/orders/${orderId}`).then(r => r.json()).then(data => {
     const w = window.open('', '_blank');
     if(w){
-      w.document.write(`<pre style="font-family:monospace;padding:20px;background:#0a0a0a;color:#e0e0e0">${JSON.stringify(data, null, 2)}</pre>`);
+      // Sanitiza o JSON antes de exibir (proteção contra XSS caso o ML retorne HTML)
+      const safe = JSON.stringify(data, null, 2)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Order ${orderId}</title></head><body><pre style="font-family:monospace;padding:20px;background:#0a0a0a;color:#e0e0e0">${safe}</pre></body></html>`);
+      w.document.close();
     }
   });
 }
