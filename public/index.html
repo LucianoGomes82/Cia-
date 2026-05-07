@@ -6805,6 +6805,7 @@ function openGerenciarLancamentos(){
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
             <span style="font-weight:600;color:${t.color};font-size:12px">${t.label.replace(t.icon + ' ', '')}</span>
+            ${(l.tipo === 'aporte' || l.tipo === 'retirada') && l.origem === 'mercadopago' ? `<span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px">🏦 Mercado Pago</span>` : ''}
             <span style="font-size:10px;color:var(--text3)">${dt}</span>
           </div>
           ${desc}
@@ -6915,6 +6916,7 @@ function openNovoLancamentoModal(lancamentoExistente = null){
     _isManual: true,
     date_created: new Date().toISOString(),
     tipo: 'aporte',
+    origem: 'caixa',  // 'caixa' | 'mercadopago' — só aplicável a retirada/aporte
     description: '',
     valorLuciano: 0,
     valorJohnny: 0,
@@ -6962,6 +6964,28 @@ function openNovoLancamentoModal(lancamentoExistente = null){
       <div style="font-size:10px;color:var(--text3);margin-top:3px">📅 Padrão: agora. Pode editar se precisar registrar lançamento de outra data.</div>
     </div>
 
+    <!-- Origem do dinheiro (só aparece para aporte e retirada) -->
+    <div id="lanc-origem-wrapper" style="margin-bottom:14px;display:none">
+      <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:6px">Origem do dinheiro</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <label style="display:flex;align-items:center;gap:8px;padding:10px;background:var(--bg2);border:1px solid ${l.origem !== 'mercadopago' ? 'var(--blue)' : 'var(--border)'};border-radius:6px;cursor:pointer;font-size:11px" data-origem-card="caixa">
+          <input type="radio" name="lanc-origem" value="caixa" ${l.origem !== 'mercadopago' ? 'checked' : ''} style="cursor:pointer">
+          <div>
+            <div style="font-weight:600">💼 Caixa Geral</div>
+            <div style="font-size:10px;color:var(--text3);margin-top:2px">Dinheiro próprio do sócio</div>
+          </div>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;padding:10px;background:var(--bg2);border:1px solid ${l.origem === 'mercadopago' ? 'var(--blue)' : 'var(--border)'};border-radius:6px;cursor:pointer;font-size:11px" data-origem-card="mercadopago">
+          <input type="radio" name="lanc-origem" value="mercadopago" ${l.origem === 'mercadopago' ? 'checked' : ''} style="cursor:pointer">
+          <div>
+            <div style="font-weight:600">🏦 Mercado Pago</div>
+            <div style="font-size:10px;color:var(--text3);margin-top:2px">Saldo do MP da empresa</div>
+          </div>
+        </label>
+      </div>
+      <div style="font-size:10px;color:var(--text3);margin-top:6px;font-style:italic" id="lanc-origem-hint"></div>
+    </div>
+
     <!-- Valores por sócio -->
     <div style="margin-bottom:14px">
       <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:6px">Valores</label>
@@ -6999,15 +7023,38 @@ function openNovoLancamentoModal(lancamentoExistente = null){
 
   document.body.appendChild(modal);
 
-  // Atualiza hint conforme troca de tipo
+  // Atualiza hint e visibilidade dos campos conforme troca de tipo
   const updateHint = () => {
     const checked = modal.querySelector('input[name="lanc-tipo"]:checked');
     if(!checked) return;
     const t = TIPOS_LANCAMENTO[checked.value];
     const hint = document.getElementById('lanc-hint');
     if(hint && t) hint.textContent = `${t.icon} ${t.hint}`;
+
+    // Mostra/esconde origem do dinheiro (só faz sentido em aporte/retirada)
+    const origemWrap = document.getElementById('lanc-origem-wrapper');
+    const showOrigem = (checked.value === 'aporte' || checked.value === 'retirada');
+    if(origemWrap) origemWrap.style.display = showOrigem ? 'block' : 'none';
+
+    // Atualiza hint da origem conforme tipo (se visível)
+    if(showOrigem){
+      const origemHintEl = document.getElementById('lanc-origem-hint');
+      const origemChecked = modal.querySelector('input[name="lanc-origem"]:checked')?.value || 'caixa';
+      if(origemHintEl){
+        if(checked.value === 'aporte'){
+          origemHintEl.textContent = origemChecked === 'mercadopago'
+            ? 'O sócio está transferindo dinheiro do saldo MP para o caixa da empresa.'
+            : 'O sócio está pondo dinheiro próprio no caixa.';
+        } else {
+          origemHintEl.textContent = origemChecked === 'mercadopago'
+            ? '🏦 Saída direta do saldo do Mercado Pago (sem passar pelo caixa).'
+            : '💼 Saída do caixa geral.';
+        }
+      }
+    }
+
     // Atualiza visual dos cards de tipo
-    modal.querySelectorAll('label[style*="background"]').forEach(lbl => {
+    modal.querySelectorAll('[id="lanc-tipos"] label').forEach(lbl => {
       const radio = lbl.querySelector('input[name="lanc-tipo"]');
       if(!radio) return;
       const tipo = TIPOS_LANCAMENTO[radio.value];
@@ -7019,8 +7066,17 @@ function openNovoLancamentoModal(lancamentoExistente = null){
         lbl.style.background = 'var(--bg2)';
       }
     });
+
+    // Atualiza visual dos cards de origem
+    modal.querySelectorAll('label[data-origem-card]').forEach(lbl => {
+      const radio = lbl.querySelector('input[name="lanc-origem"]');
+      if(!radio) return;
+      lbl.style.borderColor = radio.checked ? 'var(--blue)' : 'var(--border)';
+      lbl.style.background = radio.checked ? 'rgba(96,165,250,.08)' : 'var(--bg2)';
+    });
   };
   modal.querySelectorAll('input[name="lanc-tipo"]').forEach(r => r.addEventListener('change', updateHint));
+  modal.querySelectorAll('input[name="lanc-origem"]').forEach(r => r.addEventListener('change', updateHint));
   updateHint();
 }
 
@@ -7028,6 +7084,7 @@ async function salvarLancamento(id, isEdit){
   const modal = document.querySelector('[data-lancamento-modal]');
   if(!modal) return;
   const tipo = modal.querySelector('input[name="lanc-tipo"]:checked')?.value || 'aporte';
+  const origem = modal.querySelector('input[name="lanc-origem"]:checked')?.value || 'caixa';
   const dataStr = document.getElementById('lanc-data').value;
   const valorLuciano = parseFloat(document.getElementById('lanc-luciano').value) || 0;
   const valorJohnny  = parseFloat(document.getElementById('lanc-johnny').value)  || 0;
@@ -7044,6 +7101,8 @@ async function salvarLancamento(id, isEdit){
     id,
     _isManual: true,
     tipo,
+    // Origem só faz sentido para aporte/retirada — outros tipos ignoram
+    origem: (tipo === 'aporte' || tipo === 'retirada') ? origem : 'caixa',
     date_created: dateISO,
     description,
     valorLuciano,
@@ -8793,22 +8852,34 @@ function renderVendas(){
   let totalAportes = 0, totalRetiradas = 0, totalDespesas = 0, totalReceitas = 0;
   let aportesLuciano = 0, aportesJohnny = 0;
   let retiradasLuciano = 0, retiradasJohnny = 0;
+  // Separados por origem (caixa vs mercadopago) — só aportes e retiradas
+  let aportesNoMP = 0, retiradasDoMP = 0;
+  let aportesNoCaixa = 0, retiradasDoCaixa = 0;
   for(const m of manuais){
     const valTotal = (m.valorLuciano || 0) + (m.valorJohnny || 0);
     if(m.tipo === 'aporte'){
       totalAportes += valTotal;
       aportesLuciano += (m.valorLuciano || 0);
       aportesJohnny  += (m.valorJohnny  || 0);
+      if(m.origem === 'mercadopago') aportesNoMP += valTotal;
+      else                            aportesNoCaixa += valTotal;
     } else if(m.tipo === 'retirada'){
       totalRetiradas += valTotal;
       retiradasLuciano += (m.valorLuciano || 0);
       retiradasJohnny  += (m.valorJohnny  || 0);
+      if(m.origem === 'mercadopago') retiradasDoMP += valTotal;
+      else                            retiradasDoCaixa += valTotal;
     } else if(m.tipo === 'despesa'){
       totalDespesas += valTotal;
     } else if(m.tipo === 'receita'){
       totalReceitas += valTotal;
     }
   }
+
+  // Saldo Real do Mercado Pago = faturamento líquido + aportes ao MP - retiradas do MP
+  // (Vendas entram no MP automaticamente; aportes ao MP são raros mas possíveis;
+  //  retiradas do MP são as que o usuário marca como saídas diretas do MP)
+  const saldoMP = faturamentoLiq + aportesNoMP - retiradasDoMP;
 
   // Lucro total = vendas (já considera bloqueadas) + receitas - despesas
   // Aportes e retiradas NÃO afetam lucro (são só fluxo de caixa)
@@ -8851,7 +8922,7 @@ function renderVendas(){
   const setEl = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = val; };
   setEl('vendas-lucro-dia',   fmtBRL(lucroHoje));
   setEl('vendas-lucro-total', fmtBRL(lucroTotal));
-  setEl('vendas-faturamento', fmtBRL(faturamentoLiq));
+  setEl('vendas-faturamento', fmtBRL(saldoMP));
   setEl('vendas-diferenca',   fmtBRL(diferenca));
 
   // Métricas linha 2 (sócios) — INVESTIMENTO LÍQUIDO do sócio
@@ -8870,8 +8941,10 @@ function renderVendas(){
     `Investimento líquido Luciano:\n+ Em vendas: ${fmtBRL(totalInvLuciano)}\n+ Aportes: ${fmtBRL(aportesLuciano)}\n- Retiradas: ${fmtBRL(retiradasLuciano)}\n= ${fmtBRL(invLiqLuciano)}\n\n(Despesas não afetam o investimento — são gastos operacionais)`);
   setTitle('vendas-inv-johnny',
     `Investimento líquido Johnny:\n+ Em vendas: ${fmtBRL(totalInvJohnny)}\n+ Aportes: ${fmtBRL(aportesJohnny)}\n- Retiradas: ${fmtBRL(retiradasJohnny)}\n= ${fmtBRL(invLiqJohnny)}\n\n(Despesas não afetam o investimento — são gastos operacionais)`);
+  setTitle('vendas-faturamento',
+    `Saldo Mercado Pago:\n+ Faturamento líquido: ${fmtBRL(faturamentoLiq)}\n+ Aportes ao MP: ${fmtBRL(aportesNoMP)}\n- Retiradas do MP: ${fmtBRL(retiradasDoMP)}\n= ${fmtBRL(saldoMP)}\n\n(Mostra o saldo real esperado na conta MP. Para ver caixa total, use 'Diferença'.)`);
   setTitle('vendas-diferenca',
-    `Saldo Disponível:\n+ Mercado Pago: ${fmtBRL(faturamentoLiq)}\n+ Aportes: ${fmtBRL(totalAportes)}\n+ Receitas: ${fmtBRL(totalReceitas)}\n- Investimentos: ${fmtBRL(totalInvestido)}\n- Retiradas: ${fmtBRL(totalRetiradas)}\n- Despesas: ${fmtBRL(totalDespesas)}\n= ${fmtBRL(saldoDisponivel)}`);
+    `Saldo Disponível (caixa total):\n+ Saldo MP: ${fmtBRL(saldoMP)}\n+ Aportes ao caixa: ${fmtBRL(aportesNoCaixa)}\n+ Receitas: ${fmtBRL(totalReceitas)}\n- Investimentos: ${fmtBRL(totalInvestido)}\n- Retiradas do caixa: ${fmtBRL(retiradasDoCaixa)}\n- Despesas: ${fmtBRL(totalDespesas)}\n= ${fmtBRL(saldoDisponivel)}`);
   setTitle('vendas-lucro-total',
     `Lucro Total:\n+ Lucro vendas: ${fmtBRL(lucroVendas)}\n+ Receitas avulsas: ${fmtBRL(totalReceitas)}\n- Despesas: ${fmtBRL(totalDespesas)}\n= ${fmtBRL(lucroTotal)}`);
 
@@ -9106,7 +9179,7 @@ function renderVendasPlanilha(items){
         <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-size:11px;color:${(v.valorJohnny||0) > 0 ? valColor : 'var(--text3)'}">${(v.valorJohnny||0) > 0 ? `${valPrefix}${fmtBRL(v.valorJohnny, false)}` : '—'}</td>
         <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;color:${valColor}">${valPrefix}${fmtBRL(valTotal, false)}</td>
         <td style="padding:6px 8px;font-family:'DM Mono',monospace;font-size:10px;color:var(--text3)" title="Lançamento manual">manual</td>
-        <td style="padding:6px 8px;font-size:11px;color:${t.color};font-weight:600">${t.label}${v.description ? ` — <span style="color:var(--text2);font-weight:400;font-style:italic">${escapeHTML(v.description)}</span>` : ''}</td>
+        <td style="padding:6px 8px;font-size:11px;color:${t.color};font-weight:600">${t.label}${(v.tipo === 'aporte' || v.tipo === 'retirada') && v.origem === 'mercadopago' ? ` <span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;margin-left:3px">🏦 MP</span>` : ''}${v.description ? ` — <span style="color:var(--text2);font-weight:400;font-style:italic">${escapeHTML(v.description)}</span>` : ''}</td>
         <td style="padding:6px 8px;font-size:11px;color:var(--text3)">—</td>
         <td style="padding:6px 8px;font-size:11px;color:var(--text3)">—</td>
         <td style="padding:6px 8px;font-size:10px;white-space:nowrap;color:var(--text3)">${dt}</td>
