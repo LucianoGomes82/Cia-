@@ -933,6 +933,55 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
           </div>
         </div>
 
+        <!-- Filtros avançados (aparecem só na visão Planilha) -->
+        <div id="vendas-filters-advanced" style="display:none;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:10px;color:var(--text3);font-weight:600;letter-spacing:.5px">FILTROS:</span>
+
+            <!-- Filtro de tipo de lançamento -->
+            <div style="display:flex;align-items:center;gap:6px">
+              <label style="font-size:11px;color:var(--text2)">Tipo:</label>
+              <select id="vendas-filter-tipo" onchange="renderVendas()"
+                style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
+                <option value="all">Todos</option>
+                <option value="vendas">📦 Apenas vendas</option>
+                <option value="manuais">📋 Apenas lançamentos</option>
+                <option value="aporte">💸 Aportes</option>
+                <option value="retirada">💰 Retiradas</option>
+                <option value="despesa">📋 Despesas</option>
+                <option value="receita">🎁 Receitas</option>
+                <option value="outro">📌 Outros</option>
+                <option value="bloqueados">🚫 Estados bloqueados</option>
+              </select>
+            </div>
+
+            <!-- Filtro de data inicial -->
+            <div style="display:flex;align-items:center;gap:6px">
+              <label style="font-size:11px;color:var(--text2)">De:</label>
+              <input type="date" id="vendas-filter-from" onchange="renderVendas()"
+                style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
+            </div>
+
+            <!-- Filtro de data final -->
+            <div style="display:flex;align-items:center;gap:6px">
+              <label style="font-size:11px;color:var(--text2)">Até:</label>
+              <input type="date" id="vendas-filter-to" onchange="renderVendas()"
+                style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
+            </div>
+
+            <!-- Atalhos de período -->
+            <div style="display:flex;gap:4px">
+              <button class="btn btn-sm" onclick="setFilterPeriod('today')" title="Apenas de hoje" style="font-size:10px;padding:4px 8px">Hoje</button>
+              <button class="btn btn-sm" onclick="setFilterPeriod('7d')" style="font-size:10px;padding:4px 8px">7d</button>
+              <button class="btn btn-sm" onclick="setFilterPeriod('30d')" style="font-size:10px;padding:4px 8px">30d</button>
+              <button class="btn btn-sm" onclick="setFilterPeriod('month')" title="Mês atual" style="font-size:10px;padding:4px 8px">Mês</button>
+              <button class="btn btn-sm" onclick="setFilterPeriod('clear')" title="Limpar filtros de data" style="font-size:10px;padding:4px 8px;background:rgba(239,68,68,.1);color:var(--red);border:1px solid var(--red)">✕</button>
+            </div>
+
+            <span id="vendas-filter-count" style="margin-left:auto;font-size:10px;color:var(--text3);font-style:italic"></span>
+          </div>
+        </div>
+
         <div id="vendas-list"></div>
         <div id="vendas-empty" style="display:none;padding:24px;text-align:center;color:var(--text3);font-size:13px">Nenhuma venda encontrada no período.</div>
       </div>
@@ -7370,6 +7419,44 @@ function canPrintLabel(v){
   return { ok: true };
 }
 
+// Atalhos de filtro de período na visão Planilha
+function setFilterPeriod(period){
+  const fromEl = document.getElementById('vendas-filter-from');
+  const toEl   = document.getElementById('vendas-filter-to');
+  if(!fromEl || !toEl) return;
+
+  const today = getDateStringBR(new Date());
+
+  if(period === 'today'){
+    fromEl.value = today;
+    toEl.value   = today;
+  } else if(period === '7d'){
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    fromEl.value = getDateStringBR(d);
+    toEl.value   = today;
+  } else if(period === '30d'){
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    fromEl.value = getDateStringBR(d);
+    toEl.value   = today;
+  } else if(period === 'month'){
+    // Mês atual (do dia 1 até hoje)
+    const d = new Date();
+    d.setDate(1);
+    fromEl.value = getDateStringBR(d);
+    toEl.value   = today;
+  } else if(period === 'clear'){
+    fromEl.value = '';
+    toEl.value   = '';
+    // Também reseta o filtro de tipo
+    const tipoEl = document.getElementById('vendas-filter-tipo');
+    if(tipoEl) tipoEl.value = 'all';
+  }
+
+  renderVendas();
+}
+
 async function setVendasView(mode){
   _vendasView = mode;
   // Atualiza visual dos botões
@@ -7379,6 +7466,10 @@ async function setVendasView(mode){
     btnCards.style.background = mode === 'cards' ? 'var(--bg3)' : 'transparent';
     btnPlanilha.style.background = mode === 'planilha' ? 'var(--bg3)' : 'transparent';
   }
+
+  // Mostra/esconde barra de filtros avançados (só na visão Planilha)
+  const filtersEl = document.getElementById('vendas-filters-advanced');
+  if(filtersEl) filtersEl.style.display = (mode === 'planilha') ? 'block' : 'none';
 
   // Se entrou na Planilha pela primeira vez (ou cache expirou), tenta carregar do IndexedDB
   if(mode === 'planilha'){
@@ -8625,9 +8716,57 @@ function renderVendas(){
   let items = sourceData;
   if(search){
     items = items.filter(v => {
-      const blob = `${v.firstItem.title||''} ${v.buyer.firstName} ${v.buyer.lastName} ${v.buyer.nickname} ${v.id}`.toLowerCase();
+      // Suporta busca em vendas E em lançamentos manuais
+      const titulo = v._isManual
+        ? (TIPOS_LANCAMENTO[v.tipo]?.label || v.tipo || '') + ' ' + (v.description || '')
+        : (v.firstItem?.title || '');
+      const buyerInfo = v._isManual ? '' : `${v.buyer?.firstName || ''} ${v.buyer?.lastName || ''} ${v.buyer?.nickname || ''}`;
+      const blob = `${titulo} ${buyerInfo} ${v.id}`.toLowerCase();
       return blob.includes(search);
     });
+  }
+
+  // ── Filtros avançados (só na visão Planilha) ──
+  let filtroAplicado = false;
+  if(_vendasView === 'planilha'){
+    const filterTipo = document.getElementById('vendas-filter-tipo')?.value || 'all';
+    const filterFrom = document.getElementById('vendas-filter-from')?.value || '';
+    const filterTo   = document.getElementById('vendas-filter-to')?.value || '';
+
+    // Filtro de tipo
+    if(filterTipo !== 'all'){
+      filtroAplicado = true;
+      items = items.filter(v => {
+        if(filterTipo === 'vendas')      return !v._isManual && !v._isBlockedState;
+        if(filterTipo === 'manuais')     return v._isManual;
+        if(filterTipo === 'bloqueados')  return v._isBlockedState;
+        // Tipos específicos: aporte, retirada, despesa, receita, outro
+        return v._isManual && v.tipo === filterTipo;
+      });
+    }
+
+    // Filtro de data (compara YYYY-MM-DD da venda com from/to)
+    if(filterFrom || filterTo){
+      filtroAplicado = true;
+      items = items.filter(v => {
+        if(!v.date_created) return false;  // sem data, não passa
+        const vDate = getDateStringBR(new Date(v.date_created));  // "2026-04-30"
+        if(filterFrom && vDate < filterFrom) return false;
+        if(filterTo   && vDate > filterTo) return false;
+        return true;
+      });
+    }
+
+    // Atualiza contagem visual
+    const countEl = document.getElementById('vendas-filter-count');
+    if(countEl){
+      if(filtroAplicado){
+        countEl.textContent = `Mostrando ${items.length} de ${sourceData.length}`;
+        countEl.style.color = 'var(--blue)';
+      } else {
+        countEl.textContent = '';
+      }
+    }
   }
 
   // ── Métricas financeiras: separa vendas reais de lançamentos manuais ──
