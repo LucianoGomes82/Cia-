@@ -925,7 +925,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
               style="padding:6px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;width:200px">
             <button class="btn btn-sm" onclick="syncVendas(true)">↻ Atualizar</button>
             <button class="btn btn-sm" onclick="syncVendasIncremental()" title="Sincroniza vendas novas + atualiza status das em trânsito (incremental, leve)" style="background:rgba(62,207,142,.15);color:var(--green);border:1px solid var(--green)">🔄 Sync</button>
-            <button class="btn btn-sm" onclick="openNovoLancamentoModal()" title="Adicionar lançamento manual: aporte, retirada, despesa, etc." style="background:rgba(245,158,11,.15);color:var(--amber);border:1px solid var(--amber)">+ Lançamento</button>
+            <button class="btn btn-sm" onclick="openGerenciarLancamentos()" title="Ver, editar, excluir e adicionar lançamentos manuais (aportes, retiradas, despesas, receitas)" style="background:rgba(245,158,11,.15);color:var(--amber);border:1px solid var(--amber)">📋 Lançamentos</button>
             <button class="btn btn-sm" onclick="diagnosticarVenda()" title="Investigar dados de uma venda específica (debug)" style="font-size:11px">🔍 Debug</button>
             <button class="btn btn-sm" onclick="document.getElementById('vendas-import-file').click()" title="Importa XLSX de 2 formatos:&#10;• Planilha de vendas exportada do Mercado Livre (importa todas as vendas)&#10;• Planilha exportada por este app (atualiza apenas investimentos)" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📥 Importar XLSX</button>
             <input type="file" id="vendas-import-file" accept=".xlsx,.xls" style="display:none" onchange="importVendasFromXLSX(event)">
@@ -6700,6 +6700,162 @@ function diagnosticarVendaRaw(orderId){
   });
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// GERENCIAR LANÇAMENTOS — modal com lista, edição e exclusão
+// ──────────────────────────────────────────────────────────────────────
+function openGerenciarLancamentos(){
+  document.querySelectorAll('[data-gerencia-modal]').forEach(m => m.remove());
+
+  const modal = document.createElement('div');
+  modal.dataset.gerenciaModal = '1';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+
+  // Ordena lançamentos por data desc
+  const ordenados = [...lancamentosManuais].sort((a, b) => {
+    const dA = a.date_created ? new Date(a.date_created).getTime() : 0;
+    const dB = b.date_created ? new Date(b.date_created).getTime() : 0;
+    return dB - dA;
+  });
+
+  // Sumário por tipo
+  const sumario = { aporte: 0, retirada: 0, despesa: 0, receita: 0, outro: 0 };
+  for(const l of ordenados){
+    const total = (l.valorLuciano || 0) + (l.valorJohnny || 0);
+    sumario[l.tipo] = (sumario[l.tipo] || 0) + total;
+  }
+
+  const sumarioHTML = Object.entries(TIPOS_LANCAMENTO).map(([key, t]) => {
+    const valor = sumario[key] || 0;
+    return `<div style="background:var(--bg2);border:1px solid var(--border);border-left:3px solid ${t.color};border-radius:6px;padding:8px 10px">
+      <div style="font-size:10px;color:var(--text3);font-weight:600">${t.icon} ${t.label.replace(t.icon + ' ', '')}</div>
+      <div style="font-size:13px;color:${t.color};font-weight:700;font-family:'DM Mono',monospace">${fmtBRL(valor)}</div>
+    </div>`;
+  }).join('');
+
+  // Lista de lançamentos
+  let listaHTML;
+  if(ordenados.length === 0){
+    listaHTML = `<div style="padding:30px;text-align:center;color:var(--text3);font-size:12px">Nenhum lançamento manual cadastrado.<br><br>Use o botão "+ Lançamento" para criar.</div>`;
+  } else {
+    listaHTML = ordenados.map(l => {
+      const t = TIPOS_LANCAMENTO[l.tipo] || TIPOS_LANCAMENTO.outro;
+      const dt = l.date_created ? new Date(l.date_created).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+      const valTotal = (l.valorLuciano || 0) + (l.valorJohnny || 0);
+      const sign = t.sign;
+      const valColor = sign > 0 ? 'var(--green)' : (sign < 0 ? 'var(--red)' : 'var(--text3)');
+      const prefix = sign > 0 ? '+' : (sign < 0 ? '-' : '');
+      const desc = l.description ? `<div style="font-size:11px;color:var(--text2);margin-top:2px;font-style:italic">${escapeHTML(l.description)}</div>` : '';
+
+      const valDetail = [];
+      if((l.valorLuciano || 0) > 0) valDetail.push(`L: ${fmtBRL(l.valorLuciano)}`);
+      if((l.valorJohnny  || 0) > 0) valDetail.push(`J: ${fmtBRL(l.valorJohnny)}`);
+
+      return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);background:rgba(245,158,11,.02);border-left:3px solid ${t.color}">
+        <div style="font-size:18px">${t.icon}</div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+            <span style="font-weight:600;color:${t.color};font-size:12px">${t.label.replace(t.icon + ' ', '')}</span>
+            <span style="font-size:10px;color:var(--text3)">${dt}</span>
+          </div>
+          ${desc}
+          <div style="font-size:10px;color:var(--text3);margin-top:2px;font-family:'DM Mono',monospace">${valDetail.join(' · ') || '(sem valores)'}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-family:'DM Mono',monospace;font-weight:700;color:${valColor};font-size:13px">${prefix}${fmtBRL(valTotal, false)}</div>
+        </div>
+        <div style="display:flex;gap:4px;flex-shrink:0">
+          <button onclick="editarLancamentoFromManager('${l.id}')" class="btn btn-sm" title="Editar" style="font-size:11px;padding:4px 8px">✏️</button>
+          <button onclick="excluirLancamentoFromManager('${l.id}')" class="btn btn-sm" title="Excluir" style="font-size:11px;padding:4px 8px;background:rgba(239,68,68,.1);color:var(--red);border:1px solid var(--red)">🗑</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  modal.innerHTML = `<div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;max-width:800px;width:100%;max-height:90vh;display:flex;flex-direction:column">
+    <!-- Cabeçalho -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border-bottom:1px solid var(--border)">
+      <div>
+        <div style="font-size:15px;font-weight:700">📋 Gerenciar Lançamentos Manuais</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">${ordenados.length} lançamento${ordenados.length!==1?'s':''} cadastrado${ordenados.length!==1?'s':''}</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="openNovoLancamentoModal();this.closest('[data-gerencia-modal]').remove()" class="btn btn-p btn-sm">+ Novo</button>
+        <button onclick="this.closest('[data-gerencia-modal]').remove()" class="btn btn-sm">Fechar</button>
+      </div>
+    </div>
+
+    <!-- Sumário -->
+    <div style="padding:14px 20px;border-bottom:1px solid var(--border);background:var(--bg2)">
+      <div style="font-size:10px;color:var(--text3);font-weight:600;margin-bottom:8px">RESUMO POR TIPO</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
+        ${sumarioHTML}
+      </div>
+    </div>
+
+    <!-- Lista -->
+    <div style="flex:1;overflow-y:auto;max-height:50vh">
+      ${listaHTML}
+    </div>
+
+    <!-- Rodapé com ações em massa -->
+    ${ordenados.length > 0 ? `
+    <div style="padding:12px 20px;border-top:1px solid var(--border);background:var(--bg2);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div style="font-size:10px;color:var(--text3)">💡 Lançamentos são salvos automaticamente. Edite ou exclua individualmente acima.</div>
+      <button onclick="excluirTodosLancamentos()" class="btn btn-sm" style="background:rgba(239,68,68,.1);color:var(--red);border:1px solid var(--red);font-size:10px">🗑 Apagar todos</button>
+    </div>` : ''}
+  </div>`;
+
+  document.body.appendChild(modal);
+}
+
+function editarLancamentoFromManager(id){
+  const l = lancamentosManuais.find(x => x.id === id);
+  if(!l) return;
+  // Fecha o gerenciador, abre o modal de edição
+  document.querySelectorAll('[data-gerencia-modal]').forEach(m => m.remove());
+  openNovoLancamentoModal(l);
+}
+
+async function excluirLancamentoFromManager(id){
+  const l = lancamentosManuais.find(x => x.id === id);
+  if(!l) return;
+  const t = TIPOS_LANCAMENTO[l.tipo] || TIPOS_LANCAMENTO.outro;
+  const valTotal = (l.valorLuciano || 0) + (l.valorJohnny || 0);
+  const desc = l.description ? `\nDescrição: "${l.description}"` : '';
+  if(!confirm(`Excluir este lançamento?\n\nTipo: ${t.label}\nValor: ${fmtBRL(valTotal)}${desc}\n\nNão pode ser desfeito.`)) return;
+
+  try {
+    await deleteLancamentoManual(id);
+    await loadLancamentosManuais();
+    document.querySelectorAll('[data-gerencia-modal]').forEach(m => m.remove());
+    openGerenciarLancamentos(); // reabre com lista atualizada
+    renderVendas();
+  } catch(e){
+    alert(`❌ Erro ao excluir: ${e.message}`);
+  }
+}
+
+async function excluirTodosLancamentos(){
+  if(lancamentosManuais.length === 0) return;
+  const ok = confirm(`Apagar TODOS os ${lancamentosManuais.length} lançamentos manuais?\n\nEssa ação não pode ser desfeita.\n\nVendas e investimentos NÃO são afetados — apenas os lançamentos manuais (aportes, retiradas, despesas, etc).`);
+  if(!ok) return;
+  // Confirmação dupla
+  if(!confirm('⚠ Tem certeza? Todos os aportes, retiradas e despesas serão removidos definitivamente.')) return;
+
+  try {
+    for(const l of lancamentosManuais){
+      await deleteLancamentoManual(l.id);
+    }
+    await loadLancamentosManuais();
+    document.querySelectorAll('[data-gerencia-modal]').forEach(m => m.remove());
+    renderVendas();
+    alert('✅ Todos os lançamentos foram removidos.');
+  } catch(e){
+    alert(`❌ Erro: ${e.message}`);
+  }
+}
+
 function openNovoLancamentoModal(lancamentoExistente = null){
   // Remove modal anterior se houver
   document.querySelectorAll('[data-lancamento-modal]').forEach(m => m.remove());
@@ -8559,7 +8715,9 @@ function renderVendas(){
   setEl('vendas-faturamento', fmtBRL(faturamentoLiq));
   setEl('vendas-diferenca',   fmtBRL(diferenca));
 
-  // Métricas linha 2 (sócios) — Investimento líquido = invs em vendas + aportes - retiradas
+  // Métricas linha 2 (sócios) — INVESTIMENTO LÍQUIDO do sócio
+  // = Investimento em vendas + Aportes feitos por ele - Retiradas feitas por ele
+  // (Aporte e Retirada são fluxos de capital do sócio; Despesa NÃO afeta — é gasto operacional)
   const invLiqLuciano = totalInvLuciano + aportesLuciano - retiradasLuciano;
   const invLiqJohnny  = totalInvJohnny  + aportesJohnny  - retiradasJohnny;
   setEl('vendas-inv-luciano', fmtBRL(invLiqLuciano));
@@ -8570,9 +8728,9 @@ function renderVendas(){
   // Tooltip explicativo nas métricas (atualizado dinamicamente)
   const setTitle = (id, title) => { const el = document.getElementById(id)?.parentElement; if(el) el.title = title; };
   setTitle('vendas-inv-luciano',
-    `Investimento líquido Luciano:\n+ Em vendas: ${fmtBRL(totalInvLuciano)}\n+ Aportes: ${fmtBRL(aportesLuciano)}\n- Retiradas: ${fmtBRL(retiradasLuciano)}\n= ${fmtBRL(invLiqLuciano)}`);
+    `Investimento líquido Luciano:\n+ Em vendas: ${fmtBRL(totalInvLuciano)}\n+ Aportes: ${fmtBRL(aportesLuciano)}\n- Retiradas: ${fmtBRL(retiradasLuciano)}\n= ${fmtBRL(invLiqLuciano)}\n\n(Despesas não afetam o investimento — são gastos operacionais)`);
   setTitle('vendas-inv-johnny',
-    `Investimento líquido Johnny:\n+ Em vendas: ${fmtBRL(totalInvJohnny)}\n+ Aportes: ${fmtBRL(aportesJohnny)}\n- Retiradas: ${fmtBRL(retiradasJohnny)}\n= ${fmtBRL(invLiqJohnny)}`);
+    `Investimento líquido Johnny:\n+ Em vendas: ${fmtBRL(totalInvJohnny)}\n+ Aportes: ${fmtBRL(aportesJohnny)}\n- Retiradas: ${fmtBRL(retiradasJohnny)}\n= ${fmtBRL(invLiqJohnny)}\n\n(Despesas não afetam o investimento — são gastos operacionais)`);
   setTitle('vendas-diferenca',
     `Saldo Disponível:\n+ Mercado Pago: ${fmtBRL(faturamentoLiq)}\n+ Aportes: ${fmtBRL(totalAportes)}\n+ Receitas: ${fmtBRL(totalReceitas)}\n- Investimentos: ${fmtBRL(totalInvestido)}\n- Retiradas: ${fmtBRL(totalRetiradas)}\n- Despesas: ${fmtBRL(totalDespesas)}\n= ${fmtBRL(saldoDisponivel)}`);
   setTitle('vendas-lucro-total',
