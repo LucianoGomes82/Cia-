@@ -8146,61 +8146,149 @@ async function importVendasFromXLSX(event){
   try {
     workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
   } catch(e){
-    alert(`❌ Erro ao ler XLSX: ${e.message}\n\nVerifique se o arquivo está no formato Excel (.xlsx) exportado do Mercado Livre.`);
+    alert(`❌ Erro ao ler XLSX: ${e.message}\n\nVerifique se o arquivo está no formato Excel.`);
     return;
   }
 
-  // Lê primeira aba
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-  const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+  // ──────────────────────────────────────────────────────────────────
+  // CLASSIFICAÇÃO DAS ABAS
+  // - "ml": aba com cabeçalho "N.º de venda" (relatório puro do ML)
+  // - "socio": aba bilateral (Lucro Diário + Investimento Johnny + Investimento Luciano)
+  // - "outras": ignoramos (ESTOQUE, DESPESAS, COMPRAS, etc.)
+  // ──────────────────────────────────────────────────────────────────
+  const abasML = [];     // [{ name, aoa, headerRow }]
+  const abasSocio = [];  // [{ name, aoa, headerRow }]
 
-  // ── DETECÇÃO AUTOMÁTICA DO TIPO DE PLANILHA ──
-  // 1) Planilha do ML: primeira coluna "N.º de venda" (com ponto)
-  // 2) Planilha do nosso app: primeira coluna "Unidade" + tem "Inv. Luciano"/"Inv. Johnny"
-  // 3) Procura nas primeiras 15 linhas
+  for(const sheetName of workbook.SheetNames){
+    const sheet = workbook.Sheets[sheetName];
+    const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+    const detected = detectSheetType(aoa);
+    if(detected.type === 'ml')    abasML.push({ name: sheetName, aoa, headerRow: detected.headerRow });
+    else if(detected.type === 'socio') abasSocio.push({ name: sheetName, aoa, headerRow: detected.headerRow });
+  }
 
-  let detectedType = null;     // 'ml' | 'app'
-  let headerRow = -1;
-  const mlHints  = ['n.º de venda', 'numero da venda', 'order id', 'numero do pedido'];
-  const appHints = ['unidade', 'unidades']; // app começa com Unidade
+  if(abasML.length === 0 && abasSocio.length === 0){
+    alert(`❌ Nenhuma aba reconhecida.\n\nFormato esperado:\n\n• Aba "BASE_*" com cabeçalho "N.º de venda" (relatório do ML)\n• Aba do sócio com colunas "Lucro Diário", "Investimento Johnny" e "Investimento Luciano"\n\nAbas encontradas: ${workbook.SheetNames.join(', ')}`);
+    return;
+  }
 
+  // ── PASSO 1: parse das vendas (abas ML) ──
+  const vendasMap = new Map();  // orderId → venda
+  for(const aba of abasML){
+    const vendas = parseAbaML(aba.aoa, aba.headerRow);
+    for(const v of vendas){
+      vendasMap.set(String(v.id), v);
+    }
+  }
+
+  // ── PASSO 2: parse das abas dos sócios (investimentos + retiradas + flag fake) ──
+  let totalLancManuais = 0;
+  let totalInvestUpdated = 0;
+  let totalFakes = 0;
+
+  for(const aba of abasSocio){
+    const result = parseAbaSocio(aba.aoa, aba.headerRow, aba.name, vendasMap);
+    totalLancManuais += result.lancamentosManuais.length;
+    totalInvestUpdated += result.investUpdated;
+    totalFakes += result.fakeCount;
+
+    // Salva os lançamentos manuais detectados
+    for(const l of result.lancamentosManuais){
+      try { await saveLancamentoManual(l); } catch(e){ console.warn('Erro lanç:', e); }
+    }
+  }
+
+  const allVendas = Array.from(vendasMap.values());
+
+  if(allVendas.length === 0 && totalLancManuais === 0){
+    alert(`⚠ Nenhuma venda ou lançamento encontrado.`);
+    return;
+  }
+
+  // Confirmação
+  const partes = [];
+  if(abasML.length > 0)    partes.push(`📊 ${abasML.length} aba${abasML.length>1?'s':''} de vendas (BASE)`);
+  if(abasSocio.length > 0) partes.push(`👤 ${abasSocio.length} aba${abasSocio.length>1?'s':''} de sócio (${abasSocio.map(a => a.name).join(', ')})`);
+
+  const detalhes = [];
+  if(allVendas.length > 0)        detalhes.push(`• ${allVendas.length} vendas detectadas`);
+  if(totalInvestUpdated > 0)      detalhes.push(`• ${totalInvestUpdated} investimentos preenchidos por sócios`);
+  if(totalLancManuais > 0)        detalhes.push(`• ${totalLancManuais} lançamentos manuais (retiradas/aportes)`);
+  if(totalFakes > 0)              detalhes.push(`• ${totalFakes} vendas marcadas como FAKE (não computadas no financeiro)`);
+
+  const ok = confirm(`📥 Estrutura detectada:\n\n${partes.join('\n')}\n\nResumo da importação:\n${detalhes.join('\n')}\n\n💡 Investimentos já cadastrados no app só serão sobrescritos onde a planilha tiver valores preenchidos.\n\nConfirma?`);
+  if(!ok) return;
+
+  // ── PASSO 3: Aplica flags ──
+  applyBlockedStateFlags(allVendas);
+  for(const v of allVendas){
+    v._source = v._source || 'xlsx';
+    v._firstSeenAt = v._firstSeenAt || new Date().toISOString();
+    v._lastUpdatedAt = new Date().toISOString();
+    // Vendas fake são excluídas do financeiro (similar a bloqueadas)
+    if(v._isFake){
+      v._excludeFromFinancials = true;
+    }
+  }
+
+  // Ordena por data desc
+  allVendas.sort((a, b) => {
+    const dA = a.date_created ? new Date(a.date_created).getTime() : 0;
+    const dB = b.date_created ? new Date(b.date_created).getTime() : 0;
+    return dB - dA;
+  });
+
+  try {
+    await saveImportedVendas(allVendas);
+    await loadLancamentosManuais();
+    saveImportInfo(allVendas.length);
+
+    saveSyncMeta({
+      lastSyncDate: new Date().toISOString(),
+      lastSyncOrderId: allVendas[0]?.id || null,
+      totalVendas: allVendas.length,
+    });
+
+    vendasDataFull = allVendas;
+    _vendasFullCacheTime = Date.now();
+
+    const blockedCount = allVendas.filter(v => v._isBlockedState).length;
+    alert(`✅ Importação concluída!\n\n${allVendas.length} vendas salvas.\n${totalInvestUpdated > 0 ? `${totalInvestUpdated} investimentos atualizados.\n` : ''}${totalLancManuais > 0 ? `${totalLancManuais} lançamentos manuais criados.\n` : ''}${totalFakes > 0 ? `⚠ ${totalFakes} vendas FAKE (excluídas do financeiro).\n` : ''}${blockedCount > 0 ? `🚫 ${blockedCount} de estados bloqueados.\n` : ''}\nUse "📊 Planilha" para visualizar.`);
+
+    setVendasView('planilha');
+  } catch(e){
+    alert(`❌ Erro ao salvar: ${e.message}`);
+  }
+}
+
+// Detecta o tipo da aba: 'ml', 'socio' ou null (ignorar)
+function detectSheetType(aoa){
+  // Procura nas primeiras 15 linhas
   for(let i = 0; i < Math.min(aoa.length, 15); i++){
     const row = aoa[i] || [];
-    const firstCol = String(row[0] || '').toLowerCase().trim();
-    const allCells = row.map(c => String(c || '').toLowerCase().trim());
+    const cells = row.map(c => String(c || '').toLowerCase().trim());
 
-    if(mlHints.some(h => firstCol.includes(h))){
-      detectedType = 'ml';
-      headerRow = i;
-      break;
+    // ── Aba ML: "N.º de venda" como primeira coluna
+    if(cells[0] && /n\.?\s*º?\s*de\s*venda|numero\s*da\s*venda|numero\s*do\s*pedido/i.test(cells[0])){
+      return { type: 'ml', headerRow: i };
     }
-    // Planilha do app: tem "Unidade" + "Inv. Luciano" + "Inv. Johnny" (ou variações)
-    if(appHints.some(h => firstCol === h)){
-      const hasInvCol = allCells.some(c => c.includes('inv. luciano') || c.includes('inv luciano'));
-      if(hasInvCol){
-        detectedType = 'app';
-        headerRow = i;
-        break;
-      }
+
+    // ── Aba sócio: tem "Lucro Diário" + "Investimento Johnny" + "Investimento Luciano"
+    const blob = cells.join('|');
+    if(/lucro\s*diario|lucro\s+diario/i.test(blob) &&
+       /investimento\s+johnny/i.test(blob) &&
+       /investimento\s+luciano/i.test(blob)){
+      return { type: 'socio', headerRow: i };
     }
   }
+  return { type: null, headerRow: -1 };
+}
 
-  if(headerRow === -1){
-    alert(`❌ Não foi possível detectar o tipo da planilha.\n\nFormatos aceitos:\n\n1️⃣ Planilha de vendas do Mercado Livre (primeira coluna "N.º de venda")\n2️⃣ Planilha exportada por este app (primeira coluna "Unidade" + colunas de investimento)`);
-    return;
-  }
-
-  // ── ROTA 1: planilha exportada pelo app (somente atualiza investimentos) ──
-  if(detectedType === 'app'){
-    return await importInvestimentosFromAppXLSX(aoa, headerRow);
-  }
-
-  // ── ROTA 2: planilha do ML (importação completa de vendas) — fluxo original ──
+// Parse de aba ML pura (BASE_*)
+function parseAbaML(aoa, headerRow){
   const headers = (aoa[headerRow] || []).map(h => String(h || '').toLowerCase().trim());
   const dataRows = aoa.slice(headerRow + 1);
 
-  // Mapeia colunas (suporta múltiplas grafias / colunas duplicadas — usa a primeira)
   const findCol = (candidates) => {
     for(const c of candidates){
       const idx = headers.indexOf(c);
@@ -8212,89 +8300,59 @@ async function importVendasFromXLSX(event){
   const cols = {
     orderId:   findCol(['n.º de venda', 'numero da venda', 'numero do pedido']),
     date:      findCol(['data da venda', 'data']),
-    statusDesc:findCol(['estado', 'status']),                       // "Entregue", "À caminho", etc
-    statusFull:findCol(['descrição do status']),                    // "Chegou em..."
+    statusDesc:findCol(['estado', 'status']),
+    statusFull:findCol(['descrição do status']),
     units:     findCol(['unidades']),
-    revProduct:findCol(['receita por produtos (brl)']),             // bruto produto
-    revShip:   findCol(['receita por envio (brl)']),                // frete cobrado do comprador
-    feeML:     findCol(['tarifa de venda e impostos (brl)']),       // negativo
-    feeShip:   findCol(['tarifas de envio (brl)']),                 // negativo
-    discount:  findCol(['descontos e bônus']),
+    revProduct:findCol(['receita por produtos (brl)']),
+    revShip:   findCol(['receita por envio (brl)']),
+    feeML:     findCol(['tarifa de venda e impostos (brl)']),
+    feeShip:   findCol(['tarifas de envio (brl)']),
     refund:    findCol(['cancelamentos e reembolsos (brl)']),
-    total:     findCol(['total (brl)']),                            // VALOR LÍQUIDO
+    total:     findCol(['total (brl)']),
     productId: findCol(['# de anúncio', 'numero do anuncio']),
     title:     findCol(['título do anúncio', 'titulo do anuncio']),
     variation: findCol(['variação', 'variacao']),
     unitPrice: findCol(['preço unitário de venda do anúncio (brl)']),
-    listingType:findCol(['tipo de anúncio', 'tipo de anuncio']),
+    listingType: findCol(['tipo de anúncio', 'tipo de anuncio']),
     nfe:       findCol(['nf-e em anexo']),
     buyerName: findCol(['dados pessoais ou da empresa']),
     buyerDoc:  findCol(['tipo e número do documento']),
-    address:   findCol(['endereço']),
-    // O XLSX tem colunas duplicadas — vamos pegar todas as ocorrências de Cidade/Estado/CEP
-    // Geralmente Cidade/Estado/CEP aparecem após "Endereço" do comprador
     deliveryMethod: findCol(['forma de entrega']),
-    trackingDate:   findCol(['data a caminho']),
-    deliveryDate:   findCol(['data de entrega']),
     trackingNumber: findCol(['número de rastreamento', 'numero de rastreamento']),
     moneyReleased:  findCol(['dinheiro liberado']),
     claimOpen:      findCol(['reclamação aberta']),
     claimClosed:    findCol(['reclamação encerrada']),
   };
 
-  // Cidade/Estado/CEP duplicados — pega o segundo (do comprador, não da nota)
+  // Cidade/Estado/CEP duplicados — pega o primeiro (do comprador)
   const allCidadeIdxs = headers.map((h,i) => h === 'cidade' ? i : -1).filter(i => i >= 0);
   const allEstadoIdxs = headers.map((h,i) => h === 'estado' ? i : -1).filter(i => i >= 0);
-  const allCepIdxs = headers.map((h,i) => h === 'cep' ? i : -1).filter(i => i >= 0);
+  cols.cidade = allCidadeIdxs[0] ?? -1;
+  cols.estadoComprador = allEstadoIdxs[1] ?? allEstadoIdxs[0] ?? -1;
 
-  cols.cidade = allCidadeIdxs[0] ?? -1;  // primeira ocorrência (comprador)
-  cols.estadoComprador = allEstadoIdxs[1] ?? allEstadoIdxs[0] ?? -1; // segunda ocorrência se houver (Estado tem 2x: status do envio + estado UF)
-  cols.cep = allCepIdxs[0] ?? -1;
+  if(cols.orderId === -1 || cols.total === -1) return [];
 
-  if(cols.orderId === -1 || cols.total === -1){
-    alert(`❌ Colunas obrigatórias não encontradas:\n- N.º de venda: ${cols.orderId === -1 ? 'NÃO ENCONTRADA' : 'OK'}\n- Total (BRL): ${cols.total === -1 ? 'NÃO ENCONTRADA' : 'OK'}`);
-    return;
-  }
-
-  // Conta vendas com investimentos já cadastrados (para mostrar no preview)
-  const invKeys = Object.keys(investimentosVendas);
-
-  // Parser de cada linha
   const vendas = [];
-  let parsedOk = 0;
-  let skipped = 0;
-
   for(const row of dataRows){
-    if(!row || !row[cols.orderId]) { skipped++; continue; }
-
+    if(!row || !row[cols.orderId]) continue;
     const orderId = String(row[cols.orderId]).trim();
-    if(!orderId || orderId === 'null') { skipped++; continue; }
+    if(!orderId || !/^\d+$/.test(orderId)) continue;
 
-    // Data: formato "12 de março de 2026 16:58 hs."
     const dateStr = String(row[cols.date] || '');
     const dateISO = parseMLDateString(dateStr);
-
-    // Status (Estado = "Entregue", "Cancelado", "À caminho", etc.)
     const status = String(row[cols.statusDesc] || '').trim();
-
-    // Total já vem LÍQUIDO no ML XLSX
     const total = Number(row[cols.total]) || 0;
-
-    // Bruto = revProduct + revShip
     const revProduct = Number(row[cols.revProduct]) || 0;
     const revShip    = Number(row[cols.revShip])    || 0;
-    const feeML      = Math.abs(Number(row[cols.feeML]) || 0);  // vem negativo
+    const feeML      = Math.abs(Number(row[cols.feeML]) || 0);
     const feeShip    = Math.abs(Number(row[cols.feeShip]) || 0);
     const refund     = Number(row[cols.refund]) || 0;
     const totalBruto = revProduct + revShip;
 
-    // Comprador
     const buyerName = String(row[cols.buyerName] || '').trim();
     const buyerDoc  = String(row[cols.buyerDoc]  || '').trim();
     const cidade    = String(row[cols.cidade]    || '').trim();
     const estadoFull= String(row[cols.estadoComprador] || '').trim();
-
-    // Produto
     const productId = String(row[cols.productId] || '').trim();
     const title     = String(row[cols.title]     || '').trim();
     const variation = String(row[cols.variation] || '').trim();
@@ -8302,23 +8360,18 @@ async function importVendasFromXLSX(event){
     const listingType = String(row[cols.listingType] || '').trim();
     const units     = Number(row[cols.units]) || 1;
 
-    // Cor da variação (formato: "Cor : Preto" ou "Cor: Preto")
     let color = null;
     if(variation){
       const m = variation.match(/cor\s*:\s*(.+?)(?:[,;]|$)/i);
       if(m) color = m[1].trim();
     }
 
-    // Forma de entrega
     const deliveryMethod = String(row[cols.deliveryMethod] || '').trim();
-
-    // Número de rastreamento + tracking
     const trackingNumber = String(row[cols.trackingNumber] || '').trim();
     const moneyReleased  = String(row[cols.moneyReleased] || '').trim();
     const claimOpen      = String(row[cols.claimOpen] || '').toLowerCase() === 'sim';
     const claimClosed    = String(row[cols.claimClosed] || '').toLowerCase() === 'sim';
 
-    // Status normalizado para nosso schema
     const statusLower = status.toLowerCase();
     let normalizedStatus = 'paid';
     let normalizedSubstatus = null;
@@ -8335,21 +8388,13 @@ async function importVendasFromXLSX(event){
       status: normalizedStatus,
       substatus: normalizedSubstatus,
       statusLabel: status,
-      // Financeiro
-      total,                                  // LÍQUIDO (vem direto da coluna Total BRL do ML)
-      totalLiquido: total,                    // mesma coisa — alias
+      total,
+      totalLiquido: total,
       totalBruto,
       mlFee: feeML,
       shippingPaidBySeller: feeShip,
-      revProduct,
-      revShip,
-      refund,
-      // Produto
-      firstItem: {
-        id: productId,
-        title,
-        thumbnail: '',
-      },
+      revProduct, revShip, refund,
+      firstItem: { id: productId, title, thumbnail: '' },
       items: [{
         item: { id: productId, title },
         quantity: units,
@@ -8357,94 +8402,134 @@ async function importVendasFromXLSX(event){
         listing_type_id: listingType,
       }],
       color,
-      // Comprador
       buyer: {
         nickname: buyerName,
         firstName: buyerName.split(' ')[0] || '',
         lastName:  buyerName.split(' ').slice(1).join(' ') || '',
-        docNumber: buyerDoc.replace(/^[^:]+:\s*/, ''),  // remove "CPF: " do início
+        docNumber: buyerDoc.replace(/^[^:]+:\s*/, ''),
         docType:   buyerDoc.split(':')[0] || null,
       },
-      receiver: {
-        city: cidade,
-        state: estadoFull,
-      },
-      // Logística (sem o objeto shipment completo)
+      receiver: { city: cidade, state: estadoFull },
       logistic_type: deliveryMethod.toLowerCase().includes('flex') ? 'self_service' :
                      deliveryMethod.toLowerCase().includes('full') ? 'fulfillment' :
                      deliveryMethod.toLowerCase().includes('agência') ? 'cross_docking' : null,
-      shipment: trackingNumber ? {
-        id: trackingNumber,
-        substatus: normalizedSubstatus,
-      } : null,
-      // Sinalizadores
-      claimOpen,
-      claimClosed,
-      moneyReleased,
+      shipment: trackingNumber ? { id: trackingNumber, substatus: normalizedSubstatus } : null,
+      claimOpen, claimClosed, moneyReleased,
       _imported: true,
+      _isFake: false,
     });
-    parsedOk++;
   }
+  return vendas;
+}
 
-  if(parsedOk === 0){
-    alert(`❌ Nenhuma venda válida encontrada na planilha.\n\nVerifique se é o XLSX exportado do Mercado Livre.`);
-    return;
-  }
+// Parse de aba do sócio: lê investimentos + retiradas/aportes + flag Fake
+// Atualiza vendasMap (in-place) e retorna lançamentos manuais
+function parseAbaSocio(aoa, headerRow, sheetName, vendasMap){
+  const headers = (aoa[headerRow] || []).map(h => String(h || '').toLowerCase().trim());
 
-  // Conta sobreposição com investimentos
-  const idsImported = new Set(vendas.map(v => v.id));
-  const matchingInvs = invKeys.filter(k => idsImported.has(k)).length;
-
-  // Preview
-  const ok = confirm(
-    `📥 Importar ${parsedOk} venda${parsedOk > 1 ? 's' : ''}?\n\n` +
-    `Período: ${vendas[vendas.length-1]?.date_created?.slice(0,10) || '?'} → ${vendas[0]?.date_created?.slice(0,10) || '?'}\n` +
-    (matchingInvs > 0 ? `\n💰 ${matchingInvs} dessas vendas já têm investimentos cadastrados (serão preservados!)\n` : '') +
-    (skipped > 0 ? `\n⚠ ${skipped} linha${skipped>1?'s':''} ignorada${skipped>1?'s':''} (sem ID)\n` : '') +
-    `\nA importação SUBSTITUI o dataset atual da Planilha. Os investimentos NÃO são perdidos.`
-  );
-  if(!ok) return;
-
-  // Salva no IndexedDB
-  try {
-    // Aplica flags de estado bloqueado
-    applyBlockedStateFlags(vendas);
-
-    // Marca origem
-    for(const v of vendas){
-      v._source = v._source || 'xlsx';
-      v._firstSeenAt = v._firstSeenAt || new Date().toISOString();
-      v._lastUpdatedAt = new Date().toISOString();
+  const findCol = (candidates) => {
+    for(const c of candidates){
+      const idx = headers.findIndex(h => h.includes(c));
+      if(idx !== -1) return idx;
     }
+    return -1;
+  };
 
-    // Ordena por data desc (mais nova primeiro)
-    vendas.sort((a, b) => {
-      const dA = a.date_created ? new Date(a.date_created).getTime() : 0;
-      const dB = b.date_created ? new Date(b.date_created).getTime() : 0;
-      return dB - dA;
-    });
+  const cols = {
+    invJohnny:  findCol(['investimento johnny']),
+    invLuciano: findCol(['investimento luciano']),
+    mp:         findCol(['mercado pago']),
+    orderId:    findCol(['n.º de venda', 'numero da venda']),
+    data:       findCol(['data da venda']),
+    estado:     findCol(['estado']),  // motivo da retirada (em linhas manuais) ou status (em vendas)
+    total:      findCol(['total (brl)']),
+  };
 
-    await saveImportedVendas(vendas);
-    saveImportInfo(parsedOk);
+  const dataRows = aoa.slice(headerRow + 1);
 
-    // Atualiza meta para que próxima sync incremental saiba a data base
-    saveSyncMeta({
-      lastSyncDate: new Date().toISOString(),
-      lastSyncOrderId: vendas[0]?.id || null,
-      totalVendas: vendas.length,
-    });
+  const lancamentosManuais = [];
+  let investUpdated = 0;
+  let fakeCount = 0;
 
-    vendasDataFull = vendas;
-    _vendasFullCacheTime = Date.now();
+  for(const row of dataRows){
+    if(!row) continue;
 
-    const blockedCount = vendas.filter(v => v._isBlockedState).length;
-    alert(`✅ Importação concluída!\n\n${parsedOk} vendas salvas.${blockedCount > 0 ? `\n⚠ ${blockedCount} são de estados bloqueados (só acompanhamento).` : ''}\n\nUse o botão "📊 Planilha" para visualizar.`);
+    const rawOrderId = row[cols.orderId];
+    const invJ = Number(row[cols.invJohnny]) || 0;
+    const invL = Number(row[cols.invLuciano]) || 0;
+    const mpRaw = row[cols.mp];
 
-    // Vai automaticamente pra Planilha
-    setVendasView('planilha');
-  } catch(e){
-    alert(`❌ Erro ao salvar: ${e.message}`);
+    // Detecta "Fake": valor da coluna MP é texto "Fake" (case insensitive)
+    const isFakeMarker = mpRaw && typeof mpRaw === 'string' && /fake/i.test(mpRaw.trim());
+
+    const orderId = rawOrderId ? String(rawOrderId).trim() : '';
+    const isOrderRow = orderId && /^\d+$/.test(orderId);
+
+    if(isOrderRow){
+      // ── LINHA DE VENDA — atualiza investimentos no app ──
+      if(invJ !== 0 || invL !== 0){
+        if(invJ !== 0) setInvestimento(orderId, 'johnny', invJ);
+        if(invL !== 0) setInvestimento(orderId, 'luciano', invL);
+        if(invJ !== 0 || invL !== 0) investUpdated++;
+      }
+
+      // Se é Fake, marca a venda no map
+      if(isFakeMarker){
+        const v = vendasMap.get(orderId);
+        if(v){
+          v._isFake = true;
+          v._excludeFromFinancials = true;
+          fakeCount++;
+        }
+      }
+    } else {
+      // ── LINHA SEM Nº DE VENDA — lançamento manual ──
+      // Se tem ALGUM valor preenchido OU "estado" com motivo, é uma retirada/aporte
+      const hasValue = (invJ !== 0) || (invL !== 0) || (typeof mpRaw === 'number' && mpRaw !== 0);
+      const motivo = String(row[cols.estado] || '').trim();
+      const dateStr = String(row[cols.data] || '');
+
+      if(!hasValue && !motivo) continue;
+
+      // Determina tipo: se valor é negativo → retirada; se positivo → aporte
+      // Se Inv. de algum sócio < 0 → retirada (sai do bolso do sócio)
+      // Se Inv. de algum sócio > 0 → aporte (entra no bolso do sócio)
+      const valorLuciano = Math.abs(invL);
+      const valorJohnny  = Math.abs(invJ);
+
+      let tipo = 'outro';
+      // Se há valor negativo em qualquer sócio → retirada
+      if(invL < 0 || invJ < 0) tipo = 'retirada';
+      else if(invL > 0 || invJ > 0) tipo = 'aporte';
+
+      // Origem: se há valor numérico em MP e é o mesmo sinal/magnitude do valor sócio,
+      // assume que origem é Mercado Pago (o dinheiro saiu do MP pra o sócio)
+      let origem = 'caixa';
+      if(typeof mpRaw === 'number' && mpRaw !== 0){
+        origem = 'mercadopago';
+      }
+
+      const dateISO = parseMLDateString(dateStr) || new Date().toISOString();
+      // ID único e estável baseado em conteúdo (pra reimport não duplicar)
+      const idKey = `manual_xlsx_${sheetName}_${dateStr}_${valorLuciano}_${valorJohnny}_${motivo}`.replace(/[^a-z0-9_]/gi, '_');
+
+      lancamentosManuais.push({
+        id: idKey,
+        _isManual: true,
+        tipo,
+        origem,
+        date_created: dateISO,
+        description: motivo || `Importado de ${sheetName}`,
+        valorLuciano,
+        valorJohnny,
+        valorTotal: valorLuciano + valorJohnny,
+        sign: TIPOS_LANCAMENTO[tipo]?.sign || 0,
+        _sheet: sheetName,
+      });
+    }
   }
+
+  return { lancamentosManuais, investUpdated, fakeCount };
 }
 
 // Parser de data ML: "12 de março de 2026 16:58 hs." → ISO
@@ -9145,7 +9230,8 @@ function renderVendas(){
   const vendasFinanc = sourceData.filter(v => !v._excludeFromFinancials && !v._isManual);
   // Lançamentos manuais
   const manuais = sourceData.filter(v => v._isManual);
-  const blockedCount = sourceData.length - vendasFinanc.length - manuais.length;
+  const blockedCount = sourceData.filter(v => !v._isManual && v._isBlockedState && !v._isFake).length;
+  const fakeCount = sourceData.filter(v => !v._isManual && v._isFake).length;
 
   const total          = sourceData.filter(v => !v._isManual).length;  // Conta só vendas reais
   const totalValid     = vendasFinanc.length;
@@ -9268,6 +9354,9 @@ function renderVendas(){
     // Adiciona contador de bloqueadas (só na planilha)
     if(blockedCount > 0){
       subText += ` · <span style="color:var(--red);font-weight:600" title="Vendas para estados bloqueados — só acompanhamento">🚫 ${blockedCount} estado${blockedCount>1?'s':''} bloqueado${blockedCount>1?'s':''}</span>`;
+    }
+    if(fakeCount > 0){
+      subText += ` · <span style="color:var(--amber);font-weight:600" title="Vendas marcadas como FAKE — não computadas no financeiro">⚠ ${fakeCount} fake${fakeCount>1?'s':''}</span>`;
     }
     // Info da última sync
     const meta = getSyncMeta();
@@ -9518,25 +9607,36 @@ function renderVendasPlanilha(items){
     const feeSrc = v.mlFeeSource === 'estimated' ? ' (estimada)' : '';
     const tooltipBruto = `Bruto: R$${v.total.toFixed(2).replace('.',',')}\nComissão ML${feeSrc}: -R$${(v.mlFee||0).toFixed(2).replace('.',',')}\nFrete vendedor: -R$${(v.shippingPaidBySeller||0).toFixed(2).replace('.',',')}\n────────\nLíquido: R$${totalLiq.toFixed(2).replace('.',',')}`;
 
-    // Vendas de estado bloqueado: linha cinza com badge especial, sem inputs editáveis
+    // Vendas de estado bloqueado ou Fake: linha especial sem inputs editáveis
     const isBlocked = v._isBlockedState === true;
-    const rowBg = isBlocked ? 'rgba(239,68,68,.04)' : (idx % 2 === 0 ? 'var(--bg2)' : '');
-    const rowOpacity = isBlocked ? '0.6' : '1';
+    const isFake = v._isFake === true;
+    const isExcluded = isBlocked || isFake;  // ambos são excluídos do financeiro
+    const rowBg = isFake ? 'rgba(245,158,11,.05)'  // amarelo fake
+                : isBlocked ? 'rgba(239,68,68,.04)' // vermelho bloqueado
+                : (idx % 2 === 0 ? 'var(--bg2)' : '');
+    const rowOpacity = isExcluded ? '0.6' : '1';
 
-    // Status para vendas bloqueadas: prefixa com 🚫
-    const statusLabel = isBlocked
-      ? `🚫 ${escapeHTML(v._blockedUF || 'Bloqueado')} · ${statusInfo.label}`
-      : statusInfo.label;
-    const statusColor = isBlocked ? 'var(--red)' : statusInfo.color;
+    // Label de status com prefixos
+    let statusLabel, statusColor;
+    if(isFake){
+      statusLabel = `⚠ FAKE · ${statusInfo.label}`;
+      statusColor = 'var(--amber)';
+    } else if(isBlocked){
+      statusLabel = `🚫 ${escapeHTML(v._blockedUF || 'Bloqueado')} · ${statusInfo.label}`;
+      statusColor = 'var(--red)';
+    } else {
+      statusLabel = statusInfo.label;
+      statusColor = statusInfo.color;
+    }
 
-    // Células financeiras: vazias para bloqueados
+    // Células financeiras: vazias para bloqueados/fake
     const isEstimated = v.mlFeeSource === 'estimated' && (v.mlFee || 0) > 0;
     const estIcon = isEstimated ? `<span style="color:var(--amber);font-size:9px;margin-left:3px" title="Comissão estimada (API ML não retornou)">~</span>` : '';
-    const totalCell = isBlocked
-      ? `<td style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px" title="Estado bloqueado — não calculamos valores financeiros">—</td>`
+    const totalCell = isExcluded
+      ? `<td style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px" title="${isFake ? 'Venda marcada como FAKE — não computada no financeiro' : 'Estado bloqueado — não calculamos valores financeiros'}">—</td>`
       : `<td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:600" title="${tooltipBruto}">${fmtBRL(totalLiq, false)}${estIcon}</td>`;
 
-    const invLucianoCell = isBlocked
+    const invLucianoCell = isExcluded
       ? `<td style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px">—</td>`
       : `<td style="padding:6px 8px;text-align:right">
           <input type="number" step="0.01" min="0" value="${invLuciano > 0 ? invLuciano.toFixed(2) : ''}"
@@ -9545,7 +9645,7 @@ function renderVendasPlanilha(items){
             style="width:90px;padding:3px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'DM Mono',monospace;font-size:11px;text-align:right">
         </td>`;
 
-    const invJohnnyCell = isBlocked
+    const invJohnnyCell = isExcluded
       ? `<td style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px">—</td>`
       : `<td style="padding:6px 8px;text-align:right">
           <input type="number" step="0.01" min="0" value="${invJohnny > 0 ? invJohnny.toFixed(2) : ''}"
@@ -9554,7 +9654,7 @@ function renderVendasPlanilha(items){
             style="width:90px;padding:3px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'DM Mono',monospace;font-size:11px;text-align:right">
         </td>`;
 
-    const lucroCell = isBlocked
+    const lucroCell = isExcluded
       ? `<td style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px">—</td>`
       : `<td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;color:${lucroColor}">${fmtBRL(lucro, false)}</td>`;
 
