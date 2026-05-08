@@ -6811,11 +6811,14 @@ function saveInvestimentos(){
 function getInvestimento(orderId, socio){
   return investimentosVendas[String(orderId)]?.[socio] ?? 0;
 }
+
+// Modo batch: quando setando muitos, evita salvar a cada chamada (resave manual no fim)
+let _investBatchMode = false;
 function setInvestimento(orderId, socio, value){
   const v = parseFloat(value) || 0;
   if(!investimentosVendas[String(orderId)]) investimentosVendas[String(orderId)] = {};
   investimentosVendas[String(orderId)][socio] = v;
-  saveInvestimentos();
+  if(!_investBatchMode) saveInvestimentos();
 }
 
 // Retiradas por venda (mesmo schema dos investimentos, storage separado)
@@ -7947,6 +7950,21 @@ async function saveLancamentoManual(lanc){
   });
 }
 
+// Batch: salva muitos lançamentos manuais em 1 só transação (muito mais rápido)
+async function saveLancamentosManuaisBatch(lancs){
+  if(!lancs || lancs.length === 0) return;
+  const db = await openVendasDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(MANUAL_STORE, 'readwrite');
+    const store = tx.objectStore(MANUAL_STORE);
+    for(const l of lancs){
+      try { store.put(l); } catch(e){ console.warn('Erro lanç batch:', l.id, e); }
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = (e) => reject(e.target.error);
+  });
+}
+
 async function deleteLancamentoManual(id){
   const db = await openVendasDB();
   return new Promise((resolve, reject) => {
@@ -8186,16 +8204,23 @@ async function importVendasFromXLSX(event){
   let totalInvestUpdated = 0;
   let totalFakes = 0;
 
-  for(const aba of abasSocio){
-    const result = parseAbaSocio(aba.aoa, aba.headerRow, aba.name, vendasMap);
-    totalLancManuais += result.lancamentosManuais.length;
-    totalInvestUpdated += result.investUpdated;
-    totalFakes += result.fakeCount;
+  // Ativa batch mode pra evitar 1 saveInvestimentos por linha
+  _investBatchMode = true;
+  try {
+    for(const aba of abasSocio){
+      const result = parseAbaSocio(aba.aoa, aba.headerRow, aba.name, vendasMap);
+      totalLancManuais += result.lancamentosManuais.length;
+      totalInvestUpdated += result.investUpdated;
+      totalFakes += result.fakeCount;
 
-    // Salva os lançamentos manuais detectados
-    for(const l of result.lancamentosManuais){
-      try { await saveLancamentoManual(l); } catch(e){ console.warn('Erro lanç:', e); }
+      // Salva os lançamentos manuais em paralelo (1 transação IndexedDB por aba)
+      if(result.lancamentosManuais.length > 0){
+        await saveLancamentosManuaisBatch(result.lancamentosManuais);
+      }
     }
+  } finally {
+    _investBatchMode = false;
+    saveInvestimentos();  // 1 única gravação no localStorage no final
   }
 
   const allVendas = Array.from(vendasMap.values());
@@ -9542,7 +9567,26 @@ function renderVendas(){
 // ──────────────────────────────────────────────────────────────────────
 // VISÃO PLANILHA — tabela completa estilo Excel com investimentos editáveis
 // ──────────────────────────────────────────────────────────────────────
+
+// Paginação client-side pra evitar trava com >500 itens
+const _planilhaPageSize = 200;
+let _planilhaPage = 1;
+
 function renderVendasPlanilha(items){
+  // Reset da página se mudou o dataset (heurística simples por tamanho)
+  if(items.length !== window._planilhaLastSize){
+    _planilhaPage = 1;
+    window._planilhaLastSize = items.length;
+  }
+
+  const totalItems = items.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / _planilhaPageSize));
+  if(_planilhaPage > totalPages) _planilhaPage = totalPages;
+
+  // Slice da página atual
+  const pageStart = (_planilhaPage - 1) * _planilhaPageSize;
+  const pageItems = items.slice(pageStart, pageStart + _planilhaPageSize);
+
   // Mapa de status → label amigável + cor
   const statusMap = {
     'paid':       { label: '💰 Pago',                       color: 'var(--green)' },
@@ -9562,7 +9606,7 @@ function renderVendasPlanilha(items){
     'handling':        { label: '⏳ Em processamento', color: 'var(--text3)' },
   };
 
-  const rows = items.map((v, idx) => {
+  const rows = pageItems.map((v, idx) => {
     // ── BRANCH: linha de lançamento manual (aporte/retirada/despesa/etc.) ──
     if(v._isManual){
       const t = TIPOS_LANCAMENTO[v.tipo] || TIPOS_LANCAMENTO.outro;
@@ -9655,10 +9699,10 @@ function renderVendasPlanilha(items){
         </td>`;
 
     const lucroCell = isExcluded
-      ? `<td style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px">—</td>`
-      : `<td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;color:${lucroColor}">${fmtBRL(lucro, false)}</td>`;
+      ? `<td class="lucro-cell" style="padding:6px 8px;text-align:center;color:var(--text3);font-style:italic;font-size:10px">—</td>`
+      : `<td class="lucro-cell" style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;color:${lucroColor}">${fmtBRL(lucro, false)}</td>`;
 
-    return `<tr style="border-bottom:1px solid var(--border);background:${rowBg};opacity:${rowOpacity}">
+    return `<tr data-order-id="${v.id}" style="border-bottom:1px solid var(--border);background:${rowBg};opacity:${rowOpacity}">
       <td style="padding:6px 8px;text-align:center;font-weight:600;font-family:'DM Mono',monospace">${qtd}</td>
       ${totalCell}
       ${invLucianoCell}
@@ -9712,16 +9756,56 @@ function renderVendasPlanilha(items){
       <tbody>${rows}</tbody>
     </table>
   </div>
+  ${totalPages > 1 ? `
+  <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:10px;padding:8px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;flex-wrap:wrap">
+    <button class="btn btn-sm" onclick="setPlanilhaPage(1)" ${_planilhaPage <= 1 ? 'disabled' : ''} style="font-size:11px;padding:4px 8px">⏮ Primeira</button>
+    <button class="btn btn-sm" onclick="setPlanilhaPage(${_planilhaPage - 1})" ${_planilhaPage <= 1 ? 'disabled' : ''} style="font-size:11px;padding:4px 8px">◀ Anterior</button>
+    <span style="font-size:11px;color:var(--text2);font-weight:600">Página ${_planilhaPage} de ${totalPages}</span>
+    <span style="font-size:10px;color:var(--text3)">(itens ${pageStart + 1}–${Math.min(pageStart + _planilhaPageSize, totalItems)} de ${totalItems})</span>
+    <button class="btn btn-sm" onclick="setPlanilhaPage(${_planilhaPage + 1})" ${_planilhaPage >= totalPages ? 'disabled' : ''} style="font-size:11px;padding:4px 8px">Próxima ▶</button>
+    <button class="btn btn-sm" onclick="setPlanilhaPage(${totalPages})" ${_planilhaPage >= totalPages ? 'disabled' : ''} style="font-size:11px;padding:4px 8px">Última ⏭</button>
+  </div>
+  ` : ''}
   <div style="margin-top:8px;padding:8px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;font-size:10px;color:var(--text3);line-height:1.5">
     ${importInfoHTML}💡 <strong>Fórmula:</strong> <code>Total ML</code> já é o valor LÍQUIDO recebido (Bruto − Comissão − Frete vendedor). <code>Lucro = Total ML − Inv. Luciano − Inv. Johnny</code>. <br>📋 Você pode preencher os investimentos manualmente nesta tela ou <strong>exportar a planilha, preencher no Excel e reimportar</strong> — só os campos com valor preenchido são aplicados.
   </div>`;
 }
 
+function setPlanilhaPage(p){
+  _planilhaPage = Math.max(1, p);
+  renderVendas();
+  // Scroll suave pro topo da lista
+  document.getElementById('vendas-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 // Atualiza investimento de uma venda (chamado pelo onchange dos inputs)
+// Não re-renderiza a tabela inteira (causa freeze com muitos itens).
+// Apenas atualiza as métricas do topo + a célula de Lucro da linha.
+let _updateInvDebounce = null;
 function updateInvestimento(orderId, socio, value){
   setInvestimento(orderId, socio, value);
-  // Re-renderiza só as métricas (mais leve que renderizar toda a tabela)
-  renderVendas();
+
+  // Recalcula só a célula de Lucro dessa linha (rápido)
+  const venda = (vendasDataFull || vendasData).find(v => String(v.id) === String(orderId));
+  if(venda){
+    const lucro = calcLucroVenda(venda);
+    const row = document.querySelector(`tr[data-order-id="${orderId}"]`);
+    if(row){
+      const lucroCell = row.querySelector('.lucro-cell');
+      if(lucroCell){
+        const lucroColor = lucro > 0 ? 'var(--green)' : (lucro < 0 ? 'var(--red)' : 'var(--text3)');
+        lucroCell.style.color = lucroColor;
+        lucroCell.textContent = fmtBRL(lucro, false);
+      }
+    }
+  }
+
+  // Atualiza métricas com debounce (evita travar com edição rápida)
+  clearTimeout(_updateInvDebounce);
+  _updateInvDebounce = setTimeout(() => {
+    if(typeof updateMetricsOnly === 'function') updateMetricsOnly();
+    else renderVendas();  // fallback
+  }, 300);
 }
 
 // Exporta planilha XLSX completa com todas as vendas
