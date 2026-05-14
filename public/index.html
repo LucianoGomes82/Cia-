@@ -579,11 +579,25 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
           <div style="font-size:11px;color:var(--text3)" id="oport-result-sub"></div>
-          <select class="sort-sel" id="oport-filter" onchange="renderOport()">
-            <option value="approved">✓ Aprovados (sem anúncio ML)</option>
-            <option value="all">Todos os produtos CIA</option>
-            <option value="margin">Maior margem</option>
-          </select>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <select class="sort-sel" id="oport-brand-filter" onchange="renderOport()" style="font-size:11px">
+              <option value="all">🏷 Todas as marcas</option>
+            </select>
+            <select class="sort-sel" id="oport-filter" onchange="renderOport()" style="font-size:11px">
+              <option value="approved">✓ Só aprovados</option>
+              <option value="all">Todos</option>
+            </select>
+            <select class="sort-sel" id="oport-sort" onchange="renderOport()" style="font-size:11px">
+              <option value="margin_desc">📈 Maior margem %</option>
+              <option value="margin_asc">📉 Menor margem %</option>
+              <option value="lucroRS_desc">💰 Maior lucro R$</option>
+              <option value="lucroRS_asc">💸 Menor lucro R$</option>
+              <option value="price_asc">⬇ Menor preço</option>
+              <option value="price_desc">⬆ Maior preço</option>
+              <option value="cost_asc">⬇ Menor custo CIA</option>
+              <option value="cost_desc">⬆ Maior custo CIA</option>
+            </select>
+          </div>
         </div>
         <div style="overflow-x:auto">
           <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -4405,61 +4419,104 @@ async function processTopSellersImage(event){
   }
 }
 
-// Heurística para extrair só os títulos de produto do texto bruto OCR
-// Filtra: navegação, marcas isoladas, preços, info de frete, etc.
+// Heurística para extrair títulos de produto + preço atual do ML do texto bruto OCR.
+// Retorna lista de strings no formato "TÍTULO | R$ PREÇO" (priceML opcional, se detectado).
+// O formato com `|` é usado para o usuário poder editar no textarea de forma legível.
 function extractProductTitles(rawText){
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // Junta linhas curtas seguidas (OCR às vezes quebra um título em 2-3 linhas)
-  const merged = [];
-  let buffer = '';
+  // Classifica cada linha: 'title' (provável título), 'price' (preço), 'noise' (ignorar)
+  const classified = [];
   for(const line of lines){
-    // Linhas que são RUÍDO conhecido — descarta
+    // RUÍDO
     if(/^(Mais vendidos|Marcas|Filtros|Categorias|Computers|Inform[áa]tica|Tablets e|Acess[óo]rios|Pix|Frete gr[áa]tis|Aplicar|Limpar|FULL|MAIS VENDIDO|veja mais|publicidade)$/i.test(line)) continue;
     if(/^\d+[ºª°]?\s*MAIS\s+VENDIDO/i.test(line)) continue;
-    if(/^R\$\s*[\d.,]+/i.test(line)) continue;          // preço solo
-    if(/^\d+x\s+R\$/i.test(line)) continue;             // parcelas
+    if(/^\d+x\s+R\$/i.test(line)) continue;             // parcelas (10x R$ 164,99)
     if(/^[+]?\d+\s*mil\s+vendidos$/i.test(line)) continue;
     if(/^\d+%\s*OFF/i.test(line)) continue;
     if(/^[★⭐]+/.test(line)) continue;
     if(/^\d+[.,]\d/.test(line) && line.length < 6) continue;
-    // Marcas isoladas (lista lateral)
     if(/^(Apple|Amiyo|Deasytech|Easytech|Hencdon|Lenovo|Mlli|Mlili|Mili|Multi|Positivo|Samsung|VTR ELETRONICS|Xiaomi|Motorola|Redmi|Honor|Realme|Tecno)$/i.test(line)) continue;
 
-    // Concatena linhas curtas que parecem continuação
+    // PREÇO: linha que começa com R$ (ou tem R$ logo no início, sem ser parcela)
+    // Captura padrões: "R$ 1.319", "R$ 1.500", "R$ 1.338"
+    const priceMatch = line.match(/^R\$\s*([\d.]+)(?:,\d+)?(?!\s*sem juros)/i);
+    if(priceMatch){
+      const priceStr = priceMatch[1].replace(/\./g, '');
+      const price = parseFloat(priceStr);
+      if(!isNaN(price) && price >= 50 && price <= 999999){
+        classified.push({ type: 'price', value: price, raw: line });
+        continue;
+      }
+    }
+    // Pode ter outras coisas antes do R$ mas não é o padrão de produto
+    if(/^R\$\s*[\d.,]+/i.test(line)) continue;
+
+    classified.push({ type: 'maybe_title', text: line });
+  }
+
+  // Junta linhas curtas seguidas (OCR às vezes quebra título em 2-3 linhas)
+  const merged = [];
+  let buffer = '';
+  for(const c of classified){
+    if(c.type === 'price'){
+      if(buffer){ merged.push({ type: 'title', text: buffer }); buffer = ''; }
+      merged.push(c);
+      continue;
+    }
+    const line = c.text;
     if(line.length < 30 && buffer && /^[a-z0-9,]/i.test(line)){
       buffer += ' ' + line;
       continue;
     }
-
-    if(buffer) merged.push(buffer);
+    if(buffer) merged.push({ type: 'title', text: buffer });
     buffer = line;
   }
-  if(buffer) merged.push(buffer);
+  if(buffer) merged.push({ type: 'title', text: buffer });
 
-  // Filtra apenas linhas que parecem título de produto
+  // Filtra títulos válidos e associa preço (o próximo preço após o título)
   const TITLE_HINTS = /tablet|celular|smartphone|smartwatch|fone|caixa|tv|notebook|monitor|impressora|game|console|playstation|xbox|nintendo|relógio|earphone|airpod/i;
   const BRAND_HINTS = /samsung|xiaomi|apple|iphone|ipad|motorola|redmi|poco|huawei|lg|sony|dell|asus|acer|lenovo|hp|jbl|nokia|positivo|amazfit|garmin/i;
 
-  const products = merged.filter(line => {
-    if(line.length < 15) return false;             // muito curto = não é título
-    if(line.length > 200) return false;            // muito longo = parágrafo
-    if(/^[A-Z\s]+$/.test(line)) return false;       // tudo maiúsculas = header
-    // Tem um indício de produto OU marca + número (ex: "Pad 2", "A11")
+  const isValidTitle = (line) => {
+    if(line.length < 15) return false;
+    if(line.length > 200) return false;
+    if(/^[A-Z\s]+$/.test(line)) return false;
     if(TITLE_HINTS.test(line)) return true;
     if(BRAND_HINTS.test(line) && /\d/.test(line)) return true;
     return false;
-  });
+  };
+
+  // Associa título → próximo preço que aparece (assumindo ordem: título, preço, parcelas, próximo título...)
+  const products = [];
+  for(let i = 0; i < merged.length; i++){
+    const item = merged[i];
+    if(item.type !== 'title') continue;
+    if(!isValidTitle(item.text)) continue;
+
+    // Procura próximo preço (próximo item com type='price')
+    let priceML = null;
+    for(let j = i + 1; j < merged.length && j < i + 4; j++){
+      if(merged[j].type === 'price'){ priceML = merged[j].value; break; }
+      if(merged[j].type === 'title' && isValidTitle(merged[j].text)) break; // parou em outro título
+    }
+
+    products.push({ title: item.text, priceML });
+  }
 
   // Remove duplicatas mantendo ordem
   const seen = new Set();
   const unique = [];
   for(const p of products){
-    const k = normKey(p);
+    const k = normKey(p.title);
     if(!seen.has(k)){ seen.add(k); unique.push(p); }
   }
 
-  return unique.slice(0, 50); // hard cap
+  // Retorna strings no formato "TÍTULO | R$ XXX" (priceML opcional pro user editar)
+  return unique.slice(0, 50).map(p => p.priceML
+    ? `${p.title} | R$ ${p.priceML.toFixed(0)}`
+    : p.title
+  );
 }
 
 // Cruza os produtos detectados com a lista CIA + calcula margem
@@ -4488,7 +4545,18 @@ async function analyzeTopSellersFromText(){
 
   // Para cada produto detectado, tenta match com lista CIA
   const results = [];
-  for(const titulo of lines){
+  for(const linha of lines){
+    // Parse "TÍTULO | R$ XXX" → separa título e preço ML (se houver)
+    let titulo = linha;
+    let priceML = null;
+    const sep = linha.lastIndexOf('|');
+    if(sep > 0){
+      titulo = linha.slice(0, sep).trim();
+      const priceStr = linha.slice(sep + 1).replace(/[R$\s.]/g, '').replace(',', '.').trim();
+      const p = parseFloat(priceStr);
+      if(!isNaN(p) && p > 0) priceML = p;
+    }
+
     const match = matchMLtoCIA(titulo);
     if(!match || !match.product || !match.product.minPrice) continue;
 
@@ -4499,14 +4567,35 @@ async function analyzeTopSellersFromText(){
     // Resolvendo P: P - (P*c + custosFixos) >= m * (P*c + custosFixos)
     // P * (1 - c*(1+m)) = (1+m) * custosFixos
     const denom = 1 - comissao * (1 + m);
-    let precoSug;
+    let precoBase;  // preço calculado pela margem mínima
     if(denom <= 0){
-      // Caso degenerado (comissão muito alta) — usa fallback simples
-      precoSug = Math.ceil(custosFixos * (1 + m) / 5) * 5;
+      precoBase = Math.ceil(custosFixos * (1 + m) / 5) * 5;
     } else {
-      precoSug = Math.ceil((custosFixos * (1 + m) / denom) / 5) * 5;
+      precoBase = Math.ceil((custosFixos * (1 + m) / denom) / 5) * 5;
     }
-    // Agora calcula custo total real usando o preço sugerido
+
+    // ── LÓGICA COMPETITIVA ───────────────────────────────────────────
+    // Se temos preço ML do print:
+    //   - Se precoBase > priceML → INVIÁVEL (não conseguimos competir mantendo margem mínima)
+    //   - Se precoBase ≤ priceML → ajusta pra priceML - 1% (mais competitivo, mais lucro)
+    let precoSug = precoBase;
+    let viavel = true;
+    let ajustadoCompetitivo = false;
+    if(priceML !== null && priceML > 0){
+      if(precoBase > priceML){
+        viavel = false;
+        precoSug = precoBase;  // mantém pro user ver o gap
+      } else {
+        // Ajusta pra 1% abaixo do preço ML → competitivo e mais lucro
+        const precoCompetitivo = Math.floor((priceML * 0.99) / 5) * 5;
+        if(precoCompetitivo > precoBase){
+          precoSug = precoCompetitivo;
+          ajustadoCompetitivo = true;
+        }
+      }
+    }
+
+    // Calcula custo total real usando o preço sugerido
     const custoML  = precoSug * comissao + taxaFixa + frete;
     const custoTot = custoCIA + custoML;
     const lucroRS  = precoSug - custoTot;
@@ -4516,22 +4605,30 @@ async function analyzeTopSellersFromText(){
       tituloDetectado: titulo,
       product: prod,
       custoCIA,
-      custoComissao: Math.round(precoSug * comissao),  // comissão real
+      custoComissao: Math.round(precoSug * comissao),
       custoFrete: Math.round(frete),
       custoML: Math.round(custoML),
       custoTot: Math.round(custoTot),
       precoSug,
+      precoBase,                          // preço pela margem mínima (referência)
+      priceML,                            // preço do ML detectado no print
       lucroRS: Math.round(lucroRS),
       lucroPct: Math.round(lucroPct * 10) / 10,
-      aprovado: lucroPct >= minMarg,
+      aprovado: viavel && lucroPct >= minMarg,
+      viavel,                             // se conseguimos competir
+      ajustadoCompetitivo,                // se preço foi ajustado pra ficar abaixo do ML
       score: match.score,
       storeCount: prod.storeCount,
     });
   }
 
   // Filtra: só os que tem custo (já garantido pelo filtro de match)
-  // Ordena por margem descendente (oportunidade)
-  results.sort((a, b) => (b.lucroPct || 0) - (a.lucroPct || 0));
+  // Ordena: aprovados primeiro, depois inviáveis por menor diferença
+  results.sort((a, b) => {
+    if(a.aprovado && !b.aprovado) return -1;
+    if(!a.aprovado && b.aprovado) return 1;
+    return (b.lucroPct || 0) - (a.lucroPct || 0);
+  });
 
   if(results.length === 0){
     setTopSellersStatus(`⚠ Nenhum dos ${lines.length} produtos detectados foi encontrado na sua lista CIA. Tente com outros prints ou verifique se sua lista está atualizada.`, 'var(--amber)');
@@ -4539,65 +4636,196 @@ async function analyzeTopSellersFromText(){
     return;
   }
 
-  setTopSellersStatus(`✓ ${results.length} match${results.length>1?'s':''} encontrado${results.length>1?'s':''} de ${lines.length} produtos detectados. ${results.filter(r=>r.aprovado).length} com margem aprovada (≥${minMarg}%).`, 'var(--green)');
+  const aprovadosCount = results.filter(r => r.aprovado).length;
+  const inviaveisCount = results.filter(r => !r.viavel).length;
+  let statusMsg = `✓ ${results.length} match${results.length>1?'s':''} de ${lines.length} produtos detectados. ${aprovadosCount} aprovado${aprovadosCount>1?'s':''} (≥${minMarg}%)`;
+  if(inviaveisCount > 0) statusMsg += `, ${inviaveisCount} inviável${inviaveisCount>1?'eis':''} (preço ML menor que custo).`;
+  setTopSellersStatus(statusMsg, 'var(--green)');
 
   renderTopSellersResults(results);
 }
+
+// Cache global pra filtros do OCR funcionarem
+let _topSellersResults = [];
+let _topSellersFilters = { brand: 'all', sort: 'margin_desc', onlyApproved: false, hideInvalid: true };
 
 function renderTopSellersResults(results){
   const container = document.getElementById('topsell-results');
   if(!container) return;
 
   if(!results || results.length === 0){
+    _topSellersResults = [];
     container.innerHTML = '';
     return;
   }
 
-  const cards = results.map((r, idx) => {
-    const lucroColor = r.lucroPct >= 20 ? 'var(--green)' : r.lucroPct >= 10 ? 'var(--blue)' : 'var(--amber)';
-    const aprovBadge = r.aprovado
-      ? `<span style="background:rgba(62,207,142,.15);color:var(--green);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">✓ APROVADO</span>`
-      : `<span style="background:rgba(245,158,11,.15);color:var(--amber);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">⚠ ABAIXO</span>`;
-    const lojas = r.product.offers?.filter(o=>o.price).map(o=>`${o.store.split(' ')[0]}: R$${o.price}`).slice(0,3).join(' · ') || '';
+  // Atualiza cache só quando recebe novos resultados (não vem só com filtro mudando)
+  if(results !== _topSellersResults){
+    _topSellersResults = results;
+  }
 
-    return `<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-top:8px;background:var(--bg2)">
-      <div style="font-size:18px;font-weight:700;color:var(--text3);min-width:28px;text-align:center">${idx + 1}º</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:13px;font-weight:600;line-height:1.3">${escapeHTML(r.product.name)}</div>
-        <div style="font-size:10px;color:var(--text3);margin-top:3px;font-style:italic">📷 detectado: ${escapeHTML(r.tituloDetectado.slice(0,80))}${r.tituloDetectado.length>80?'...':''}</div>
-        <div style="font-size:11px;color:var(--text2);margin-top:4px;font-family:'DM Mono',monospace" title="Comissão calculada sobre o preço sugerido (não sobre o custo)">
-          💰 Custo CIA: <strong>R$${r.custoCIA}</strong> · Comissão ML: R$${r.custoComissao||0} · Frete: R$${r.custoFrete||0} · <strong>Total: R$${r.custoTot}</strong>
-          ${r.storeCount > 1 ? ` · 🏪 ${r.storeCount} lojas` : ''}
-        </div>
-        ${lojas ? `<div style="font-size:10px;color:var(--text3);margin-top:2px">${escapeHTML(lojas)}</div>` : ''}
-      </div>
-      <div style="text-align:right;flex-shrink:0">
-        <div style="font-size:10px;color:var(--text3)">Sugestão</div>
-        <div style="font-size:15px;font-weight:700">R$ ${r.precoSug}</div>
-        <div style="font-size:11px;color:${lucroColor};font-weight:700;font-family:'DM Mono',monospace">+R$${r.lucroRS} · ${r.lucroPct}%</div>
-        <div style="margin-top:4px">${aprovBadge}</div>
-      </div>
-    </div>`;
-  }).join('');
+  // Extrai marcas únicas (primeira palavra do produto.name)
+  const brandsSet = new Set();
+  for(const r of _topSellersResults){
+    const firstWord = (r.product.name || '').trim().split(/\s+/)[0];
+    if(firstWord && firstWord.length > 1) brandsSet.add(firstWord);
+  }
+  const brands = ['all', ...Array.from(brandsSet).sort()];
+
+  // Aplica filtros
+  let filtered = _topSellersResults.filter(r => {
+    if(_topSellersFilters.hideInvalid && !r.viavel) return false;
+    if(_topSellersFilters.onlyApproved && !r.aprovado) return false;
+    if(_topSellersFilters.brand !== 'all'){
+      const firstWord = (r.product.name || '').trim().split(/\s+/)[0];
+      if(firstWord !== _topSellersFilters.brand) return false;
+    }
+    return true;
+  });
+
+  // Aplica ordenação
+  const sort = _topSellersFilters.sort;
+  filtered.sort((a, b) => {
+    if(sort === 'margin_desc')  return (b.lucroPct||0) - (a.lucroPct||0);
+    if(sort === 'margin_asc')   return (a.lucroPct||0) - (b.lucroPct||0);
+    if(sort === 'price_asc')    return (a.precoSug||0) - (b.precoSug||0);
+    if(sort === 'price_desc')   return (b.precoSug||0) - (a.precoSug||0);
+    if(sort === 'cost_asc')     return (a.custoCIA||0) - (b.custoCIA||0);
+    if(sort === 'cost_desc')    return (b.custoCIA||0) - (a.custoCIA||0);
+    if(sort === 'lucroRS_desc') return (b.lucroRS||0)  - (a.lucroRS||0);
+    if(sort === 'lucroRS_asc')  return (a.lucroRS||0)  - (b.lucroRS||0);
+    return 0;
+  });
 
   // Sumário
-  const aprovados = results.filter(r => r.aprovado).length;
-  const summary = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:6px">
+  const aprovados = _topSellersResults.filter(r => r.aprovado).length;
+  const inviaveis = _topSellersResults.filter(r => !r.viavel).length;
+  const margens = _topSellersResults.filter(r => r.viavel).map(r => r.lucroPct || 0);
+  const melhorMargem = margens.length > 0 ? Math.max(...margens) : 0;
+
+  const summary = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px">
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;text-align:center">
       <div style="font-size:9px;color:var(--text3);font-weight:600">DETECTADOS</div>
-      <div style="font-size:16px;font-weight:700;color:var(--text)">${results.length}</div>
+      <div style="font-size:16px;font-weight:700;color:var(--text)">${_topSellersResults.length}</div>
     </div>
     <div style="background:var(--bg2);border:1px solid var(--green);border-radius:6px;padding:8px;text-align:center">
       <div style="font-size:9px;color:var(--text3);font-weight:600">APROVADOS</div>
       <div style="font-size:16px;font-weight:700;color:var(--green)">${aprovados}</div>
     </div>
+    <div style="background:var(--bg2);border:1px solid ${inviaveis>0?'var(--red)':'var(--border)'};border-radius:6px;padding:8px;text-align:center" title="Produtos onde nosso preço mínimo é maior que o preço atual do anúncio ML — não compensa anunciar">
+      <div style="font-size:9px;color:var(--text3);font-weight:600">INVIÁVEIS</div>
+      <div style="font-size:16px;font-weight:700;color:${inviaveis>0?'var(--red)':'var(--text3)'}">${inviaveis}</div>
+    </div>
     <div style="background:var(--bg2);border:1px solid var(--blue);border-radius:6px;padding:8px;text-align:center">
       <div style="font-size:9px;color:var(--text3);font-weight:600">MELHOR MARGEM</div>
-      <div style="font-size:16px;font-weight:700;color:var(--blue)">${results[0]?.lucroPct || 0}%</div>
+      <div style="font-size:16px;font-weight:700;color:var(--blue)">${melhorMargem.toFixed(1)}%</div>
     </div>
   </div>`;
 
-  container.innerHTML = summary + cards;
+  // Barra de filtros
+  const brandOptions = brands.map(b =>
+    `<option value="${b}" ${b === _topSellersFilters.brand ? 'selected' : ''}>${b === 'all' ? '🏷 Todas as marcas' : `🏷 ${b}`}</option>`
+  ).join('');
+
+  const filtersHTML = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px">
+    <span style="font-size:10px;color:var(--text3);font-weight:600;letter-spacing:.5px">FILTROS:</span>
+
+    <select onchange="setTopSellersFilter('brand', this.value)" style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
+      ${brandOptions}
+    </select>
+
+    <select onchange="setTopSellersFilter('sort', this.value)" style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
+      <option value="margin_desc" ${_topSellersFilters.sort === 'margin_desc' ? 'selected' : ''}>📈 Maior margem %</option>
+      <option value="margin_asc"  ${_topSellersFilters.sort === 'margin_asc'  ? 'selected' : ''}>📉 Menor margem %</option>
+      <option value="lucroRS_desc" ${_topSellersFilters.sort === 'lucroRS_desc' ? 'selected' : ''}>💰 Maior lucro R$</option>
+      <option value="lucroRS_asc"  ${_topSellersFilters.sort === 'lucroRS_asc'  ? 'selected' : ''}>💸 Menor lucro R$</option>
+      <option value="price_asc"   ${_topSellersFilters.sort === 'price_asc'   ? 'selected' : ''}>⬇ Menor preço</option>
+      <option value="price_desc"  ${_topSellersFilters.sort === 'price_desc'  ? 'selected' : ''}>⬆ Maior preço</option>
+      <option value="cost_asc"    ${_topSellersFilters.sort === 'cost_asc'    ? 'selected' : ''}>⬇ Menor custo CIA</option>
+      <option value="cost_desc"   ${_topSellersFilters.sort === 'cost_desc'   ? 'selected' : ''}>⬆ Maior custo CIA</option>
+    </select>
+
+    <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2);cursor:pointer">
+      <input type="checkbox" ${_topSellersFilters.onlyApproved ? 'checked' : ''} onchange="setTopSellersFilter('onlyApproved', this.checked)" style="cursor:pointer">
+      Só aprovados
+    </label>
+
+    <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2);cursor:pointer" title="Esconde produtos onde o preço mínimo é maior que o preço atual do ML">
+      <input type="checkbox" ${_topSellersFilters.hideInvalid ? 'checked' : ''} onchange="setTopSellersFilter('hideInvalid', this.checked)" style="cursor:pointer">
+      Esconder inviáveis
+    </label>
+
+    <span style="margin-left:auto;font-size:10px;color:var(--text3);font-style:italic">Mostrando ${filtered.length} de ${_topSellersResults.length}</span>
+  </div>`;
+
+  // Cards filtrados/ordenados
+  const cards = filtered.length === 0
+    ? `<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px;background:var(--bg2);border:1px solid var(--border);border-radius:6px">Nenhum produto com os filtros aplicados.</div>`
+    : filtered.map((r, idx) => {
+      const lucroColor = !r.viavel ? 'var(--red)'
+                      : r.lucroPct >= 20 ? 'var(--green)'
+                      : r.lucroPct >= 10 ? 'var(--blue)'
+                      : 'var(--amber)';
+
+      // Badge principal
+      let mainBadge;
+      if(!r.viavel){
+        const diff = r.priceML ? (r.precoBase - r.priceML) : 0;
+        mainBadge = `<span style="background:rgba(239,68,68,.15);color:var(--red);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700" title="Seu preço mínimo (R$${r.precoBase}) é ${diff>0?'R$'+diff+' acima':'igual'} do preço atual do ML (R$${r.priceML}). Não compensa anunciar.">🚫 INVIÁVEL</span>`;
+      } else if(r.aprovado){
+        mainBadge = `<span style="background:rgba(62,207,142,.15);color:var(--green);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">✓ APROVADO</span>`;
+      } else {
+        mainBadge = `<span style="background:rgba(245,158,11,.15);color:var(--amber);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">⚠ ABAIXO</span>`;
+      }
+
+      // Badge "PREÇO COMPETITIVO" se foi ajustado pra baixo do ML
+      const competitivoBadge = (r.ajustadoCompetitivo && r.viavel)
+        ? `<span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700;margin-left:4px" title="Preço ajustado para 1% abaixo do menor anúncio ML — mais competitivo, mais lucro">💎 OTIMIZADO</span>`
+        : '';
+
+      const lojas = r.product.offers?.filter(o=>o.price).map(o=>`${o.store.split(' ')[0]}: R$${o.price}`).slice(0,3).join(' · ') || '';
+
+      // Linha do preço do ML detectado no print
+      let mlPriceLine = '';
+      if(r.priceML){
+        const corML = r.viavel ? 'var(--text3)' : 'var(--red)';
+        const iconML = r.viavel ? '🏷' : '⚠';
+        const gap = r.precoBase - r.priceML;
+        const gapText = !r.viavel ? ` (seu mínimo R$${r.precoBase} → +R$${gap} acima!)` : '';
+        mlPriceLine = `<div style="font-size:10px;color:${corML};margin-top:2px;font-family:'DM Mono',monospace">${iconML} ML atual: <strong>R$${r.priceML}</strong>${gapText}</div>`;
+      }
+
+      const cardBg = !r.viavel ? 'rgba(239,68,68,.04)' : 'var(--bg2)';
+      const cardBorder = !r.viavel ? '1px solid rgba(239,68,68,.3)' : '1px solid var(--border)';
+
+      return `<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border:${cardBorder};border-radius:8px;margin-top:8px;background:${cardBg};${!r.viavel?'opacity:0.7':''}">
+        <div style="font-size:18px;font-weight:700;color:var(--text3);min-width:28px;text-align:center">${idx + 1}º</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;line-height:1.3">${escapeHTML(r.product.name)}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:3px;font-style:italic">📷 detectado: ${escapeHTML(r.tituloDetectado.slice(0,80))}${r.tituloDetectado.length>80?'...':''}</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:4px;font-family:'DM Mono',monospace" title="Comissão calculada sobre o preço sugerido (não sobre o custo)">
+            💰 Custo CIA: <strong>R$${r.custoCIA}</strong> · Comissão ML: R$${r.custoComissao||0} · Frete: R$${r.custoFrete||0} · <strong>Total: R$${r.custoTot}</strong>
+            ${r.storeCount > 1 ? ` · 🏪 ${r.storeCount} lojas` : ''}
+          </div>
+          ${mlPriceLine}
+          ${lojas ? `<div style="font-size:10px;color:var(--text3);margin-top:2px">${escapeHTML(lojas)}</div>` : ''}
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:10px;color:var(--text3)">${r.ajustadoCompetitivo ? 'Sugerido (competitivo)' : 'Sugerido'}</div>
+          <div style="font-size:15px;font-weight:700;color:${!r.viavel?'var(--red)':'var(--text)'}">R$ ${r.precoSug}</div>
+          <div style="font-size:11px;color:${lucroColor};font-weight:700;font-family:'DM Mono',monospace">${r.lucroRS >= 0 ? '+' : '−'}R$${Math.abs(r.lucroRS)} · ${r.lucroPct}%</div>
+          <div style="margin-top:4px">${mainBadge}${competitivoBadge}</div>
+        </div>
+      </div>`;
+    }).join('');
+
+  container.innerHTML = summary + filtersHTML + cards;
+}
+
+// Helper para mudar filtros e re-renderizar
+function setTopSellersFilter(key, value){
+  _topSellersFilters[key] = value;
+  renderTopSellersResults(_topSellersResults);
 }
 
 async function searchOport(){
@@ -4761,33 +4989,74 @@ function processOportItems(items, catLabel, q, type){
 }
 
 function renderOport(){
-  const filter = document.getElementById('oport-filter')?.value || 'approved';
-  const tbody  = document.getElementById('oport-list');
-  const empty  = document.getElementById('oport-empty');
+  const filter      = document.getElementById('oport-filter')?.value || 'approved';
+  const sortBy      = document.getElementById('oport-sort')?.value || 'margin_desc';
+  const brandFilter = document.getElementById('oport-brand-filter')?.value || 'all';
+  const tbody       = document.getElementById('oport-list');
+  const empty       = document.getElementById('oport-empty');
   if(!tbody) return;
 
+  // Popula opções de marca dinamicamente (primeira palavra do produto/título)
+  const brandSelect = document.getElementById('oport-brand-filter');
+  if(brandSelect && oportunidades.length > 0){
+    const brandsSet = new Set();
+    for(const o of oportunidades){
+      // Tenta pegar do match.product.name primeiro (mais confiável)
+      const name = o._match?.product?.name || o.title || '';
+      const firstWord = name.trim().split(/\s+/)[0];
+      if(firstWord && firstWord.length > 1) brandsSet.add(firstWord);
+    }
+    const currentValue = brandSelect.value;
+    const opts = ['<option value="all">🏷 Todas as marcas</option>'];
+    for(const b of Array.from(brandsSet).sort()){
+      opts.push(`<option value="${escapeHTML(b)}">🏷 ${escapeHTML(b)}</option>`);
+    }
+    brandSelect.innerHTML = opts.join('');
+    brandSelect.value = currentValue || 'all';
+  }
+
   let items = [...oportunidades];
+
+  // Filtro de marca
+  if(brandFilter !== 'all'){
+    items = items.filter(o => {
+      const name = o._match?.product?.name || o.title || '';
+      return name.trim().split(/\s+/)[0] === brandFilter;
+    });
+  }
+
+  // Filtro principal (aprovado / todos)
   if(filter === 'approved'){
     items = items.filter(o => o._aprovado && !o._jaVende);
-    items.sort((a,b) => (b._lucroPct||0)-(a._lucroPct||0));
-  } else if(filter === 'margin'){
-    items.sort((a,b) => (b._lucroPct||0)-(a._lucroPct||0));
-  } else {
-    // Todos: primeiro sem anúncio + aprovado, depois o resto
-    items.sort((a,b) => {
-      if(!a._jaVende && b._jaVende) return -1;
-      if(a._jaVende && !b._jaVende) return 1;
-      if(a._aprovado && !b._aprovado) return -1;
-      if(!a._aprovado && b._aprovado) return 1;
-      return (b._lucroPct||0)-(a._lucroPct||0);
-    });
+  }
+
+  // Ordenação
+  items.sort((a, b) => {
+    if(sortBy === 'margin_desc')  return (b._lucroPct||0) - (a._lucroPct||0);
+    if(sortBy === 'margin_asc')   return (a._lucroPct||0) - (b._lucroPct||0);
+    if(sortBy === 'lucroRS_desc') return (b._lucroRS||0)  - (a._lucroRS||0);
+    if(sortBy === 'lucroRS_asc')  return (a._lucroRS||0)  - (b._lucroRS||0);
+    if(sortBy === 'price_asc')    return (a.price||0)     - (b.price||0);
+    if(sortBy === 'price_desc')   return (b.price||0)     - (a.price||0);
+    if(sortBy === 'cost_asc')     return (a._custoCIA||0) - (b._custoCIA||0);
+    if(sortBy === 'cost_desc')    return (b._custoCIA||0) - (a._custoCIA||0);
+    return 0;
+  });
+
+  // Atualiza o subtitle com contagem
+  const subEl = document.getElementById('oport-result-sub');
+  if(subEl){
+    let txt = `${items.length} de ${oportunidades.length} produtos`;
+    if(brandFilter !== 'all') txt += ` · 🏷 ${brandFilter}`;
+    if(filter === 'approved') txt += ` · ✓ aprovados`;
+    subEl.textContent = txt;
   }
 
   if(!items.length){
     tbody.innerHTML='';
     empty.style.display='block';
-    empty.textContent = filter==='approved'
-      ? 'Nenhum produto com margem aprovada sem anúncio ML. Tente o filtro "Todos".'
+    empty.textContent = (filter==='approved' || brandFilter !== 'all')
+      ? 'Nenhum produto com os filtros aplicados. Tente ajustar.'
       : 'Nenhum produto encontrado.';
     return;
   }
