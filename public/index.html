@@ -4647,12 +4647,13 @@ async function analyzeTopSellersFromText(){
     // Se temos preço ML do print:
     //   - Calculamos precoCompetitivo = ML × 0.99 (1% abaixo do mercado)
     //   - Se precoCompetitivo < precoBase → INVIÁVEL (margem ficará abaixo da mínima)
-    //     → SUGERIDO = precoCompetitivo (pra você ver o que aconteceria se tentasse competir)
     //   - Se precoCompetitivo >= precoBase → VIÁVEL
-    //     → SUGERIDO = precoCompetitivo (otimizado pra mais lucro)
+    // Se NÃO temos preço ML (usuário colou só títulos sem preço):
+    //   - Marca como SEM_REFERENCIA — não podemos competir sem saber o preço atual
     let precoSug = precoBase;
     let viavel = true;
     let ajustadoCompetitivo = false;
+    let semReferencia = false;
     if(priceML !== null && priceML > 0){
       // 1% abaixo do ML, arredondado pro múltiplo de 5 mais próximo (pra baixo, mais agressivo)
       const precoCompetitivo = Math.floor((priceML * 0.99) / 5) * 5;
@@ -4662,6 +4663,8 @@ async function analyzeTopSellersFromText(){
       if(precoCompetitivo < precoBase){
         viavel = false;
       }
+    } else {
+      semReferencia = true;
     }
 
     // Calcula custo total real usando o preço sugerido
@@ -4679,44 +4682,70 @@ async function analyzeTopSellersFromText(){
       custoML: Math.round(custoML),
       custoTot: Math.round(custoTot),
       precoSug,
-      precoBase,                          // preço pela margem mínima (referência)
-      priceML,                            // preço do ML detectado no print
+      precoBase,
+      priceML,
       lucroRS: Math.round(lucroRS),
       lucroPct: Math.round(lucroPct * 10) / 10,
-      aprovado: viavel && lucroPct >= minMarg,
-      viavel,                             // se conseguimos competir
-      ajustadoCompetitivo,                // se preço foi ajustado pra ficar abaixo do ML
+      // Aprovado: só se temos referência E margem ≥ mínima E viável
+      aprovado: !semReferencia && viavel && lucroPct >= minMarg,
+      viavel,
+      semReferencia,
+      ajustadoCompetitivo,
       score: match.score,
       storeCount: prod.storeCount,
     });
   }
 
-  // Filtra: só os que tem custo (já garantido pelo filtro de match)
-  // Ordena: aprovados primeiro, depois inviáveis por menor diferença
-  results.sort((a, b) => {
+  // ── DEDUPLICAÇÃO: se múltiplos títulos no textarea batem com o mesmo produto CIA,
+  //    mantém apenas UMA entrada (prioridade: com preço ML > viável > maior margem)
+  const byProductId = new Map();
+  for(const r of results){
+    const key = r.product.id || r.product.name;
+    const existing = byProductId.get(key);
+    if(!existing){
+      byProductId.set(key, r);
+      continue;
+    }
+    // Critério: prefere a que TEM priceML
+    if(r.priceML && !existing.priceML){ byProductId.set(key, r); continue; }
+    if(existing.priceML && !r.priceML) continue;
+    // Ambas com ou sem priceML → fica com a viável; se ambas viáveis, maior lucro
+    if(r.viavel && !existing.viavel){ byProductId.set(key, r); continue; }
+    if(existing.viavel && !r.viavel) continue;
+    if((r.lucroPct || 0) > (existing.lucroPct || 0)) byProductId.set(key, r);
+  }
+  const dedupResults = Array.from(byProductId.values());
+
+  // Ordena: aprovados primeiro, depois sem-referência, depois inviáveis
+  dedupResults.sort((a, b) => {
     if(a.aprovado && !b.aprovado) return -1;
     if(!a.aprovado && b.aprovado) return 1;
+    if(a.semReferencia && !b.semReferencia) return 1;
+    if(!a.semReferencia && b.semReferencia) return -1;
     return (b.lucroPct || 0) - (a.lucroPct || 0);
   });
 
-  if(results.length === 0){
-    setTopSellersStatus(`⚠ Nenhum dos ${lines.length} produtos detectados foi encontrado na sua lista CIA com confiança ≥70%. Verifique se sua lista CIA está atualizada ou se os títulos no textarea estão completos (com modelo, GB, cor).`, 'var(--amber)');
+  if(dedupResults.length === 0){
+    setTopSellersStatus(`⚠ Nenhum dos ${lines.length} produtos detectados foi encontrado na sua lista CIA com confiança ≥80%. Verifique se sua lista CIA está atualizada ou se os títulos no textarea estão completos (com modelo, GB, cor).`, 'var(--amber)');
     document.getElementById('topsell-results').innerHTML = '';
     return;
   }
 
-  const aprovadosCount = results.filter(r => r.aprovado).length;
-  const inviaveisCount = results.filter(r => !r.viavel).length;
-  let statusMsg = `✓ ${results.length} match${results.length>1?'s':''} (≥70% confiança) de ${lines.length} produtos no textarea. ${aprovadosCount} aprovado${aprovadosCount>1?'s':''} (margem ≥${minMarg}%)`;
-  if(inviaveisCount > 0) statusMsg += `, ${inviaveisCount} inviável${inviaveisCount>1?'eis':''} (custo > ML).`;
+  const aprovadosCount = dedupResults.filter(r => r.aprovado).length;
+  const inviaveisCount = dedupResults.filter(r => !r.viavel && !r.semReferencia).length;
+  const semRefCount    = dedupResults.filter(r => r.semReferencia).length;
+  let statusMsg = `✓ ${dedupResults.length} produto${dedupResults.length>1?'s':''} único${dedupResults.length>1?'s':''} matched (≥80% confiança) de ${lines.length} linhas. ${aprovadosCount} aprovado${aprovadosCount>1?'s':''} (margem ≥${minMarg}%)`;
+  if(inviaveisCount > 0) statusMsg += `, ${inviaveisCount} inviável${inviaveisCount>1?'eis':''} (custo > ML)`;
+  if(semRefCount > 0)    statusMsg += `, ${semRefCount} sem referência de preço`;
+  statusMsg += '.';
   setTopSellersStatus(statusMsg, 'var(--green)');
 
-  renderTopSellersResults(results);
+  renderTopSellersResults(dedupResults);
 }
 
 // Cache global pra filtros do OCR funcionarem
 let _topSellersResults = [];
-let _topSellersFilters = { brand: 'all', sort: 'margin_desc', onlyApproved: false, hideInvalid: true };
+let _topSellersFilters = { brand: 'all', sort: 'margin_desc', onlyApproved: false, hideInvalid: true, hideNoRef: false };
 
 function renderTopSellersResults(results){
   const container = document.getElementById('topsell-results');
@@ -4743,7 +4772,8 @@ function renderTopSellersResults(results){
 
   // Aplica filtros
   let filtered = _topSellersResults.filter(r => {
-    if(_topSellersFilters.hideInvalid && !r.viavel) return false;
+    if(_topSellersFilters.hideInvalid && !r.viavel && !r.semReferencia) return false;
+    if(_topSellersFilters.hideNoRef && r.semReferencia) return false;
     if(_topSellersFilters.onlyApproved && !r.aprovado) return false;
     if(_topSellersFilters.brand !== 'all'){
       const firstWord = (r.product.name || '').trim().split(/\s+/)[0];
@@ -4768,11 +4798,12 @@ function renderTopSellersResults(results){
 
   // Sumário
   const aprovados = _topSellersResults.filter(r => r.aprovado).length;
-  const inviaveis = _topSellersResults.filter(r => !r.viavel).length;
-  const margens = _topSellersResults.filter(r => r.viavel).map(r => r.lucroPct || 0);
+  const inviaveis = _topSellersResults.filter(r => !r.viavel && !r.semReferencia).length;
+  const semRef    = _topSellersResults.filter(r => r.semReferencia).length;
+  const margens = _topSellersResults.filter(r => r.viavel && !r.semReferencia).map(r => r.lucroPct || 0);
   const melhorMargem = margens.length > 0 ? Math.max(...margens) : 0;
 
-  const summary = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px">
+  const summary = `<div style="display:grid;grid-template-columns:repeat(${semRef > 0 ? 5 : 4},1fr);gap:8px;margin-bottom:8px">
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;text-align:center">
       <div style="font-size:9px;color:var(--text3);font-weight:600">DETECTADOS</div>
       <div style="font-size:16px;font-weight:700;color:var(--text)">${_topSellersResults.length}</div>
@@ -4785,6 +4816,10 @@ function renderTopSellersResults(results){
       <div style="font-size:9px;color:var(--text3);font-weight:600">INVIÁVEIS</div>
       <div style="font-size:16px;font-weight:700;color:${inviaveis>0?'var(--red)':'var(--text3)'}">${inviaveis}</div>
     </div>
+    ${semRef > 0 ? `<div style="background:var(--bg2);border:1px solid var(--amber);border-radius:6px;padding:8px;text-align:center" title="Produtos sem preço ML informado no textarea — não dá pra validar competitividade. Adicione ' | R$ XXX' nas linhas.">
+      <div style="font-size:9px;color:var(--text3);font-weight:600">SEM REF.</div>
+      <div style="font-size:16px;font-weight:700;color:var(--amber)">${semRef}</div>
+    </div>` : ''}
     <div style="background:var(--bg2);border:1px solid var(--blue);border-radius:6px;padding:8px;text-align:center">
       <div style="font-size:9px;color:var(--text3);font-weight:600">MELHOR MARGEM</div>
       <div style="font-size:16px;font-weight:700;color:var(--blue)">${melhorMargem.toFixed(1)}%</div>
@@ -4824,6 +4859,11 @@ function renderTopSellersResults(results){
       Esconder inviáveis
     </label>
 
+    <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2);cursor:pointer" title="Esconde produtos onde o preço ML não foi informado (não dá pra validar competitividade)">
+      <input type="checkbox" ${_topSellersFilters.hideNoRef ? 'checked' : ''} onchange="setTopSellersFilter('hideNoRef', this.checked)" style="cursor:pointer">
+      Esconder sem ref.
+    </label>
+
     <span style="margin-left:auto;font-size:10px;color:var(--text3);font-style:italic">Mostrando ${filtered.length} de ${_topSellersResults.length}</span>
   </div>`;
 
@@ -4838,7 +4878,9 @@ function renderTopSellersResults(results){
 
       // Badge principal
       let mainBadge;
-      if(!r.viavel){
+      if(r.semReferencia){
+        mainBadge = `<span style="background:rgba(245,158,11,.15);color:var(--amber);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700" title="Você não informou o preço do ML pra este produto. Adicione ' | R$ XXX' na linha do textarea para validar competitividade.">⚠ SEM REFERÊNCIA</span>`;
+      } else if(!r.viavel){
         const diff = r.priceML ? (r.precoBase - r.priceML) : 0;
         mainBadge = `<span style="background:rgba(239,68,68,.15);color:var(--red);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700" title="Seu preço mínimo (R$${r.precoBase}) é ${diff>0?'R$'+diff+' acima':'igual'} do preço atual do ML (R$${r.priceML}). Não compensa anunciar.">🚫 INVIÁVEL</span>`;
       } else if(r.aprovado){
