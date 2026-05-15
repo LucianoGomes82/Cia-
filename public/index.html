@@ -7500,7 +7500,7 @@ const TIPOS_LANCAMENTO = {
 // ──────────────────────────────────────────────────────────────────────
 async function diagnosticarVenda(orderId){
   if(!orderId){
-    orderId = prompt('Digite o N.º da venda para diagnosticar:');
+    orderId = prompt('Digite o N.º da venda (pack_id ou order_id) para diagnosticar:');
     if(!orderId) return;
   }
   orderId = String(orderId).trim();
@@ -7510,17 +7510,43 @@ async function diagnosticarVenda(orderId){
     return;
   }
 
-  // Tenta encontrar no dataset local primeiro
+  // Tenta encontrar no dataset local primeiro — busca por id OU pack_id
   const dataset = vendasDataFull || vendasData;
-  const localVenda = dataset.find(v => String(v.id) === orderId);
+  const localVenda = dataset.find(v =>
+    String(v.id) === orderId || String(v.pack_id || '') === orderId
+  );
 
-  // Busca via API pra ver dados crus
+  // Busca via API pra ver dados crus.
+  // Estratégia: tenta /orders/{id} primeiro; se 404 e o ID parece pack (formato 2000...),
+  // tenta /packs/{id} e busca o primeiro order do pack via /orders/{order_id}.
   let apiData = null;
   let apiError = null;
+  let resolvedFrom = null;  // 'order' | 'pack' — pra mostrar no relatório
   try {
     const r = await proxyFetch(`/orders/${orderId}`);
     if(r.ok){
       apiData = await r.json();
+      resolvedFrom = 'order';
+    } else if(r.status === 404 && /^2000\d+$/.test(orderId)){
+      // Pode ser pack_id — tenta resolver
+      const rp = await proxyFetch(`/packs/${orderId}`);
+      if(rp.ok){
+        const pack = await rp.json();
+        const firstOrderId = pack?.orders?.[0]?.id;
+        if(firstOrderId){
+          const r2 = await proxyFetch(`/orders/${firstOrderId}`);
+          if(r2.ok){
+            apiData = await r2.json();
+            resolvedFrom = 'pack';
+          } else {
+            apiError = `Pack encontrado mas /orders/${firstOrderId} retornou HTTP ${r2.status}`;
+          }
+        } else {
+          apiError = 'Pack encontrado mas sem orders dentro';
+        }
+      } else {
+        apiError = `HTTP ${r.status} em /orders/ e HTTP ${rp.status} em /packs/`;
+      }
     } else {
       apiError = `HTTP ${r.status}`;
     }
@@ -7537,6 +7563,8 @@ async function diagnosticarVenda(orderId){
   // Dados locais (do storage do app)
   if(localVenda){
     lines.push('📦 Dados LOCAIS (no app):');
+    lines.push(`  id: ${localVenda.id}`);
+    lines.push(`  pack_id: ${localVenda.pack_id || '(VAZIO)'}`);
     lines.push(`  date_created: ${localVenda.date_created || '(VAZIO)'}`);
     lines.push(`  status: ${localVenda.status} / substatus: ${localVenda.shipment?.substatus || localVenda.substatus || '(nenhum)'}`);
     lines.push(`  total: R$ ${(localVenda.total||0).toFixed(2)}`);
@@ -7557,7 +7585,9 @@ async function diagnosticarVenda(orderId){
   if(apiError){
     lines.push(`❌ Erro ao buscar via API: ${apiError}`);
   } else if(apiData){
-    lines.push('🌐 Dados CRUS da API ML:');
+    lines.push(`🌐 Dados CRUS da API ML${resolvedFrom === 'pack' ? ' (via /packs/ → /orders/)' : ''}:`);
+    lines.push(`  order.id: ${apiData.id || '(VAZIO)'}`);
+    lines.push(`  pack_id:  ${apiData.pack_id || '(NULL)'}`);
     lines.push(`  date_created: ${apiData.date_created || '(VAZIO)'}`);
     lines.push(`  date_closed: ${apiData.date_closed || '(VAZIO)'}`);
     lines.push(`  date_last_modified: ${apiData.date_last_modified || '(VAZIO)'}`);
@@ -7573,6 +7603,12 @@ async function diagnosticarVenda(orderId){
     lines.push('');
     lines.push(`  → Data resolvida pelo helper: ${getOrderDate(apiData) || '(VAZIO)'}`);
   }
+
+  // Cria o modal (estava sem declaração — bug que travava o Debug)
+  const modal = document.createElement('div');
+  modal.setAttribute('data-diag-modal', '1');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px';
+  modal.addEventListener('click', (e) => { if(e.target === modal) modal.remove(); });
 
   // Salva o relatório num atributo data-* (não escapa em template literal — mais seguro)
   const reportText = lines.join('\n');
@@ -8179,6 +8215,7 @@ async function syncVendas(force = false){
 
       return {
         id: order.id,
+        pack_id: order.pack_id || null,
         date_created: getOrderDate(order),
         date_closed:  order.date_closed,
         date_estimated: shipment?.shipping_option?.estimated_delivery_final?.date
@@ -8971,6 +9008,7 @@ function parseAbaML(aoa, headerRow){
 
     vendas.push({
       id: orderId,
+      pack_id: orderId,   // "N.º de venda" do XLSX do ML é o pack_id
       date_created: dateISO,
       status: normalizedStatus,
       substatus: normalizedSubstatus,
@@ -9444,6 +9482,7 @@ function orderToVenda(order){
 
   return {
     id: String(order.id),
+    pack_id: order.pack_id ? String(order.pack_id) : null,
     date_created: getOrderDate(order),
     status: order.status,
     substatus: order.shipping?.substatus || null,
@@ -9619,6 +9658,7 @@ async function loadAllVendasForPlanilha(){
 
       return {
         id: order.id,
+        pack_id: order.pack_id || null,
         date_created: getOrderDate(order),
         status: order.status,
         substatus: null, // sem shipment fetch
@@ -10105,7 +10145,7 @@ function renderVendas(){
           <span>📍 ${cidade}</span>
           ${v.color ? `<span>🎨 ${v.color}</span>` : ''}
           <span>${logistic.icon} ${logistic.label}</span>
-          <span style="font-family:'DM Mono',monospace">#${v.id}</span>
+          <span style="font-family:'DM Mono',monospace" title="Pack ID (mostrado no painel ML)${v.pack_id && String(v.pack_id) !== String(v.id) ? ` · Order ID interno: ${v.id}` : ''}">#${v.pack_id || v.id}</span>
           ${labelBadge}
         </div>
         ${invoiceMessage}
@@ -10272,8 +10312,9 @@ function renderVendasPlanilha(items){
       ${invJohnnyCell}
       ${lucroCell}
       <td style="padding:6px 8px">
-        <a href="https://www.mercadolivre.com.br/vendas/${v.id}/detalhe" target="_blank" rel="noopener"
-          style="color:var(--blue);text-decoration:none;font-family:'DM Mono',monospace;font-size:10px">${v.id}</a>
+        <a href="https://www.mercadolivre.com.br/vendas/${v.pack_id || v.id}/detalhe" target="_blank" rel="noopener"
+          style="color:var(--blue);text-decoration:none;font-family:'DM Mono',monospace;font-size:10px"
+          title="${v.pack_id && String(v.pack_id) !== String(v.id) ? `Order ID interno: ${v.id}` : ''}">${v.pack_id || v.id}</a>
       </td>
       <td style="padding:6px 8px;font-size:11px">${escapeHTML(titulo.slice(0,50))}${titulo.length>50?'...':''}</td>
       <td style="padding:6px 8px;font-size:11px">${escapeHTML(buyerName)}</td>
@@ -13205,6 +13246,22 @@ loadLancamentosManuais().catch(() => {});
 // Carrega vendas importadas (IndexedDB) em background pra ficarem prontas na visão Planilha
 loadImportedVendas().then(imported => {
   if(imported && imported.length > 0){
+    // Migração: vendas antigas (importadas antes do patch de pack_id) não têm o campo.
+    // No XLSX do ML, "N.º de venda" é o pack_id — então o id já é o pack_id.
+    // Pra vendas da API antigas, sem outra info, copia também (melhor que null pra mesclagem).
+    let backfilled = 0;
+    for(const v of imported){
+      if(v && !v.pack_id && v.id){
+        v.pack_id = String(v.id);
+        backfilled++;
+      }
+    }
+    if(backfilled > 0){
+      console.log(`[migration] Backfill de pack_id em ${backfilled} vendas antigas.`);
+      // Persiste a migração de volta no IndexedDB (silencioso)
+      try { saveImportedVendas(imported).catch(() => {}); } catch {}
+    }
+
     // Re-aplica flags de estado bloqueado (cfg.blockedStates pode ter mudado)
     applyBlockedStateFlags(imported);
     vendasDataFull = imported;
