@@ -13252,23 +13252,7 @@ updateAutoLoadStatus();
   }
 })();
 
-// Atualiza contador de perguntas em background quando ML está conectado
-(async () => {
-  if(!cfg.at) return;
-  setTimeout(async () => {
-    try {
-      const r = await proxyFetch('/my/received_questions/search?status=UNANSWERED&limit=50');
-      if(!r.ok) return;
-      const data = await r.json();
-      const total = (data.questions || []).length;
-      const badge = document.getElementById('perguntas-badge');
-      if(badge && total > 0){
-        badge.style.display = 'inline-block';
-        badge.textContent = total >= 50 ? '50+' : total;
-      }
-    } catch(e){}
-  }, 2000);
-})();
+// Aba Perguntas foi removida (integrada em Vendas). Sem fetch de /my/received_questions.
 
 // Pré-carrega exemplos reais no testador
 document.getElementById('debug-input').value = `Loja: Loja Exemplo
