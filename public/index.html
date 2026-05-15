@@ -250,6 +250,17 @@ input:focus,select:focus{border-color:var(--green)}
 .sec{font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px}
 .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border2);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulseMsg{
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,.6); transform: scale(1); }
+  50%      { box-shadow: 0 0 0 6px rgba(239,68,68,0);   transform: scale(1.05); }
+}
+.msg-btn-unread {
+  animation: pulseMsg 1.5s ease-in-out infinite;
+  background: rgba(239,68,68,.15) !important;
+  color: var(--red) !important;
+  border-color: var(--red) !important;
+  font-weight: 700;
+}
 
 /* ── ML ───────────────────────────────────────────────── */
 .mlrow{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid rgba(255,255,255,.04)}
@@ -299,11 +310,9 @@ input:focus,select:focus{border-color:var(--green)}
   <button class="tab" onclick="switchTab('lojas')">Lojas</button>
   <button class="tab" onclick="switchTab('ml')">Mercado Livre</button>
   <button class="tab" onclick="switchTab('oport')">🎯 Oportunidades</button>
-  <button class="tab" onclick="switchTab('perguntas')">❓ Perguntas <span id="perguntas-badge" style="display:none;background:var(--red);color:white;font-size:10px;padding:1px 6px;border-radius:10px;margin-left:4px;font-weight:700">0</span></button>
   <button class="tab" onclick="switchTab('estoque')">📦 Estoque</button>
   <button class="tab" onclick="switchTab('compras')">🛒 Lista de Compras</button>
-  <button class="tab" onclick="switchTab('vendas')">💰 Vendas</button>
-  <button class="tab" onclick="switchTab('posvenda')">💬 Pós-venda <span id="posvenda-badge" style="display:none;background:var(--red);color:white;font-size:10px;padding:1px 6px;border-radius:10px;margin-left:4px;font-weight:700">0</span></button>
+  <button class="tab" onclick="switchTab('vendas')">💰 Vendas <span id="vendas-msg-badge" style="display:none;background:var(--red);color:white;font-size:10px;padding:1px 6px;border-radius:10px;margin-left:4px;font-weight:700">0</span></button>
   <button class="tab" onclick="switchTab('anunciar')">📝 Anunciar</button>
   <button class="tab" onclick="switchTab('config')">Config</button>
 </div>
@@ -1840,9 +1849,12 @@ function clearData(){ if(!confirm('Apagar todos os dados?')) return; localStorag
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
 function switchTab(id){
-  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['import','comparar','lojas','ml','oport','perguntas','estoque','compras','vendas','posvenda','anunciar','config'][i]===id));
+  // Redireciona abas removidas pra Vendas (perguntas e posvenda foram integradas)
+  if(id === 'perguntas' || id === 'posvenda') id = 'vendas';
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['import','comparar','lojas','ml','oport','estoque','compras','vendas','anunciar','config'][i]===id));
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-  document.getElementById('tab-'+id).classList.add('active');
+  const targetPanel = document.getElementById('tab-'+id);
+  if(targetPanel) targetPanel.classList.add('active');
   if(id==='comparar'){
     if(state.products.length){
       document.getElementById('no-data-cmp').style.display='none';
@@ -4647,12 +4659,13 @@ async function analyzeTopSellersFromText(){
     // Se temos preço ML do print:
     //   - Calculamos precoCompetitivo = ML × 0.99 (1% abaixo do mercado)
     //   - Se precoCompetitivo < precoBase → INVIÁVEL (margem ficará abaixo da mínima)
-    //     → SUGERIDO = precoCompetitivo (pra você ver o que aconteceria se tentasse competir)
     //   - Se precoCompetitivo >= precoBase → VIÁVEL
-    //     → SUGERIDO = precoCompetitivo (otimizado pra mais lucro)
+    // Se NÃO temos preço ML (usuário colou só títulos sem preço):
+    //   - Marca como SEM_REFERENCIA — não podemos competir sem saber o preço atual
     let precoSug = precoBase;
     let viavel = true;
     let ajustadoCompetitivo = false;
+    let semReferencia = false;
     if(priceML !== null && priceML > 0){
       // 1% abaixo do ML, arredondado pro múltiplo de 5 mais próximo (pra baixo, mais agressivo)
       const precoCompetitivo = Math.floor((priceML * 0.99) / 5) * 5;
@@ -4662,6 +4675,8 @@ async function analyzeTopSellersFromText(){
       if(precoCompetitivo < precoBase){
         viavel = false;
       }
+    } else {
+      semReferencia = true;
     }
 
     // Calcula custo total real usando o preço sugerido
@@ -4679,44 +4694,70 @@ async function analyzeTopSellersFromText(){
       custoML: Math.round(custoML),
       custoTot: Math.round(custoTot),
       precoSug,
-      precoBase,                          // preço pela margem mínima (referência)
-      priceML,                            // preço do ML detectado no print
+      precoBase,
+      priceML,
       lucroRS: Math.round(lucroRS),
       lucroPct: Math.round(lucroPct * 10) / 10,
-      aprovado: viavel && lucroPct >= minMarg,
-      viavel,                             // se conseguimos competir
-      ajustadoCompetitivo,                // se preço foi ajustado pra ficar abaixo do ML
+      // Aprovado: só se temos referência E margem ≥ mínima E viável
+      aprovado: !semReferencia && viavel && lucroPct >= minMarg,
+      viavel,
+      semReferencia,
+      ajustadoCompetitivo,
       score: match.score,
       storeCount: prod.storeCount,
     });
   }
 
-  // Filtra: só os que tem custo (já garantido pelo filtro de match)
-  // Ordena: aprovados primeiro, depois inviáveis por menor diferença
-  results.sort((a, b) => {
+  // ── DEDUPLICAÇÃO: se múltiplos títulos no textarea batem com o mesmo produto CIA,
+  //    mantém apenas UMA entrada (prioridade: com preço ML > viável > maior margem)
+  const byProductId = new Map();
+  for(const r of results){
+    const key = r.product.id || r.product.name;
+    const existing = byProductId.get(key);
+    if(!existing){
+      byProductId.set(key, r);
+      continue;
+    }
+    // Critério: prefere a que TEM priceML
+    if(r.priceML && !existing.priceML){ byProductId.set(key, r); continue; }
+    if(existing.priceML && !r.priceML) continue;
+    // Ambas com ou sem priceML → fica com a viável; se ambas viáveis, maior lucro
+    if(r.viavel && !existing.viavel){ byProductId.set(key, r); continue; }
+    if(existing.viavel && !r.viavel) continue;
+    if((r.lucroPct || 0) > (existing.lucroPct || 0)) byProductId.set(key, r);
+  }
+  const dedupResults = Array.from(byProductId.values());
+
+  // Ordena: aprovados primeiro, depois sem-referência, depois inviáveis
+  dedupResults.sort((a, b) => {
     if(a.aprovado && !b.aprovado) return -1;
     if(!a.aprovado && b.aprovado) return 1;
+    if(a.semReferencia && !b.semReferencia) return 1;
+    if(!a.semReferencia && b.semReferencia) return -1;
     return (b.lucroPct || 0) - (a.lucroPct || 0);
   });
 
-  if(results.length === 0){
-    setTopSellersStatus(`⚠ Nenhum dos ${lines.length} produtos detectados foi encontrado na sua lista CIA com confiança ≥70%. Verifique se sua lista CIA está atualizada ou se os títulos no textarea estão completos (com modelo, GB, cor).`, 'var(--amber)');
+  if(dedupResults.length === 0){
+    setTopSellersStatus(`⚠ Nenhum dos ${lines.length} produtos detectados foi encontrado na sua lista CIA com confiança ≥80%. Verifique se sua lista CIA está atualizada ou se os títulos no textarea estão completos (com modelo, GB, cor).`, 'var(--amber)');
     document.getElementById('topsell-results').innerHTML = '';
     return;
   }
 
-  const aprovadosCount = results.filter(r => r.aprovado).length;
-  const inviaveisCount = results.filter(r => !r.viavel).length;
-  let statusMsg = `✓ ${results.length} match${results.length>1?'s':''} (≥70% confiança) de ${lines.length} produtos no textarea. ${aprovadosCount} aprovado${aprovadosCount>1?'s':''} (margem ≥${minMarg}%)`;
-  if(inviaveisCount > 0) statusMsg += `, ${inviaveisCount} inviável${inviaveisCount>1?'eis':''} (custo > ML).`;
+  const aprovadosCount = dedupResults.filter(r => r.aprovado).length;
+  const inviaveisCount = dedupResults.filter(r => !r.viavel && !r.semReferencia).length;
+  const semRefCount    = dedupResults.filter(r => r.semReferencia).length;
+  let statusMsg = `✓ ${dedupResults.length} produto${dedupResults.length>1?'s':''} único${dedupResults.length>1?'s':''} matched (≥80% confiança) de ${lines.length} linhas. ${aprovadosCount} aprovado${aprovadosCount>1?'s':''} (margem ≥${minMarg}%)`;
+  if(inviaveisCount > 0) statusMsg += `, ${inviaveisCount} inviável${inviaveisCount>1?'eis':''} (custo > ML)`;
+  if(semRefCount > 0)    statusMsg += `, ${semRefCount} sem referência de preço`;
+  statusMsg += '.';
   setTopSellersStatus(statusMsg, 'var(--green)');
 
-  renderTopSellersResults(results);
+  renderTopSellersResults(dedupResults);
 }
 
 // Cache global pra filtros do OCR funcionarem
 let _topSellersResults = [];
-let _topSellersFilters = { brand: 'all', sort: 'margin_desc', onlyApproved: false, hideInvalid: true };
+let _topSellersFilters = { brand: 'all', sort: 'margin_desc', onlyApproved: false, hideInvalid: true, hideNoRef: false };
 
 function renderTopSellersResults(results){
   const container = document.getElementById('topsell-results');
@@ -4743,7 +4784,8 @@ function renderTopSellersResults(results){
 
   // Aplica filtros
   let filtered = _topSellersResults.filter(r => {
-    if(_topSellersFilters.hideInvalid && !r.viavel) return false;
+    if(_topSellersFilters.hideInvalid && !r.viavel && !r.semReferencia) return false;
+    if(_topSellersFilters.hideNoRef && r.semReferencia) return false;
     if(_topSellersFilters.onlyApproved && !r.aprovado) return false;
     if(_topSellersFilters.brand !== 'all'){
       const firstWord = (r.product.name || '').trim().split(/\s+/)[0];
@@ -4768,11 +4810,12 @@ function renderTopSellersResults(results){
 
   // Sumário
   const aprovados = _topSellersResults.filter(r => r.aprovado).length;
-  const inviaveis = _topSellersResults.filter(r => !r.viavel).length;
-  const margens = _topSellersResults.filter(r => r.viavel).map(r => r.lucroPct || 0);
+  const inviaveis = _topSellersResults.filter(r => !r.viavel && !r.semReferencia).length;
+  const semRef    = _topSellersResults.filter(r => r.semReferencia).length;
+  const margens = _topSellersResults.filter(r => r.viavel && !r.semReferencia).map(r => r.lucroPct || 0);
   const melhorMargem = margens.length > 0 ? Math.max(...margens) : 0;
 
-  const summary = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px">
+  const summary = `<div style="display:grid;grid-template-columns:repeat(${semRef > 0 ? 5 : 4},1fr);gap:8px;margin-bottom:8px">
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;text-align:center">
       <div style="font-size:9px;color:var(--text3);font-weight:600">DETECTADOS</div>
       <div style="font-size:16px;font-weight:700;color:var(--text)">${_topSellersResults.length}</div>
@@ -4785,6 +4828,10 @@ function renderTopSellersResults(results){
       <div style="font-size:9px;color:var(--text3);font-weight:600">INVIÁVEIS</div>
       <div style="font-size:16px;font-weight:700;color:${inviaveis>0?'var(--red)':'var(--text3)'}">${inviaveis}</div>
     </div>
+    ${semRef > 0 ? `<div style="background:var(--bg2);border:1px solid var(--amber);border-radius:6px;padding:8px;text-align:center" title="Produtos sem preço ML informado no textarea — não dá pra validar competitividade. Adicione ' | R$ XXX' nas linhas.">
+      <div style="font-size:9px;color:var(--text3);font-weight:600">SEM REF.</div>
+      <div style="font-size:16px;font-weight:700;color:var(--amber)">${semRef}</div>
+    </div>` : ''}
     <div style="background:var(--bg2);border:1px solid var(--blue);border-radius:6px;padding:8px;text-align:center">
       <div style="font-size:9px;color:var(--text3);font-weight:600">MELHOR MARGEM</div>
       <div style="font-size:16px;font-weight:700;color:var(--blue)">${melhorMargem.toFixed(1)}%</div>
@@ -4824,6 +4871,11 @@ function renderTopSellersResults(results){
       Esconder inviáveis
     </label>
 
+    <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2);cursor:pointer" title="Esconde produtos onde o preço ML não foi informado (não dá pra validar competitividade)">
+      <input type="checkbox" ${_topSellersFilters.hideNoRef ? 'checked' : ''} onchange="setTopSellersFilter('hideNoRef', this.checked)" style="cursor:pointer">
+      Esconder sem ref.
+    </label>
+
     <span style="margin-left:auto;font-size:10px;color:var(--text3);font-style:italic">Mostrando ${filtered.length} de ${_topSellersResults.length}</span>
   </div>`;
 
@@ -4838,7 +4890,9 @@ function renderTopSellersResults(results){
 
       // Badge principal
       let mainBadge;
-      if(!r.viavel){
+      if(r.semReferencia){
+        mainBadge = `<span style="background:rgba(245,158,11,.15);color:var(--amber);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700" title="Você não informou o preço do ML pra este produto. Adicione ' | R$ XXX' na linha do textarea para validar competitividade.">⚠ SEM REFERÊNCIA</span>`;
+      } else if(!r.viavel){
         const diff = r.priceML ? (r.precoBase - r.priceML) : 0;
         mainBadge = `<span style="background:rgba(239,68,68,.15);color:var(--red);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700" title="Seu preço mínimo (R$${r.precoBase}) é ${diff>0?'R$'+diff+' acima':'igual'} do preço atual do ML (R$${r.priceML}). Não compensa anunciar.">🚫 INVIÁVEL</span>`;
       } else if(r.aprovado){
@@ -7163,6 +7217,141 @@ let _vendasCacheData = null;
 let _vendasCacheTime = 0;
 const _vendasCacheTTL = 5 * 60 * 1000; // 5 min anti-503
 
+// ── Cache de status de conversa por venda ──
+// Map: orderId → { unreadCount, lastMsgPreview, lastMsgFromBuyer, packId, sellerId, lastSyncTime }
+const vendaConversations = new Map();
+const VENDA_CONV_CACHE_TTL = 3 * 60 * 1000;  // 3 min
+
+// Recupera status da conversa de uma venda específica do ML
+async function fetchVendaConversation(venda, force = false){
+  if(!venda || !venda.id) return null;
+  if(!cfg.at) return null;
+
+  const orderId = String(venda.id);
+  const cached = vendaConversations.get(orderId);
+  if(!force && cached && (Date.now() - cached.lastSyncTime) < VENDA_CONV_CACHE_TTL){
+    return cached;
+  }
+
+  // packId pode estar na venda ou ser igual ao próprio orderId
+  const packId = venda.pack_id || venda.packId || orderId;
+  const sellerId = cfg.sellerId || venda.seller?.id;
+  if(!sellerId){
+    // Tenta puxar do /users/me uma vez
+    try {
+      const meR = await proxyFetch('/users/me');
+      if(meR.ok){
+        const me = await meR.json();
+        cfg.sellerId = me.id;
+        saveConfig();
+      }
+    } catch {}
+    if(!cfg.sellerId) return null;
+  }
+
+  try {
+    const r = await proxyFetch(`/messages/packs/${packId}/sellers/${cfg.sellerId}?tag=post_sale&limit=20`);
+    if(!r.ok) return null;
+    const data = await r.json();
+    const msgs = data.messages || [];
+    if(msgs.length === 0) return null;
+
+    // Conta mensagens não lidas DO COMPRADOR
+    const myId = String(cfg.sellerId);
+    let unreadCount = 0;
+    let lastMsg = null;
+    let lastFromBuyer = false;
+    for(const m of msgs){
+      const fromBuyer = String(m.from?.user_id) !== myId;
+      // Não lidas: lidas pelo vendedor é o que importa pra nós
+      const readByMe = m.status === 'available' && m.message_moderation?.status !== 'pending'
+                    ? (Array.isArray(m.received_users)
+                        ? m.received_users.some(u => String(u.user_id) === myId && u.read_date)
+                        : true)
+                    : false;
+      if(fromBuyer && !readByMe) unreadCount++;
+      // Última mensagem
+      const ts = m.message_date?.created || m.message_date?.received || m.created;
+      if(!lastMsg || (ts && ts > lastMsg.ts)){
+        lastMsg = {
+          ts,
+          text: (m.text?.plain || m.text?.markdown || '').slice(0, 100),
+          fromBuyer,
+        };
+        lastFromBuyer = fromBuyer;
+      }
+    }
+
+    const status = {
+      orderId,
+      packId,
+      sellerId: cfg.sellerId,
+      unreadCount,
+      lastMsgPreview: lastMsg?.text || '',
+      lastMsgFromBuyer: lastFromBuyer,
+      lastMsgTime: lastMsg?.ts || null,
+      totalMessages: msgs.length,
+      lastSyncTime: Date.now(),
+    };
+    vendaConversations.set(orderId, status);
+    return status;
+  } catch(e){
+    console.warn('fetchVendaConversation erro:', orderId, e.message);
+    return null;
+  }
+}
+
+// Sincroniza mensagens para um lote de vendas em paralelo (batch leve, anti-503)
+async function syncVendasConversations(vendas, opts = {}){
+  if(!vendas || vendas.length === 0) return 0;
+  const onlyRecent = opts.onlyRecent !== false;  // por default só sincroniza vendas pagas/em curso
+  const batchSize = 6;
+  const list = onlyRecent
+    ? vendas.filter(v => {
+        // Sincroniza vendas que não estão em status final há muito tempo (últimos 90d)
+        if(!v.date_created) return true;
+        const ageDays = (Date.now() - new Date(v.date_created).getTime()) / (1000*60*60*24);
+        if(ageDays > 90) return false;
+        return v.status === 'paid' || v.status === 'shipped' || !v.status;
+      })
+    : vendas;
+
+  if(list.length === 0) return 0;
+
+  let unreadTotal = 0;
+  for(let i = 0; i < list.length; i += batchSize){
+    const batch = list.slice(i, i + batchSize);
+    const results = await Promise.all(batch.map(v => fetchVendaConversation(v).catch(() => null)));
+    for(const s of results){
+      if(s && s.unreadCount > 0) unreadTotal += s.unreadCount;
+    }
+    // Pausa entre batches anti-503
+    if(i + batchSize < list.length){
+      await new Promise(res => setTimeout(res, 250));
+    }
+  }
+  updateVendasMessageBadge();
+  return unreadTotal;
+}
+
+// Atualiza badge na aba "💰 Vendas" com total de não lidas
+function updateVendasMessageBadge(){
+  const badge = document.getElementById('vendas-msg-badge');
+  if(!badge) return;
+  let total = 0;
+  for(const conv of vendaConversations.values()){
+    total += conv.unreadCount || 0;
+  }
+  if(total > 0){
+    badge.textContent = total;
+    badge.style.display = 'inline-block';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+
+
 // Investimentos por venda: { orderId: { luciano: 850, johnny: 0 } }
 // Manual por enquanto — futuramente puxa do preço base do estoque
 let investimentosVendas = {};
@@ -8044,6 +8233,14 @@ async function syncVendas(force = false){
     document.getElementById('vendas-load').style.display='none';
     document.getElementById('vendas-content').style.display='block';
     renderVendas();
+
+    // Background: sincroniza status de conversa das vendas em curso (não bloqueia UI)
+    syncVendasConversations(vendasData).then(unread => {
+      if(unread > 0){
+        renderVendas();
+        showToast(`💬 ${unread} mensagem${unread>1?'s':''} não respondida${unread>1?'s':''}`);
+      }
+    }).catch(() => {});
   } catch(e){ showVendasErr(e.message); }
 }
 
@@ -9920,6 +10117,7 @@ function renderVendas(){
           ${labelCheck.ok ? `<button onclick="printSingleLabel('${v.shipment.id}', '${v.id}')" class="btn btn-sm" style="font-size:10px;padding:4px 8px;background:rgba(62,207,142,.15);color:var(--green);border:1px solid var(--green)">🏷 Etiqueta</button>` : ''}
           ${labelCheck.needsInvoice ? `<a href="https://www.mercadolivre.com.br/emissor/omni/emitir/dce/sale/SALE_ML_DCE/${v.id}?source=ml" target="_blank" rel="noopener" class="btn btn-sm" style="font-size:10px;padding:4px 8px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue);text-decoration:none" title="Abre a página de emissão da DC-e direto. Você só revisa e clica em 'Emitir DC-e'.">🚀 Emitir DC-e</a>` : ''}
           <button class="btn btn-p btn-sm" onclick="showRecibo('${v.id}')" style="font-size:10px;padding:4px 8px">🧾 Recibo</button>
+          ${renderChatButton(v, '4px 8px', '10px')}
         </div>
       </div>
     </div>`;
@@ -10082,8 +10280,9 @@ function renderVendasPlanilha(items){
       <td style="padding:6px 8px;font-size:11px;color:var(--text3)">${cidade}</td>
       <td style="padding:6px 8px;font-size:10px;white-space:nowrap;${v.date_created ? 'color:var(--text3)' : 'color:var(--amber);font-weight:600;cursor:pointer'}" ${v.date_created ? '' : `onclick="diagnosticarVenda('${v.id}')" title="Data ausente — clique para diagnosticar"`}>${v.date_created ? dt : '⚠ sem data'}</td>
       <td style="padding:6px 8px;font-size:10px;font-weight:600;color:${statusColor};white-space:nowrap">${statusLabel}</td>
-      <td style="padding:6px 8px;text-align:center">
-        <button class="btn btn-sm" onclick="showRecibo('${v.id}')" style="font-size:10px;padding:3px 6px">🧾</button>
+      <td style="padding:6px 8px;text-align:center;white-space:nowrap">
+        <button class="btn btn-sm" onclick="showRecibo('${v.id}')" style="font-size:10px;padding:3px 6px" title="Ver recibo">🧾</button>
+        ${renderChatButton(v, '3px 6px', '10px')}
       </td>
     </tr>`;
   }).join('');
@@ -10410,6 +10609,269 @@ async function downloadAndOpenLabels(shipmentIds, filename){
 // ════════════════════════════════════════════════════════════════════════════
 // MODAL DE RECIBO — fiel ao layout do Mercado Turbo
 // ════════════════════════════════════════════════════════════════════════════
+// ──────────────────────────────────────────────────────────────────────
+// MODAL DE CONVERSA INLINE — abrir mensagens da venda direto no contexto
+// ──────────────────────────────────────────────────────────────────────
+// Renderiza o botão de chat com base no status da conversa (cache vendaConversations)
+// Se tem mensagens não lidas, aplica classe 'msg-btn-unread' (pulsante vermelho)
+function renderChatButton(venda, padding = '4px 8px', fontSize = '10px'){
+  if(!venda || !venda.id) return '';
+  const orderId = String(venda.id);
+  const conv = vendaConversations.get(orderId);
+  const unreadCount = conv?.unreadCount || 0;
+  const totalMsgs = conv?.totalMessages || 0;
+  const hasAnyMsg = totalMsgs > 0;
+
+  // Estilos por estado
+  let cls, bg, color, border, icon, label;
+  if(unreadCount > 0){
+    cls = 'msg-btn-unread';
+    icon = '💬';
+    label = `${unreadCount}`;
+  } else if(hasAnyMsg){
+    bg = 'rgba(96,165,250,.10)';
+    color = 'var(--blue)';
+    border = 'var(--blue)';
+    icon = '💬';
+    label = '';
+  } else {
+    bg = 'transparent';
+    color = 'var(--text3)';
+    border = 'var(--border)';
+    icon = '💬';
+    label = '';
+  }
+
+  const titleAttr = unreadCount > 0
+    ? `${unreadCount} mensagem${unreadCount>1?'s':''} não respondida${unreadCount>1?'s':''} — clique para ver e responder`
+    : (hasAnyMsg ? `${totalMsgs} mensagem${totalMsgs>1?'s':''} nesta conversa` : 'Abrir conversa com o comprador');
+
+  const styleStr = cls ? '' : `background:${bg};color:${color};border:1px solid ${border}`;
+
+  return `<button class="btn btn-sm ${cls||''}" onclick="openVendaChat('${escapeHTML(orderId)}')" title="${titleAttr}" style="font-size:${fontSize};padding:${padding};${styleStr}">${icon}${label ? ` ${label}` : ''}</button>`;
+}
+
+async function openVendaChat(orderId){
+  if(!cfg.at){
+    alert('Conecte sua conta ML em Config para ver as conversas.');
+    return;
+  }
+
+  // Encontra a venda no dataset
+  const dataset = vendasDataFull || vendasData;
+  const venda = dataset.find(v => String(v.id) === String(orderId));
+  if(!venda){
+    alert(`Venda ${orderId} não encontrada.`);
+    return;
+  }
+
+  // Remove modal anterior
+  document.querySelectorAll('[data-chat-modal]').forEach(m => m.remove());
+
+  const modal = document.createElement('div');
+  modal.dataset.chatModal = '1';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+
+  const buyerName = venda.buyer?.firstName || venda.buyer?.nickname || 'Comprador';
+  const productTitle = venda.firstItem?.title || venda.items?.[0]?.item?.title || '';
+  const blockedBadge = venda._isBlockedState ? `<span style="background:rgba(239,68,68,.15);color:var(--red);font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;font-weight:700">🚫 ${escapeHTML(venda._blockedUF || 'Bloqueado')}</span>` : '';
+  const fakeBadge = venda._isFake ? `<span style="background:rgba(245,158,11,.15);color:var(--amber);font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;font-weight:700">⚠ FAKE</span>` : '';
+
+  modal.innerHTML = `<div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;max-width:700px;width:100%;max-height:90vh;display:flex;flex-direction:column">
+    <!-- Cabeçalho -->
+    <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:start;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          💬 Conversa — ${escapeHTML(buyerName)}${blockedBadge}${fakeBadge}
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:3px">Venda <code>${escapeHTML(String(orderId))}</code> · ${escapeHTML(productTitle.slice(0, 70))}${productTitle.length>70?'...':''}</div>
+      </div>
+      <button onclick="this.closest('[data-chat-modal]').remove()" class="btn btn-sm" style="flex-shrink:0">Fechar</button>
+    </div>
+
+    <!-- Lista de mensagens -->
+    <div id="chat-msgs" style="flex:1;overflow-y:auto;padding:14px 18px;background:var(--bg2);min-height:300px">
+      <div style="text-align:center;padding:20px;color:var(--text3);font-size:12px">
+        <span class="spinner" style="display:inline-block;vertical-align:middle"></span>
+        <span style="margin-left:6px">Carregando mensagens...</span>
+      </div>
+    </div>
+
+    <!-- Campo de resposta -->
+    <div style="padding:12px 18px;border-top:1px solid var(--border)">
+      <textarea id="chat-reply" rows="3" placeholder="Digite sua resposta para ${escapeHTML(buyerName)}..."
+        style="width:100%;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;resize:vertical;font-family:inherit"></textarea>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;flex-wrap:wrap">
+        <div style="font-size:10px;color:var(--text3)">💡 Mensagens são enviadas via API do Mercado Livre.</div>
+        <div style="display:flex;gap:6px">
+          <button onclick="markVendaChatRead('${escapeHTML(orderId)}')" class="btn btn-sm" style="font-size:11px" title="Marca todas as mensagens como lidas (sem enviar resposta)">👁 Marcar lidas</button>
+          <button onclick="sendVendaChatReply('${escapeHTML(orderId)}', this)" class="btn btn-p btn-sm" style="font-size:11px">📤 Enviar</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+
+  document.body.appendChild(modal);
+
+  // Busca histórico completo (não usa cache pra ter atualização recente)
+  await loadVendaChatMessages(orderId);
+
+  // Marca como lidas automaticamente ao abrir (sem await pra não travar UI)
+  markVendaChatRead(orderId, true);
+}
+
+async function loadVendaChatMessages(orderId){
+  const dataset = vendasDataFull || vendasData;
+  const venda = dataset.find(v => String(v.id) === String(orderId));
+  if(!venda) return;
+
+  const packId = venda.pack_id || venda.packId || orderId;
+  const sellerId = cfg.sellerId;
+  const container = document.getElementById('chat-msgs');
+  if(!container) return;
+
+  try {
+    const r = await proxyFetch(`/messages/packs/${packId}/sellers/${sellerId}?tag=post_sale&limit=50`);
+    if(!r.ok){
+      container.innerHTML = `<div style="padding:20px;text-align:center;color:var(--red);font-size:12px">❌ Erro ao carregar mensagens (HTTP ${r.status})</div>`;
+      return;
+    }
+    const data = await r.json();
+    const msgs = data.messages || [];
+
+    if(msgs.length === 0){
+      container.innerHTML = `<div style="padding:30px;text-align:center;color:var(--text3);font-size:12px">📭 Nenhuma mensagem nesta venda ainda.<br><br>Você pode iniciar a conversa enviando uma mensagem abaixo.</div>`;
+      return;
+    }
+
+    // Ordena por data crescente (mais antiga primeiro, como chat)
+    msgs.sort((a, b) => {
+      const tA = a.message_date?.created || a.created || '';
+      const tB = b.message_date?.created || b.created || '';
+      return tA.localeCompare(tB);
+    });
+
+    const myId = String(cfg.sellerId);
+    const bubbles = msgs.map(m => {
+      const fromMe = String(m.from?.user_id) === myId;
+      const txt = m.text?.plain || m.text?.markdown || '(anexo)';
+      const ts = m.message_date?.created || m.created;
+      const tsFmt = ts ? new Date(ts).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
+      const bg = fromMe ? 'rgba(96,165,250,.12)' : 'var(--bg)';
+      const border = fromMe ? 'var(--blue)' : 'var(--border)';
+      const align = fromMe ? 'flex-end' : 'flex-start';
+      const labelColor = fromMe ? 'var(--blue)' : 'var(--text2)';
+      const author = fromMe ? '🙋 Você (vendedor)' : '👤 Comprador';
+      return `<div style="display:flex;justify-content:${align};margin-bottom:10px">
+        <div style="max-width:75%;background:${bg};border:1px solid ${border};border-radius:10px;padding:8px 12px">
+          <div style="font-size:10px;color:${labelColor};font-weight:700;margin-bottom:3px">${author}</div>
+          <div style="font-size:13px;line-height:1.4;white-space:pre-wrap;word-break:break-word">${escapeHTML(txt)}</div>
+          <div style="font-size:9px;color:var(--text3);margin-top:4px;text-align:right">${tsFmt}</div>
+        </div>
+      </div>`;
+    }).join('');
+
+    container.innerHTML = bubbles;
+    // Scroll pro fim
+    container.scrollTop = container.scrollHeight;
+  } catch(e){
+    container.innerHTML = `<div style="padding:20px;text-align:center;color:var(--red);font-size:12px">❌ ${escapeHTML(e.message)}</div>`;
+  }
+}
+
+async function sendVendaChatReply(orderId, btn){
+  const ta = document.getElementById('chat-reply');
+  if(!ta) return;
+  const text = ta.value.trim();
+  if(!text){ alert('Digite uma mensagem antes de enviar.'); return; }
+  if(text.length > 2000){ alert('Mensagem muito longa (max 2000 chars).'); return; }
+
+  const dataset = vendasDataFull || vendasData;
+  const venda = dataset.find(v => String(v.id) === String(orderId));
+  if(!venda) return;
+
+  const packId = venda.pack_id || venda.packId || orderId;
+  const sellerId = cfg.sellerId;
+  const buyerId = venda.buyer?.id;
+
+  if(!buyerId){
+    alert('Não consegui identificar o comprador desta venda. Não é possível enviar mensagem.');
+    return;
+  }
+
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = '⏳ Enviando...';
+
+  try {
+    const r = await proxyFetch(`/messages/packs/${packId}/sellers/${sellerId}?tag=post_sale`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: { user_id: sellerId },
+        to:   { user_id: buyerId },
+        text: text,
+      }),
+    });
+
+    if(!r.ok){
+      const err = await r.text();
+      throw new Error(`HTTP ${r.status}: ${err.slice(0, 200)}`);
+    }
+
+    ta.value = '';
+    btn.textContent = '✓ Enviada';
+    setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 1500);
+
+    // Recarrega mensagens
+    await loadVendaChatMessages(orderId);
+    // Atualiza cache local (zera não lidas)
+    vendaConversations.delete(orderId);
+    await fetchVendaConversation(venda, true);
+    updateVendasMessageBadge();
+    renderVendas();
+  } catch(e){
+    btn.disabled = false;
+    btn.textContent = origText;
+    alert(`❌ Erro ao enviar: ${e.message}`);
+  }
+}
+
+async function markVendaChatRead(orderId, silent = false){
+  const dataset = vendasDataFull || vendasData;
+  const venda = dataset.find(v => String(v.id) === String(orderId));
+  if(!venda) return;
+
+  const packId = venda.pack_id || venda.packId || orderId;
+  const sellerId = cfg.sellerId;
+
+  try {
+    await proxyFetch(`/messages/packs/${packId}/sellers/${sellerId}/read?tag=post_sale`, {
+      method: 'POST',
+    });
+    // Atualiza cache local
+    const cached = vendaConversations.get(String(orderId));
+    if(cached){
+      cached.unreadCount = 0;
+      cached.lastSyncTime = Date.now();
+    }
+    updateVendasMessageBadge();
+    if(!silent){
+      renderVendas();
+      // Feedback visual no botão
+      const btn = event?.target;
+      if(btn){
+        const orig = btn.textContent;
+        btn.textContent = '✓ Lidas';
+        setTimeout(() => { btn.textContent = orig; }, 1200);
+      }
+    }
+  } catch(e){
+    if(!silent) alert(`❌ Erro ao marcar como lidas: ${e.message}`);
+  }
+}
+
 function showRecibo(orderId){
   const v = vendasData.find(x => String(x.id) === String(orderId));
   if(!v){ alert('Venda não encontrada.'); return; }
