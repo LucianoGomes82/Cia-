@@ -10747,11 +10747,18 @@ async function openVendaChat(orderId){
 
     <!-- Campo de resposta -->
     <div style="padding:12px 18px;border-top:1px solid var(--border)">
+      <div id="chat-templates" style="display:none;margin-bottom:8px;padding:8px;background:rgba(96,165,250,.06);border:1px solid rgba(96,165,250,.2);border-radius:6px">
+        <div style="font-size:10px;color:var(--text3);margin-bottom:6px;display:flex;align-items:center;gap:6px">
+          <span>📋</span><span>Motivos pré-definidos pelo ML (use quando o comprador ainda não escreveu):</span>
+        </div>
+        <div id="chat-templates-list" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+      </div>
       <textarea id="chat-reply" rows="3" placeholder="Digite sua resposta para ${escapeHTML(buyerName)}..."
         style="width:100%;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;resize:vertical;font-family:inherit"></textarea>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;flex-wrap:wrap">
         <div style="font-size:10px;color:var(--text3)">💡 Mensagens são enviadas via API do Mercado Livre.</div>
-        <div style="display:flex;gap:6px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button onclick="openMensagemSugestoes('${escapeHTML(orderId)}')" class="btn btn-sm" style="font-size:11px;background:rgba(168,85,247,.15);color:var(--purple);border:1px solid rgba(168,85,247,.3)" title="Sugestões de mensagens prontas (sem dados pessoais)">💡 Sugestões</button>
           <button onclick="markVendaChatRead('${escapeHTML(orderId)}')" class="btn btn-sm" style="font-size:11px" title="Marca todas as mensagens como lidas (sem enviar resposta)">👁 Marcar lidas</button>
           <button onclick="sendVendaChatReply('${escapeHTML(orderId)}', this)" class="btn btn-p btn-sm" style="font-size:11px">📤 Enviar</button>
         </div>
@@ -10763,6 +10770,10 @@ async function openVendaChat(orderId){
 
   // Busca histórico completo (não usa cache pra ter atualização recente)
   await loadVendaChatMessages(orderId);
+
+  // Carrega motivos pré-definidos do ML (action_guide) em background.
+  // Mostra botões de template se a venda permitir.
+  loadActionGuideOptions(orderId).catch(() => {});
 
   // Marca como lidas automaticamente ao abrir (sem await pra não travar UI)
   markVendaChatRead(orderId, true);
@@ -10827,12 +10838,392 @@ async function loadVendaChatMessages(orderId){
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// VALIDADOR ANTI-PUNIÇÃO — escaneia texto antes de enviar pra ML
+// ──────────────────────────────────────────────────────────────────────
+// Hard-block: padrões que o ML modera com certeza (telefone, evasão de canal,
+// links externos). Não deixa enviar.
+// Warn: padrões suspeitos (mensagem muito curta, texto idêntico em 24h).
+// Avisa mas permite enviar se o usuário confirmar.
+
+function validateMessageBeforeSend(text){
+  const issues = []; // { severity: 'block'|'warn', reason: string, match?: string }
+  const t = String(text || '');
+  const tLow = t.toLowerCase();
+
+  // ── HARD-BLOCK ──
+
+  // Telefone brasileiro: (XX) 9XXXX-XXXX, XX 9XXXX XXXX, 9XXXXXXXX, etc.
+  // Aceita variações de formatação mas precisa de pelo menos 10 dígitos no padrão
+  const phoneRegex = /(?:\(?\d{2}\)?[\s.-]?)?9?\s?\d{4}[\s.-]?\d{4}/g;
+  const phoneMatches = t.match(phoneRegex);
+  if(phoneMatches){
+    // Filtra falsos positivos: precisa ter pelo menos 10 dígitos consecutivos
+    for(const m of phoneMatches){
+      const digits = m.replace(/\D/g, '');
+      if(digits.length >= 10 && digits.length <= 13){
+        issues.push({ severity: 'block', reason: 'Telefone detectado', match: m.trim() });
+        break;
+      }
+    }
+  }
+
+  // WhatsApp e variações
+  if(/\b(whats\s*app|whatsapp|whats|wpp|zap|zapzap|whatsap)\b/i.test(t)){
+    issues.push({ severity: 'block', reason: 'Menção a WhatsApp/Zap', match: 'WhatsApp/Zap' });
+  }
+
+  // Redes sociais
+  if(/\b(instagram|insta|facebook|fb\.com|telegram|t\.me|tiktok)\b/i.test(t)
+     || /(^|\s)@[a-z0-9_.]{3,}/i.test(t)){
+    issues.push({ severity: 'block', reason: 'Menção a rede social', match: 'Rede social' });
+  }
+
+  // E-mail
+  if(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(t)){
+    issues.push({ severity: 'block', reason: 'E-mail detectado', match: 'E-mail' });
+  }
+
+  // URLs externas (que NÃO sejam mercadolivre / mercadopago)
+  const urlRegex = /https?:\/\/([^\s/$.?#]+\.)?([^\s/$.?#]+\.[a-z]{2,})/gi;
+  let urlMatch;
+  while((urlMatch = urlRegex.exec(t)) !== null){
+    const domain = urlMatch[2].toLowerCase();
+    if(!/(mercadolivre|mercadolibre|mercadopago)\.com/.test(domain)){
+      issues.push({ severity: 'block', reason: `Link externo (${domain})`, match: domain });
+      break;
+    }
+  }
+
+  // Encurtadores
+  if(/\b(bit\.ly|tinyurl|goo\.gl|encurta|t\.co|ow\.ly|is\.gd|cutt\.ly)\b/i.test(t)){
+    issues.push({ severity: 'block', reason: 'Link encurtado', match: 'URL curta' });
+  }
+
+  // Pagamento externo
+  if(/\b(pix\s*chave|chave\s*pix|paypal|pagseguro|picpay|nubank\s*key|transferência\s*direta)\b/i.test(tLow)){
+    issues.push({ severity: 'block', reason: 'Menção a pagamento fora do ML', match: 'Pagamento externo' });
+  }
+
+  // ── WARN (não bloqueia, só avisa) ──
+
+  // Muito curta
+  if(t.trim().length > 0 && t.trim().length < 6){
+    issues.push({ severity: 'warn', reason: 'Mensagem muito curta — pode parecer automática' });
+  }
+
+  // Texto idêntico nas últimas 24h
+  try {
+    const sent = JSON.parse(localStorage.getItem('cia_msgs_sent') || '[]');
+    const now = Date.now();
+    const recent = sent.filter(s => (now - s.ts) < 24 * 60 * 60 * 1000);
+    if(recent.some(s => s.text === t.trim())){
+      issues.push({ severity: 'warn', reason: 'Mesmo texto já enviado nas últimas 24h — pode disparar moderação de "mensagem automática"' });
+    }
+  } catch {}
+
+  return issues;
+}
+
+// Registra texto enviado pra detecção futura de duplicatas
+function recordSentMessage(text){
+  try {
+    const sent = JSON.parse(localStorage.getItem('cia_msgs_sent') || '[]');
+    sent.push({ text: String(text || '').trim(), ts: Date.now() });
+    // Mantém só últimos 100 ou últimas 48h
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+    const cleaned = sent.filter(s => s.ts > cutoff).slice(-100);
+    localStorage.setItem('cia_msgs_sent', JSON.stringify(cleaned));
+  } catch {}
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// TEMPLATES DE MENSAGENS SEGURAS — pré-aprovadas, sem dados pessoais
+// ──────────────────────────────────────────────────────────────────────
+// Variáveis: {nome}, {produto}, {venda_id}
+// Tom: casual amigável, sempre <= 350 chars (limite do action_guide OTHER)
+
+const MENSAGEM_TEMPLATES = [
+  {
+    id: 'agradecimento',
+    icon: '🙏',
+    label: 'Agradecer compra',
+    text: 'Oi {nome}! Show, valeu pela compra do {produto} 😊 Já estamos preparando seu pedido com todo cuidado. Qualquer dúvida é só chamar por aqui!',
+  },
+  {
+    id: 'despacho',
+    icon: '📦',
+    label: 'Aviso de despacho',
+    text: 'Oi {nome}! Boa notícia: seu pedido foi despachado hoje 📦 Você pode acompanhar o rastreio direto no Mercado Livre. Qualquer coisa, é só me chamar!',
+  },
+  {
+    id: 'confirmar_endereco',
+    icon: '📍',
+    label: 'Confirmar endereço',
+    text: 'Oi {nome}! Antes de despachar seu {produto}, pode confirmar se o endereço de entrega cadastrado no Mercado Livre está certinho? Quero garantir que chegue na mão certa 😊',
+  },
+  {
+    id: 'pedir_avaliacao',
+    icon: '⭐',
+    label: 'Pedir avaliação',
+    text: 'Oi {nome}! Espero que tenha gostado do {produto} 😊 Se puder, deixa sua avaliação aqui no Mercado Livre — ajuda muito a nossa lojinha! Qualquer feedback é bem-vindo.',
+  },
+  {
+    id: 'atraso_correios',
+    icon: '⏰',
+    label: 'Aviso de atraso',
+    text: 'Oi {nome}, tudo bem? Notei que seu pedido está com o prazo dos Correios um pouco apertado. Já está em trânsito e seguindo normalmente — qualquer atualização eu te aviso por aqui!',
+  },
+  {
+    id: 'dados_nf',
+    icon: '🧾',
+    label: 'Pedir dados pra NF',
+    text: 'Oi {nome}! Pra emitir sua nota fiscal preciso confirmar: nome completo e CPF (ou razão social e CNPJ, se for pessoa jurídica). Pode me passar por aqui? Obrigado!',
+  },
+  {
+    id: 'pf_sem_nf',
+    icon: '📄',
+    label: 'PF — não emite NFe',
+    text: 'Oi {nome}, boa! Essa conta aqui é pessoa física, então não consigo emitir NF-e — mas posso te mandar um recibo da compra. Funciona pra você?',
+  },
+  {
+    id: 'pode_recusar',
+    icon: '↩️',
+    label: 'Cliente quer devolver',
+    text: 'Oi {nome}, boa tarde! Sem problemas, pode recusar a entrega normalmente. Assim que o pacote voltar pra gente, abrimos a devolução pelo Mercado Livre e o valor é estornado direto pra você. Qualquer dúvida, é só chamar!',
+  },
+  {
+    id: 'resposta_problema',
+    icon: '🛠',
+    label: 'Resposta a problema',
+    text: 'Oi {nome}, tudo bem? Vi sua mensagem e lamento pelo transtorno 😔 Pode me contar com mais detalhes o que aconteceu? Vou resolver isso pelo Mercado Livre o quanto antes!',
+  },
+];
+
+// Aplica variáveis do template ao texto. Faltou nome? Usa "tudo bem".
+function fillTemplate(text, venda){
+  const nome = venda.buyer?.firstName?.trim() || '';
+  const produto = (venda.firstItem?.title || venda.items?.[0]?.item?.title || 'seu pedido').slice(0, 50);
+  const vendaId = venda.pack_id || venda.id || '';
+
+  return text
+    .replace(/\{nome\}/g, nome || 'tudo bem')
+    .replace(/\{produto\}/g, produto)
+    .replace(/\{venda_id\}/g, String(vendaId));
+}
+
+// Abre menu de sugestões e insere texto escolhido no campo
+function openMensagemSugestoes(orderId){
+  const dataset = vendasDataFull || vendasData;
+  const venda = dataset.find(v => String(v.id) === String(orderId));
+  if(!venda) return;
+
+  // Remove menu anterior se houver
+  document.querySelectorAll('[data-sug-menu]').forEach(m => m.remove());
+
+  const modal = document.createElement('div');
+  modal.dataset.sugMenu = '1';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10010;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+
+  const items = MENSAGEM_TEMPLATES.map(tpl => {
+    const preview = fillTemplate(tpl.text, venda);
+    const len = preview.length;
+    const lenColor = len > 350 ? 'var(--red)' : len > 280 ? 'var(--amber)' : 'var(--text3)';
+    // Codifica preview pra atributo data-* (evita aspas problemáticas)
+    const previewEnc = encodeURIComponent(preview);
+    return `<div style="padding:12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer;transition:background .15s"
+        onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background='var(--bg2)'"
+        onclick="aplicarSugestao('${escapeHTML(orderId)}', decodeURIComponent('${previewEnc}'))">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <div style="font-size:13px;font-weight:600">${tpl.icon} ${escapeHTML(tpl.label)}</div>
+        <div style="font-size:10px;color:${lenColor}">${len} chars</div>
+      </div>
+      <div style="font-size:12px;color:var(--text2);line-height:1.4">${escapeHTML(preview)}</div>
+    </div>`;
+  }).join('');
+
+  modal.innerHTML = `<div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;max-width:600px;width:100%;max-height:85vh;display:flex;flex-direction:column">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:14px;font-weight:700">💡 Sugestões de mensagem</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Clique numa sugestão pra inseri-la no campo (pode editar antes de enviar)</div>
+      </div>
+      <button onclick="this.closest('[data-sug-menu]').remove()" class="btn btn-sm">Fechar</button>
+    </div>
+    <div style="padding:14px 18px;overflow-y:auto;flex:1">${items}</div>
+    <div style="padding:10px 18px;border-top:1px solid var(--border);background:var(--bg2);font-size:10px;color:var(--text3);line-height:1.5">
+      ⚠ <strong>Importante:</strong> personalize antes de enviar. Texto igual em várias vendas pode ser marcado como "mensagem automática" pelo ML.
+    </div>
+  </div>`;
+
+  document.body.appendChild(modal);
+}
+
+// Aplica sugestão no textarea
+function aplicarSugestao(orderId, text){
+  const ta = document.getElementById('chat-reply');
+  if(ta){
+    ta.value = text;
+    ta.focus();
+    // Posiciona cursor no fim
+    ta.setSelectionRange(text.length, text.length);
+  }
+  document.querySelectorAll('[data-sug-menu]').forEach(m => m.remove());
+}
+
+// Traduz códigos de bloqueio do ML em mensagens pt-BR amigáveis
+function humanizeMLBlockReason(detail){
+  const d = (detail || '').toLowerCase();
+  if(d.includes('blocked_by_conversation_initiated_by_seller'))
+    return 'Mercado Livre exige que você escolha um motivo pré-definido. Estamos tentando via "OTHER"...';
+  if(d.includes('blocked_by_fulfillment'))
+    return 'Venda FULL: só é possível enviar mensagem após a entrega.';
+  if(d.includes('blocked_by_payment'))
+    return 'Pagamento ainda não foi confirmado. Aguarde alguns minutos.';
+  if(d.includes('blocked_by_time'))
+    return 'Já passou de 30 dias desde a última mensagem. Só o comprador pode reabrir a conversa.';
+  if(d.includes('blocked_by_buyer'))
+    return 'O comprador bloqueou o recebimento de mensagens.';
+  if(d.includes('blocked_by_cancelled_order') || d.includes('blocked_by_cancelled'))
+    return 'Venda cancelada — mensageria desabilitada.';
+  if(d.includes('blocked_by_mediation'))
+    return 'Há uma mediação em curso. Mensagens estão bloqueadas até a resolução.';
+  if(d.includes('blocked_by_restrictions'))
+    return 'Restrição no vendedor ou comprador. Mensageria bloqueada.';
+  if(d.includes('blocked_by_guest_shops'))
+    return 'Comprador é convidado (mshops) — mensageria não disponível.';
+  if(d.includes('blocked_conversation_send_message_forbidden'))
+    return 'Mensageria bloqueada nesta venda.';
+  return null;  // não reconhecido — devolve null pra mostrar o erro cru
+}
+
+// Carrega motivos pré-definidos do ML (action_guide) e renderiza botões de template
+async function loadActionGuideOptions(orderId){
+  const dataset = vendasDataFull || vendasData;
+  const venda = dataset.find(v => String(v.id) === String(orderId));
+  if(!venda) return;
+  const packId = venda.pack_id || venda.packId || orderId;
+
+  const container = document.getElementById('chat-templates');
+  const list      = document.getElementById('chat-templates-list');
+  if(!container || !list) return;
+
+  try {
+    const r = await proxyFetch(`/messages/action_guide/packs/${packId}?tag=post_sale`);
+    if(!r.ok) return;
+    const data = await r.json();
+    const options = (data?.options || []).filter(o => o.enabled && (o.cap_available ?? 0) > 0);
+    if(options.length === 0) return;
+
+    // Rótulos em pt-BR pros option_ids conhecidos
+    const labels = {
+      'REQUEST_VARIANTS':     '🎨 Pedir variante (cor/tam)',
+      'REQUEST_BILLING_INFO': '🧾 Pedir dados de NF',
+      'SEND_INVOICE_LINK':    '🔗 Enviar link da NF',
+      'DELIVERY_PROMISE':     '🚚 Confirmar prazo (Flex)',
+      'OTHER':                '✍️ Mensagem livre',
+    };
+
+    list.innerHTML = options.map(opt => {
+      const label = labels[opt.id] || opt.id;
+      const isFreeText = opt.id === 'OTHER' || opt.id === 'SEND_INVOICE_LINK';
+      const title = `${opt.internal_description || opt.id} · ${opt.cap_available} envio(s) disponível(is)${isFreeText ? ' · Usa o texto do campo abaixo' : ' · Envia template fixo do ML'}`;
+      // Templates fixos não precisam de texto; OTHER e SEND_INVOICE_LINK usam o textarea
+      return `<button onclick="sendActionGuideTemplate('${escapeHTML(orderId)}','${escapeHTML(opt.id)}', this)"
+        class="btn btn-sm" style="font-size:10px;padding:4px 8px;background:rgba(96,165,250,.12);color:var(--blue);border:1px solid rgba(96,165,250,.3)"
+        title="${escapeHTML(title)}">${label}${opt.cap_available > 1 ? ` (${opt.cap_available})` : ''}</button>`;
+    }).join('');
+    container.style.display = 'block';
+  } catch(e){
+    // Silencioso — action_guide pode não estar disponível pra esta venda
+    console.warn('[action_guide] Erro ao carregar opções:', e.message);
+  }
+}
+
+// Envia mensagem usando um motivo pré-definido (action_guide).
+// REQUEST_VARIANTS, REQUEST_BILLING_INFO, DELIVERY_PROMISE → template fixo, ignora text
+// OTHER, SEND_INVOICE_LINK → usa o texto do campo
+async function sendActionGuideTemplate(orderId, optionId, btn){
+  const dataset = vendasDataFull || vendasData;
+  const venda = dataset.find(v => String(v.id) === String(orderId));
+  if(!venda) return;
+  const packId = venda.pack_id || venda.packId || orderId;
+
+  const ta = document.getElementById('chat-reply');
+  const text = (ta?.value || '').trim();
+  const isFreeText = (optionId === 'OTHER' || optionId === 'SEND_INVOICE_LINK');
+
+  if(isFreeText && !text){
+    alert('Digite o texto no campo abaixo antes de usar esta opção.');
+    return;
+  }
+  if(isFreeText && text.length > 350){
+    alert('Mensagem muito longa (max 350 chars para action_guide).');
+    return;
+  }
+
+  if(!isFreeText){
+    if(!confirm(`O ML vai enviar uma mensagem com TEMPLATE FIXO (você não pode editar o texto).\n\nConfirma?`)) return;
+  }
+
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = '⏳';
+
+  try {
+    const body = isFreeText ? { option_id: optionId, text } : { option_id: optionId };
+    const r = await proxyFetch(`/messages/action_guide/packs/${packId}/option`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if(!r.ok){
+      const errBody = await r.text();
+      throw new Error(`HTTP ${r.status}: ${errBody.slice(0, 200)}`);
+    }
+    if(ta) ta.value = '';
+    if(isFreeText && text) recordSentMessage(text);
+    btn.textContent = '✓';
+    showToast(`Mensagem enviada (motivo: ${optionId})`);
+    setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 1500);
+    await loadVendaChatMessages(orderId);
+    // Re-carrega opções (caps_available pode ter mudado)
+    loadActionGuideOptions(orderId).catch(() => {});
+    vendaConversations.delete(orderId);
+    await fetchVendaConversation(venda, true);
+    updateVendasMessageBadge();
+    renderVendas();
+  } catch(e){
+    btn.disabled = false;
+    btn.textContent = origText;
+    const human = humanizeMLBlockReason(e.message) || e.message;
+    alert(`❌ Erro ao enviar: ${human}`);
+  }
+}
+
 async function sendVendaChatReply(orderId, btn){
   const ta = document.getElementById('chat-reply');
   if(!ta) return;
   const text = ta.value.trim();
   if(!text){ alert('Digite uma mensagem antes de enviar.'); return; }
   if(text.length > 2000){ alert('Mensagem muito longa (max 2000 chars).'); return; }
+
+  // ── VALIDADOR ANTI-PUNIÇÃO ──
+  const issues = validateMessageBeforeSend(text);
+  const blocks = issues.filter(i => i.severity === 'block');
+  const warns  = issues.filter(i => i.severity === 'warn');
+
+  if(blocks.length > 0){
+    const list = blocks.map(b => `  • ${b.reason}${b.match ? ` (${b.match})` : ''}`).join('\n');
+    alert(`🚫 Mensagem BLOQUEADA antes do envio.\n\nMotivos detectados:\n${list}\n\nO Mercado Livre pune mensagens com esses padrões (moderação ou penalidade na conta). Edite o texto e tente novamente.`);
+    return;
+  }
+
+  if(warns.length > 0){
+    const list = warns.map(w => `  • ${w.reason}`).join('\n');
+    if(!confirm(`⚠ Avisos detectados:\n\n${list}\n\nEnviar mesmo assim?`)) return;
+  }
 
   const dataset = vendasDataFull || vendasData;
   const venda = dataset.find(v => String(v.id) === String(orderId));
@@ -10851,7 +11242,27 @@ async function sendVendaChatReply(orderId, btn){
   const origText = btn.textContent;
   btn.textContent = '⏳ Enviando...';
 
+  // ── Helper interno: envia via action_guide com option_id=OTHER ──
+  // Esse é o fluxo que o ML exige quando o vendedor inicia conversa em ME2.
+  const sendViaActionGuideOther = async () => {
+    if(text.length > 350){
+      throw new Error('Mensagem muito longa para o motivo "OTHER" (limite 350 chars do ML). Encurte e tente novamente.');
+    }
+    const r = await proxyFetch(`/messages/action_guide/packs/${packId}/option`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ option_id: 'OTHER', text }),
+    });
+    if(!r.ok){
+      const errBody = await r.text();
+      throw new Error(`HTTP ${r.status}: ${errBody.slice(0, 300)}`);
+    }
+    return true;
+  };
+
   try {
+    // 1ª tentativa: endpoint direto (funciona quando o comprador já iniciou a conversa)
+    let usedFallback = false;
     const r = await proxyFetch(`/messages/packs/${packId}/sellers/${sellerId}?tag=post_sale`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -10863,16 +11274,26 @@ async function sendVendaChatReply(orderId, btn){
     });
 
     if(!r.ok){
-      const err = await r.text();
-      throw new Error(`HTTP ${r.status}: ${err.slice(0, 200)}`);
+      const errBody = await r.text();
+      // Detecta bloqueio típico de ME2 (vendedor iniciando conversa) → fallback automático
+      if(r.status === 403 && /blocked_by_conversation_initiated_by_seller/i.test(errBody)){
+        btn.textContent = '⏳ Usando motivo...';
+        await sendViaActionGuideOther();
+        usedFallback = true;
+      } else {
+        // Outro erro — repassa
+        throw new Error(`HTTP ${r.status}: ${errBody.slice(0, 300)}`);
+      }
     }
 
     ta.value = '';
-    btn.textContent = '✓ Enviada';
-    setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 1500);
+    recordSentMessage(text);
+    btn.textContent = usedFallback ? '✓ Enviada (motivo OTHER)' : '✓ Enviada';
+    setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
 
-    // Recarrega mensagens
+    // Recarrega mensagens e action_guide (caps mudou)
     await loadVendaChatMessages(orderId);
+    loadActionGuideOptions(orderId).catch(() => {});
     // Atualiza cache local (zera não lidas)
     vendaConversations.delete(orderId);
     await fetchVendaConversation(venda, true);
@@ -10881,7 +11302,12 @@ async function sendVendaChatReply(orderId, btn){
   } catch(e){
     btn.disabled = false;
     btn.textContent = origText;
-    alert(`❌ Erro ao enviar: ${e.message}`);
+    const human = humanizeMLBlockReason(e.message);
+    if(human){
+      alert(`❌ ${human}\n\nDetalhe técnico: ${e.message}`);
+    } else {
+      alert(`❌ Erro ao enviar: ${e.message}`);
+    }
   }
 }
 
