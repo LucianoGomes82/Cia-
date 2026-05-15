@@ -9350,6 +9350,10 @@ async function syncVendasIncremental(silent = false){
             status: novo.status,
             substatus: novo.substatus,
             shipment: novo.shipment || vAntiga.shipment,
+            // Re-aplica data e pack_id da API (XLSX antigo pode ter date_created errado:
+            // o XLSX traz hora de criação da ordem, mas o painel ML mostra date_closed)
+            date_created: novo.date_created || vAntiga.date_created,
+            pack_id: novo.pack_id || vAntiga.pack_id,
             _lastUpdatedAt: new Date().toISOString(),
           };
           // Detecta se status mudou
@@ -9736,15 +9740,17 @@ function fmtBRL(n, withSymbol = true){
 // Tenta várias fontes em ordem de preferência.
 function getOrderDate(order){
   if(!order) return null;
-  // Ordem de preferência
+  // Ordem de preferência — date_closed bate com o que o ML mostra no painel
+  // (momento que o pedido foi confirmado/pago). date_created pode ser antes,
+  // quando o comprador iniciou o checkout mas ainda não pagou.
   const candidates = [
-    order.date_created,
     order.date_closed,
+    order.payments?.[0]?.date_approved,
+    order.date_created,
     order.date_last_modified,
     order.date_last_updated,
     order.last_updated,
     order.payments?.[0]?.date_created,
-    order.payments?.[0]?.date_approved,
     order.shipping?.date_created,
   ];
   for(const c of candidates){
