@@ -261,6 +261,18 @@ input:focus,select:focus{border-color:var(--green)}
   border-color: var(--red) !important;
   font-weight: 700;
 }
+/* Pendente de resposta: comprador escreveu, você leu mas não respondeu */
+@keyframes pulseMsgPending {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245,158,11,.5); }
+  50%      { box-shadow: 0 0 0 4px rgba(245,158,11,0); }
+}
+.msg-btn-pending {
+  animation: pulseMsgPending 2s ease-in-out infinite;
+  background: rgba(245,158,11,.15) !important;
+  color: var(--amber) !important;
+  border-color: var(--amber) !important;
+  font-weight: 700;
+}
 
 /* ── ML ───────────────────────────────────────────────── */
 .mlrow{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid rgba(255,255,255,.04)}
@@ -7275,7 +7287,7 @@ async function fetchVendaConversation(venda, force = false){
       if(!lastMsg || (ts && ts > lastMsg.ts)){
         lastMsg = {
           ts,
-          text: (m.text?.plain || m.text?.markdown || '').slice(0, 100),
+          text: (extractMessageText(m) || '').slice(0, 100),
           fromBuyer,
         };
         lastFromBuyer = fromBuyer;
@@ -10668,13 +10680,24 @@ function renderChatButton(venda, padding = '4px 8px', fontSize = '10px'){
   const unreadCount = conv?.unreadCount || 0;
   const totalMsgs = conv?.totalMessages || 0;
   const hasAnyMsg = totalMsgs > 0;
+  // Última mensagem foi do comprador → você ainda não respondeu
+  // (persiste mesmo depois de "lido", diferente de unreadCount que zera ao abrir o chat)
+  const pendingReply = !!conv?.lastMsgFromBuyer;
 
-  // Estilos por estado
+  // Estilos por estado — prioridade: não lida > pendente resposta > tem conversa > sem
   let cls, bg, color, border, icon, label;
   if(unreadCount > 0){
     cls = 'msg-btn-unread';
     icon = '💬';
     label = `${unreadCount}`;
+  } else if(pendingReply){
+    // Lida mas você não respondeu → amarelo
+    cls = 'msg-btn-pending';
+    bg = 'rgba(245,158,11,.15)';
+    color = 'var(--amber)';
+    border = 'var(--amber)';
+    icon = '💬';
+    label = '!';
   } else if(hasAnyMsg){
     bg = 'rgba(96,165,250,.10)';
     color = 'var(--blue)';
@@ -10690,10 +10713,12 @@ function renderChatButton(venda, padding = '4px 8px', fontSize = '10px'){
   }
 
   const titleAttr = unreadCount > 0
-    ? `${unreadCount} mensagem${unreadCount>1?'s':''} não respondida${unreadCount>1?'s':''} — clique para ver e responder`
-    : (hasAnyMsg ? `${totalMsgs} mensagem${totalMsgs>1?'s':''} nesta conversa` : 'Abrir conversa com o comprador');
+    ? `${unreadCount} mensagem${unreadCount>1?'s':''} não lida${unreadCount>1?'s':''} — clique para ver e responder`
+    : pendingReply
+      ? `Comprador escreveu por último — você ainda não respondeu. Clique para abrir.`
+      : (hasAnyMsg ? `${totalMsgs} mensagem${totalMsgs>1?'s':''} nesta conversa` : 'Abrir conversa com o comprador');
 
-  const styleStr = cls ? '' : `background:${bg};color:${color};border:1px solid ${border}`;
+  const styleStr = cls === 'msg-btn-unread' ? '' : `background:${bg};color:${color};border:1px solid ${border}`;
 
   return `<button class="btn btn-sm ${cls||''}" onclick="openVendaChat('${escapeHTML(orderId)}')" title="${titleAttr}" style="font-size:${fontSize};padding:${padding};${styleStr}">${icon}${label ? ` ${label}` : ''}</button>`;
 }
@@ -10779,6 +10804,19 @@ async function openVendaChat(orderId){
   markVendaChatRead(orderId, true);
 }
 
+// Extrai texto de mensagem do ML — a API retorna `text` em DOIS formatos:
+//   1) Objeto: text: { plain: "...", markdown: "..." }   (endpoint /messages/packs/...)
+//   2) String direta: text: "Mensagem"                   (endpoint /messages/{id})
+// Esse helper unifica os dois casos. Retorna '' se não houver texto.
+function extractMessageText(m){
+  if(!m) return '';
+  const t = m.text;
+  if(t == null) return '';
+  if(typeof t === 'string') return t;
+  if(typeof t === 'object') return t.plain || t.markdown || '';
+  return String(t);
+}
+
 async function loadVendaChatMessages(orderId){
   const dataset = vendasDataFull || vendasData;
   const venda = dataset.find(v => String(v.id) === String(orderId));
@@ -10813,7 +10851,7 @@ async function loadVendaChatMessages(orderId){
     const myId = String(cfg.sellerId);
     const bubbles = msgs.map(m => {
       const fromMe = String(m.from?.user_id) === myId;
-      const txt = m.text?.plain || m.text?.markdown || '(anexo)';
+      const txt = extractMessageText(m) || '(anexo)';
       const ts = m.message_date?.created || m.created;
       const tsFmt = ts ? new Date(ts).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
       const bg = fromMe ? 'rgba(96,165,250,.12)' : 'var(--bg)';
@@ -11690,7 +11728,7 @@ window.debugPosVenda = async function(orderId){
       // Lista as mensagens
       result.info.messages.forEach((m, i) => {
         const fromBuyer = String(m.from?.user_id) !== String(sellerId);
-        const text = (m.text?.plain || m.text?.markdown || '').slice(0, 100);
+        const text = (extractMessageText(m) || '').slice(0, 100);
         console.log(`   [${i+1}] ${fromBuyer ? '👤 Comprador' : '👨‍💼 Você'}: ${text}`);
       });
     }
@@ -11745,7 +11783,7 @@ function showPosVendaDebugModal(result){
   const order = result.info.order || {};
   const messagesHTML = (result.info.messages || []).map((m, i) => {
     const fromBuyer = String(m.from?.user_id) !== String(result.info.sellerId);
-    const text = (m.text?.plain || m.text?.markdown || '(anexo)').slice(0, 200);
+    const text = (extractMessageText(m) || '(anexo)').slice(0, 200);
     const dt = m.message_date?.created ? new Date(m.message_date.created).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
     return `<div style="padding:6px 10px;border-left:3px solid ${fromBuyer?'var(--red)':'var(--blue)'};margin-bottom:6px;background:var(--bg2);border-radius:0 6px 6px 0">
       <div style="font-size:10px;color:var(--text3);margin-bottom:2px">${fromBuyer?'👤 Comprador':'👨‍💼 Você'} · ${dt}</div>
@@ -11879,7 +11917,7 @@ async function syncPosVenda(force = false){
           const data = await r.json();
           const msgs = (data.messages || []).map(m => ({
             id:        m.id,
-            text:      m.text?.plain || m.text?.markdown || '',
+            text:      extractMessageText(m),
             from:      m.from?.user_id,
             to:        m.to?.user_id,
             date:      m.message_date?.created || m.message_date?.received || null,
