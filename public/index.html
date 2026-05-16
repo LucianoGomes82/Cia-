@@ -1023,6 +1023,19 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
               </select>
             </div>
 
+            <!-- Filtro de mensagens -->
+            <div style="display:flex;align-items:center;gap:6px">
+              <label style="font-size:11px;color:var(--text2)">Msgs:</label>
+              <select id="vendas-filter-msgs" onchange="renderVendas()"
+                style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
+                <option value="all">Todas</option>
+                <option value="pending">⚠ Pendentes de resposta</option>
+                <option value="unread">🔴 Apenas não lidas</option>
+                <option value="any">💬 Com qualquer mensagem</option>
+                <option value="none">⚪ Sem mensagem</option>
+              </select>
+            </div>
+
             <!-- Filtro de data inicial -->
             <div style="display:flex;align-items:center;gap:6px">
               <label style="font-size:11px;color:var(--text2)">De:</label>
@@ -1038,12 +1051,14 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             </div>
 
             <!-- Atalhos de período -->
-            <div style="display:flex;gap:4px">
+            <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
               <button class="btn btn-sm" onclick="setFilterPeriod('today')" title="Apenas de hoje" style="font-size:10px;padding:4px 8px">Hoje</button>
               <button class="btn btn-sm" onclick="setFilterPeriod('7d')" style="font-size:10px;padding:4px 8px">7d</button>
               <button class="btn btn-sm" onclick="setFilterPeriod('30d')" style="font-size:10px;padding:4px 8px">30d</button>
               <button class="btn btn-sm" onclick="setFilterPeriod('month')" title="Mês atual" style="font-size:10px;padding:4px 8px">Mês</button>
               <button class="btn btn-sm" onclick="setFilterPeriod('clear')" title="Limpar filtros de data" style="font-size:10px;padding:4px 8px;background:rgba(239,68,68,.1);color:var(--red);border:1px solid var(--red)">✕</button>
+              <!-- Atalho rápido para mensagens pendentes -->
+              <button id="vendas-shortcut-pending" class="btn btn-sm" onclick="toggleFiltroMsgsPendentes()" title="Mostrar apenas vendas com mensagens em aberto pra responder" style="font-size:10px;padding:4px 8px;background:rgba(245,158,11,.1);color:var(--amber);border:1px solid var(--amber);margin-left:6px">💬 Pendentes <span id="vendas-shortcut-pending-count" style="font-weight:700"></span></button>
             </div>
 
             <span id="vendas-filter-count" style="margin-left:auto;font-size:10px;color:var(--text3);font-style:italic"></span>
@@ -8285,8 +8300,10 @@ async function syncVendas(force = false){
 
     // Background: sincroniza status de conversa das vendas em curso (não bloqueia UI)
     syncVendasConversations(vendasData).then(unread => {
+      // Sempre re-render para atualizar contador de "Pendentes" do atalho
+      // (vendas com mensagens lidas-mas-sem-resposta também precisam destacar)
+      renderVendas();
       if(unread > 0){
-        renderVendas();
         showToast(`💬 ${unread} mensagem${unread>1?'s':''} não respondida${unread>1?'s':''}`);
       }
     }).catch(() => {});
@@ -8442,6 +8459,14 @@ function setFilterPeriod(period){
   renderVendas();
 }
 
+// Atalho rápido: alterna filtro de mensagens pendentes (igual ao select 'pending')
+function toggleFiltroMsgsPendentes(){
+  const sel = document.getElementById('vendas-filter-msgs');
+  if(!sel) return;
+  sel.value = (sel.value === 'pending') ? 'all' : 'pending';
+  renderVendas();
+}
+
 async function setVendasView(mode){
   _vendasView = mode;
   // Atualiza visual dos botões
@@ -8452,9 +8477,19 @@ async function setVendasView(mode){
     btnPlanilha.style.background = mode === 'planilha' ? 'var(--bg3)' : 'transparent';
   }
 
-  // Mostra/esconde barra de filtros avançados (só na visão Planilha)
+  // Mostra/esconde barra de filtros avançados.
+  // Tipo e data filtram só na visão Planilha; o filtro de mensagens vale nas duas
+  // (pendentes de resposta são igualmente úteis na visão Cards).
   const filtersEl = document.getElementById('vendas-filters-advanced');
-  if(filtersEl) filtersEl.style.display = (mode === 'planilha') ? 'block' : 'none';
+  if(filtersEl) filtersEl.style.display = 'block';
+  // Tipo e data ficam desabilitados em Cards (não fazem efeito)
+  const tipoEl = document.getElementById('vendas-filter-tipo');
+  const fromEl = document.getElementById('vendas-filter-from');
+  const toEl   = document.getElementById('vendas-filter-to');
+  const disable = (el, on) => { if(!el) return; el.disabled = on; el.style.opacity = on ? '.4' : ''; };
+  disable(tipoEl, mode !== 'planilha');
+  disable(fromEl, mode !== 'planilha');
+  disable(toEl,   mode !== 'planilha');
 
   // Se entrou na Planilha pela primeira vez (ou cache expirou), tenta carregar do IndexedDB
   if(mode === 'planilha'){
@@ -9867,6 +9902,43 @@ function renderVendas(){
       } else {
         countEl.textContent = '';
       }
+    }
+  }
+
+  // ── Filtro de mensagens (vale nas duas visões: Cards e Planilha) ──
+  const filterMsgs = document.getElementById('vendas-filter-msgs')?.value || 'all';
+  if(filterMsgs !== 'all'){
+    items = items.filter(v => {
+      if(v._isManual) return false;  // lançamentos manuais não têm conversa
+      const conv = vendaConversations.get(String(v.id));
+      const unread  = conv?.unreadCount > 0;
+      const pending = !!conv?.lastMsgFromBuyer;  // comprador falou por último
+      const anyMsg  = (conv?.totalMessages || 0) > 0;
+      if(filterMsgs === 'pending') return unread || pending;  // tudo que precisa responder
+      if(filterMsgs === 'unread')  return unread;
+      if(filterMsgs === 'any')     return anyMsg;
+      if(filterMsgs === 'none')    return !anyMsg;
+      return true;
+    });
+  }
+
+  // Atualiza o badge "Pendentes" do atalho com a contagem total (não filtrada)
+  const pendentesCount = sourceData.filter(v => {
+    if(v._isManual) return false;
+    const conv = vendaConversations.get(String(v.id));
+    return (conv?.unreadCount > 0) || !!conv?.lastMsgFromBuyer;
+  }).length;
+  const pendingShortcut = document.getElementById('vendas-shortcut-pending');
+  const pendingCountEl  = document.getElementById('vendas-shortcut-pending-count');
+  if(pendingShortcut && pendingCountEl){
+    pendingCountEl.textContent = pendentesCount > 0 ? `(${pendentesCount})` : '';
+    // Destaque visual quando o atalho está ativo
+    if(filterMsgs === 'pending'){
+      pendingShortcut.style.background = 'rgba(245,158,11,.3)';
+      pendingShortcut.style.fontWeight = '700';
+    } else {
+      pendingShortcut.style.background = 'rgba(245,158,11,.1)';
+      pendingShortcut.style.fontWeight = '';
     }
   }
 
