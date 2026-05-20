@@ -326,6 +326,7 @@ input:focus,select:focus{border-color:var(--green)}
   <button class="tab" onclick="switchTab('compras')">🛒 Lista de Compras</button>
   <button class="tab" onclick="switchTab('vendas')">💰 Vendas <span id="vendas-msg-badge" style="display:none;background:var(--red);color:white;font-size:10px;padding:1px 6px;border-radius:10px;margin-left:4px;font-weight:700">0</span></button>
   <button class="tab" onclick="switchTab('anunciar')">📝 Anunciar</button>
+  <button class="tab" onclick="switchTab('tendencias')">📈 Tendências</button>
   <button class="tab" onclick="switchTab('config')">Config</button>
 </div>
 
@@ -1189,6 +1190,72 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
     </div>
   </div>
 
+  <!-- ── TENDÊNCIAS ─────────────────────────────────────── -->
+  <div class="panel" id="tab-tendencias">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+        <div>
+          <div class="sec" style="margin:0">📈 Tendências de Mercado</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:3px">O que mais vende e o que mais buscam no Mercado Livre — cruzado com o que você já vende</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select id="trend-categoria" onchange="loadTendencias()"
+            style="padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px">
+            <option value="MLB1051">📱 Celulares e Telefones</option>
+            <option value="MLB1000">🎧 Eletrônicos, Áudio e Vídeo</option>
+            <option value="MLB1648">💻 Informática</option>
+            <option value="MLB1276">⚽ Esportes e Fitness</option>
+            <option value="MLB1574">🏠 Casa, Móveis e Decoração</option>
+            <option value="MLB5726">🔌 Eletrodomésticos</option>
+            <option value="MLB1246">💄 Beleza e Cuidado Pessoal</option>
+            <option value="MLB1132">🧸 Brinquedos e Hobbies</option>
+            <option value="">🔢 Outra categoria (ID manual)</option>
+          </select>
+          <input type="text" id="trend-categoria-manual" placeholder="MLBxxxx" style="display:none;width:100px;padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px">
+          <button class="btn btn-sm" onclick="loadTendencias(true)" title="Recarregar (ignora cache)" style="font-size:12px;padding:6px 12px">🔄 Atualizar</button>
+        </div>
+      </div>
+
+      <div id="trend-load" style="display:none" class="alert al-info"><span class="spinner"></span><span id="trend-load-msg">Buscando tendências...</span></div>
+      <div id="trend-err" style="display:none" class="alert al-err"><span>✕</span><span id="trend-err-msg"></span></div>
+
+      <div id="trend-content" style="display:none">
+        <div style="font-size:10px;color:var(--text3);margin-bottom:10px" id="trend-meta"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" id="trend-grid">
+          <!-- Coluna 1: Mais vendidos -->
+          <div>
+            <div style="font-size:13px;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+              🔥 <span>Mais vendidos</span>
+              <span style="font-size:10px;color:var(--text3);font-weight:400">(/highlights)</span>
+            </div>
+            <div id="trend-highlights"></div>
+          </div>
+          <!-- Coluna 2: Mais buscados -->
+          <div>
+            <div style="font-size:13px;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+              🔍 <span>Mais buscados</span>
+              <span style="font-size:10px;color:var(--text3);font-weight:400">(/trends)</span>
+            </div>
+            <div id="trend-searches"></div>
+          </div>
+        </div>
+        <div style="margin-top:14px;padding:10px;background:var(--bg2);border-radius:6px;font-size:10px;color:var(--text3);line-height:1.6">
+          <strong>Legenda:</strong>
+          <span style="color:var(--green)">🟢 Já vendo</span> ·
+          <span style="color:var(--blue)">🔵 Tenho fornecedor (lista CIA)</span> ·
+          <span style="color:var(--amber)">🟡 Oportunidade nova</span><br>
+          Dados atualizados semanalmente pelo Mercado Livre · "Mais vendidos" é ranking (posição), não volume absoluto.
+        </div>
+      </div>
+
+      <div id="trend-empty" style="display:none;padding:30px;text-align:center;color:var(--text3)">
+        <div style="font-size:32px;margin-bottom:10px">📈</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px">Tendências de Mercado</div>
+        <div style="font-size:11px;line-height:1.6">Conecte sua conta ML em Config e clique em <strong>🔄 Atualizar</strong> para ver o que está em alta.</div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── CONFIG ─────────────────────────────────────────── -->
   <div class="panel" id="tab-config">
     <!-- Gerenciamento de Contas ML -->
@@ -1507,9 +1574,11 @@ function switchAccount(id){
   // Isso garante que TODO o estado seja resetado, incluindo listeners e variáveis
   // que possam estar presas à conta antiga
   const activeTabEl = document.querySelector('.tab.active');
-  const tabIds = ['import','comparar','lojas','ml','oport','perguntas','estoque','compras','vendas','posvenda','anunciar','config'];
-  const currentTabIdx = activeTabEl ? [...document.querySelectorAll('.tab')].indexOf(activeTabEl) : 0;
-  const currentTab = tabIds[currentTabIdx] || 'import';
+  let currentTab = 'import';
+  if(activeTabEl){
+    const m = (activeTabEl.getAttribute('onclick') || '').match(/switchTab\('([^']+)'\)/);
+    if(m) currentTab = m[1];
+  }
 
   // Guarda a aba atual para restaurar após reload
   try { sessionStorage.setItem('cia_return_tab', currentTab); } catch(e){}
@@ -1878,7 +1947,12 @@ function clearData(){ if(!confirm('Apagar todos os dados?')) return; localStorag
 function switchTab(id){
   // Redireciona abas removidas pra Vendas (perguntas e posvenda foram integradas)
   if(id === 'perguntas' || id === 'posvenda') id = 'vendas';
-  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['import','comparar','lojas','ml','oport','estoque','compras','vendas','anunciar','config'][i]===id));
+  // Marca o botão ativo comparando pelo onclick real (robusto à ordem/índice dos botões)
+  document.querySelectorAll('.tab').forEach(t => {
+    const onclick = t.getAttribute('onclick') || '';
+    const m = onclick.match(/switchTab\('([^']+)'\)/);
+    t.classList.toggle('active', m && m[1] === id);
+  });
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   const targetPanel = document.getElementById('tab-'+id);
   if(targetPanel) targetPanel.classList.add('active');
@@ -1898,6 +1972,7 @@ function switchTab(id){
   if(id==='posvenda') syncPosVenda();
   if(id==='anunciar') initAnunciar();
   if(id==='perguntas') syncPerguntas();
+  if(id==='tendencias') initTendencias();
   if(id==='config'){ renderAccountsList(); renderBlockedStates(); }
 }
 function showUpload(){ document.getElementById('upload-area').style.display='block'; document.getElementById('import-result').style.display='none'; switchTab('import'); }
@@ -4983,6 +5058,253 @@ function renderTopSellersResults(results){
 function setTopSellersFilter(key, value){
   _topSellersFilters[key] = value;
   renderTopSellersResults(_topSellersResults);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// ABA TENDÊNCIAS — produtos em alta no ML (highlights + trends)
+// ──────────────────────────────────────────────────────────────────────
+let _trendCache = {};        // { categoryId: { ts, highlights, searches } }
+const TREND_CACHE_TTL = 6 * 60 * 60 * 1000;  // 6h (ML atualiza semanalmente, cache generoso)
+let _trendLoading = false;
+
+function initTendencias(){
+  // Mostra/esconde input manual de categoria
+  const sel = document.getElementById('trend-categoria');
+  const manual = document.getElementById('trend-categoria-manual');
+  if(sel && manual){
+    sel.addEventListener('change', () => {
+      manual.style.display = sel.value === '' ? 'inline-block' : 'none';
+    });
+  }
+  if(!cfg.at){
+    document.getElementById('trend-empty').style.display = 'block';
+    document.getElementById('trend-content').style.display = 'none';
+    return;
+  }
+  // Carrega automaticamente na primeira vez
+  loadTendencias();
+}
+
+function getTrendCategoryId(){
+  const sel = document.getElementById('trend-categoria');
+  if(sel?.value === ''){
+    const manual = document.getElementById('trend-categoria-manual')?.value.trim();
+    return manual || 'MLB1051';
+  }
+  return sel?.value || 'MLB1051';
+}
+
+async function loadTendencias(force = false){
+  if(_trendLoading) return;
+  if(!cfg.at){
+    document.getElementById('trend-empty').style.display = 'block';
+    return;
+  }
+
+  const catId = getTrendCategoryId();
+  if(!/^MLB\d+$/.test(catId)){
+    showTrendErr('ID de categoria inválido. Use o formato MLBxxxx (ex: MLB1051 para celulares).');
+    return;
+  }
+
+  // Cache
+  const cached = _trendCache[catId];
+  if(!force && cached && (Date.now() - cached.ts) < TREND_CACHE_TTL){
+    renderTendencias(cached.highlights, cached.searches, catId, cached.ts);
+    return;
+  }
+
+  _trendLoading = true;
+  document.getElementById('trend-empty').style.display = 'none';
+  document.getElementById('trend-content').style.display = 'none';
+  document.getElementById('trend-err').style.display = 'none';
+  document.getElementById('trend-load').style.display = 'flex';
+  document.getElementById('trend-load-msg').textContent = 'Buscando mais vendidos e mais buscados...';
+
+  try {
+    // Busca highlights e trends em paralelo
+    const [hlRes, trRes] = await Promise.allSettled([
+      proxyFetch(`/highlights/MLB/category/${catId}`),
+      proxyFetch(`/trends/MLB/${catId}`),
+    ]);
+
+    // ── Processa highlights (mais vendidos) ──
+    let highlights = [];
+    if(hlRes.status === 'fulfilled' && hlRes.value.ok){
+      const data = await hlRes.value.json();
+      // Formato esperado: { content: [{ id, position, type }] }
+      // Mas o ML às vezes varia — aceitamos array direto e nomes alternativos
+      const arr = Array.isArray(data) ? data : (data.content || data.results || data.items || []);
+      highlights = arr.slice(0, 20).map((h, i) => ({
+        id: h.id || h.item_id || h.product_id,
+        position: h.position || (i + 1),
+        type: (h.type || h.entity || (String(h.id || '').length > 14 ? 'ITEM' : 'PRODUCT') || 'ITEM').toUpperCase(),
+        title: null, price: null, thumbnail: null, permalink: null,
+      })).filter(h => h.id);
+    } else if(hlRes.status === 'fulfilled'){
+      console.warn('[trends] /highlights retornou HTTP', hlRes.value.status);
+    }
+
+    // ── Processa trends (mais buscados) ──
+    let searches = [];
+    if(trRes.status === 'fulfilled' && trRes.value.ok){
+      const data = await trRes.value.json();
+      // [{ keyword, url }, ...]
+      searches = (Array.isArray(data) ? data : []).slice(0, 20).map((t, i) => ({
+        position: i + 1,
+        keyword: t.keyword || '',
+        url: t.url || '#',
+      }));
+    }
+
+    if(highlights.length === 0 && searches.length === 0){
+      throw new Error('Nenhum dado retornado. A categoria pode não ter ranking disponível, ou o token ML expirou.');
+    }
+
+    // Hidrata os detalhes dos highlights (nome, preço, foto) — em paralelo, progressivo
+    document.getElementById('trend-load-msg').textContent = `Carregando detalhes de ${highlights.length} produtos...`;
+    await hydrateHighlights(highlights);
+
+    // Salva cache
+    _trendCache[catId] = { ts: Date.now(), highlights, searches };
+
+    renderTendencias(highlights, searches, catId, Date.now());
+  } catch(e){
+    showTrendErr(e.message);
+  } finally {
+    _trendLoading = false;
+    document.getElementById('trend-load').style.display = 'none';
+  }
+}
+
+// Busca nome/preço/foto de cada produto do ranking (highlights só retorna IDs)
+async function hydrateHighlights(highlights){
+  await Promise.allSettled(highlights.map(async (h) => {
+    try {
+      // type PRODUCT usa /products/{id}, type ITEM usa /items/{id}
+      const path = h.type === 'PRODUCT' ? `/products/${h.id}` : `/items/${h.id}`;
+      const r = await proxyFetch(path);
+      if(!r.ok) return;
+      const d = await r.json();
+      if(h.type === 'PRODUCT'){
+        h.title = d.name || d.title || h.id;
+        h.thumbnail = d.pictures?.[0]?.url || d.pictures?.[0]?.secure_url || null;
+        h.price = d.buy_box_winner?.price ?? null;
+        h.permalink = d.permalink || (d.id ? `https://www.mercadolivre.com.br/p/${d.id}` : null);
+      } else {
+        h.title = d.title || h.id;
+        h.thumbnail = d.thumbnail || d.secure_thumbnail || null;
+        h.price = d.price ?? null;
+        h.permalink = d.permalink || null;
+        h.sold = d.sold_quantity ?? null;  // alguns itens expõem
+      }
+    } catch {}
+  }));
+}
+
+// Cruza um título com a lista CIA e os anúncios ML → retorna status
+function classifyTrendProduct(title){
+  if(!title) return { tag: 'new', label: '🟡', text: 'Oportunidade nova', color: 'var(--amber)' };
+  const tNorm = normKey(title);
+
+  // Já vendo: algum anúncio meu do ML casa com o título
+  let jaVendo = false;
+  if(typeof mlItems !== 'undefined' && mlItems.length){
+    jaVendo = mlItems.some(ml => {
+      const mlNorm = normKey(ml.title || '');
+      return mlNorm && tNorm && (mlNorm.includes(tNorm.slice(0, 20)) || tNorm.includes(mlNorm.slice(0, 20)));
+    });
+  }
+  if(jaVendo) return { tag: 'selling', label: '🟢', text: 'Já vendo', color: 'var(--green)' };
+
+  // Tenho fornecedor: bate com a lista CIA
+  let temFornecedor = false;
+  if(state.products && state.products.length){
+    temFornecedor = state.products.some(p => {
+      const pNorm = normKey(p.name || '');
+      if(!pNorm || !tNorm) return false;
+      // Match por marca + modelo principais (primeiras palavras significativas)
+      const tWords = tNorm.split(' ').filter(w => w.length > 2).slice(0, 3);
+      return tWords.length >= 2 && tWords.every(w => pNorm.includes(w));
+    });
+  }
+  if(temFornecedor) return { tag: 'supplier', label: '🔵', text: 'Tenho fornecedor', color: 'var(--blue)' };
+
+  return { tag: 'new', label: '🟡', text: 'Oportunidade nova', color: 'var(--amber)' };
+}
+
+function renderTendencias(highlights, searches, catId, ts){
+  document.getElementById('trend-content').style.display = 'block';
+  document.getElementById('trend-empty').style.display = 'none';
+
+  const catName = document.getElementById('trend-categoria')?.selectedOptions?.[0]?.textContent || catId;
+  const age = ts ? `atualizado ${formatRelativeTime(ts)}` : '';
+  document.getElementById('trend-meta').textContent = `${catName} · ${highlights.length} mais vendidos · ${searches.length} mais buscados · ${age}`;
+
+  // ── Coluna: mais vendidos ──
+  const hlEl = document.getElementById('trend-highlights');
+  if(highlights.length === 0){
+    hlEl.innerHTML = `<div style="padding:16px;text-align:center;color:var(--text3);font-size:11px">Sem ranking de mais vendidos para esta categoria.</div>`;
+  } else {
+    hlEl.innerHTML = highlights.map(h => {
+      const cls = classifyTrendProduct(h.title);
+      const title = h.title || `(carregando ${h.id}...)`;
+      const priceStr = h.price != null ? `R$ ${Number(h.price).toLocaleString('pt-BR', {minimumFractionDigits: 2})}` : '';
+      const thumb = h.thumbnail
+        ? `<img src="${escapeHTML(h.thumbnail)}" style="width:40px;height:40px;object-fit:contain;border-radius:4px;background:white" loading="lazy">`
+        : `<div style="width:40px;height:40px;border-radius:4px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:14px">📦</div>`;
+      const link = h.permalink ? `href="${escapeHTML(h.permalink)}" target="_blank" rel="noopener"` : '';
+      return `<a ${link} style="display:flex;align-items:center;gap:10px;padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;text-decoration:none;color:var(--text);transition:background .15s" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+        <div style="font-size:13px;font-weight:700;color:var(--text3);min-width:24px;text-align:center">${h.position || '—'}</div>
+        ${thumb}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escapeHTML(title)}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">
+            <span style="color:${cls.color}">${cls.label} ${cls.text}</span>
+            ${priceStr ? ` · ${priceStr}` : ''}
+          </div>
+        </div>
+      </a>`;
+    }).join('');
+  }
+
+  // ── Coluna: mais buscados ──
+  const srEl = document.getElementById('trend-searches');
+  if(searches.length === 0){
+    srEl.innerHTML = `<div style="padding:16px;text-align:center;color:var(--text3);font-size:11px">Sem dados de busca para esta categoria.</div>`;
+  } else {
+    srEl.innerHTML = searches.map(s => {
+      const cls = classifyTrendProduct(s.keyword);
+      return `<a href="${escapeHTML(s.url)}" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:10px;padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;text-decoration:none;color:var(--text);transition:background .15s" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+        <div style="font-size:13px;font-weight:700;color:var(--text3);min-width:24px;text-align:center">${s.position}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;line-height:1.3">${escapeHTML(s.keyword)}</div>
+          <div style="font-size:11px;margin-top:2px"><span style="color:${cls.color}">${cls.label} ${cls.text}</span></div>
+        </div>
+        <div style="font-size:11px;color:var(--blue)">🔍</div>
+      </a>`;
+    }).join('');
+  }
+}
+
+function showTrendErr(msg){
+  document.getElementById('trend-load').style.display = 'none';
+  document.getElementById('trend-content').style.display = 'none';
+  const errEl = document.getElementById('trend-err');
+  errEl.style.display = 'flex';
+  document.getElementById('trend-err-msg').textContent = msg;
+}
+
+// Formata "há X tempo" simples
+function formatRelativeTime(ts){
+  const diff = Date.now() - ts;
+  const min = Math.floor(diff / 60000);
+  if(min < 1) return 'agora';
+  if(min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  if(h < 24) return `há ${h}h`;
+  const d = Math.floor(h / 24);
+  return `há ${d}d`;
 }
 
 async function searchOport(){
