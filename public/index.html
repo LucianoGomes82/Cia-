@@ -1225,8 +1225,8 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
           <!-- Coluna 1: Mais vendidos -->
           <div>
             <div style="font-size:13px;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:6px">
-              🔥 <span>Mais vendidos</span>
-              <span style="font-size:10px;color:var(--text3);font-weight:400">(/highlights)</span>
+              🔥 <span>Mais vendidos + relevantes</span>
+              <span style="font-size:10px;color:var(--text3);font-weight:400">(/highlights + /search)</span>
             </div>
             <div id="trend-highlights"></div>
           </div>
@@ -1244,7 +1244,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
           <span style="color:var(--green)">🟢 Já vendo</span> ·
           <span style="color:var(--blue)">🔵 Tenho fornecedor (lista CIA)</span> ·
           <span style="color:var(--amber)">🟡 Oportunidade nova</span><br>
-          Dados atualizados semanalmente pelo Mercado Livre · "Mais vendidos" é ranking (posição), não volume absoluto.
+          Dados atualizados semanalmente pelo Mercado Livre. <strong>🏆 Ranking oficial</strong> = top 20 mais vendidos reais. <strong>📋 Relevantes</strong> = anúncios populares da categoria (não é ranking de vendas, completa até 50).
         </div>
       </div>
 
@@ -5164,6 +5164,41 @@ async function loadTendencias(force = false){
     // Hidrata os detalhes dos highlights (nome, preço, foto) — em paralelo, progressivo
     document.getElementById('trend-load-msg').textContent = `Carregando detalhes de ${highlights.length} produtos...`;
     await hydrateHighlights(highlights);
+    // Marca os oficiais como ranking
+    highlights.forEach(h => { h._source = 'ranking'; });
+
+    // ── Completa até 50 com anúncios relevantes da categoria (/search) ──
+    // Esses NÃO são ranking oficial de mais vendidos — são os mais relevantes
+    // da categoria. Rotulados separadamente pra não confundir.
+    const faltam = 50 - highlights.length;
+    if(faltam > 0){
+      document.getElementById('trend-load-msg').textContent = `Buscando ${faltam} anúncios relevantes...`;
+      try {
+        // IDs já no ranking (pra deduplicar)
+        const jaIncluidos = new Set(highlights.map(h => String(h.id)));
+        const sr = await proxyFetch(`/sites/MLB/search?category=${catId}&limit=50`);
+        if(sr.ok){
+          const sdata = await sr.json();
+          const relevantes = (sdata.results || [])
+            .filter(item => !jaIncluidos.has(String(item.id)) && !jaIncluidos.has(String(item.catalog_product_id || '')))
+            .slice(0, faltam)
+            .map((item, i) => ({
+              id: item.id,
+              position: highlights.length + i + 1,
+              type: 'ITEM',
+              title: item.title || item.id,
+              price: item.price ?? null,
+              thumbnail: item.thumbnail || item.secure_thumbnail || null,
+              permalink: item.permalink || null,
+              sold: item.sold_quantity ?? null,
+              _source: 'relevante',
+            }));
+          highlights = highlights.concat(relevantes);
+        }
+      } catch(e){
+        console.warn('[trends] busca de relevantes falhou:', e.message);
+      }
+    }
 
     // Salva cache
     _trendCache[catId] = { ts: Date.now(), highlights, searches };
@@ -5239,13 +5274,19 @@ function renderTendencias(highlights, searches, catId, ts){
 
   const catName = document.getElementById('trend-categoria')?.selectedOptions?.[0]?.textContent || catId;
   const age = ts ? `atualizado ${formatRelativeTime(ts)}` : '';
-  document.getElementById('trend-meta').textContent = `${catName} · ${highlights.length} mais vendidos · ${searches.length} mais buscados · ${age}`;
+  const nRanking = highlights.filter(h => h._source === 'ranking').length;
+  const nRelev   = highlights.filter(h => h._source === 'relevante').length;
+  const vendidosLabel = nRelev > 0
+    ? `${nRanking} ranking + ${nRelev} relevantes`
+    : `${highlights.length} mais vendidos`;
+  document.getElementById('trend-meta').textContent = `${catName} · ${vendidosLabel} · ${searches.length} mais buscados · ${age}`;
 
   // ── Coluna: mais vendidos ──
   const hlEl = document.getElementById('trend-highlights');
   if(highlights.length === 0){
     hlEl.innerHTML = `<div style="padding:16px;text-align:center;color:var(--text3);font-size:11px">Sem ranking de mais vendidos para esta categoria.</div>`;
   } else {
+    let lastSource = null;
     hlEl.innerHTML = highlights.map(h => {
       const cls = classifyTrendProduct(h.title);
       const title = h.title || `(carregando ${h.id}...)`;
@@ -5254,7 +5295,19 @@ function renderTendencias(highlights, searches, catId, ts){
         ? `<img src="${escapeHTML(h.thumbnail)}" style="width:40px;height:40px;object-fit:contain;border-radius:4px;background:white" loading="lazy">`
         : `<div style="width:40px;height:40px;border-radius:4px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:14px">📦</div>`;
       const link = h.permalink ? `href="${escapeHTML(h.permalink)}" target="_blank" rel="noopener"` : '';
-      return `<a ${link} style="display:flex;align-items:center;gap:10px;padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;text-decoration:none;color:var(--text);transition:background .15s" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+
+      // Divisor quando passa de ranking oficial para relevantes
+      let divider = '';
+      if(h._source !== lastSource){
+        if(h._source === 'ranking'){
+          divider = `<div style="font-size:10px;color:var(--green);font-weight:700;margin:4px 0 6px;letter-spacing:.3px">🏆 RANKING OFICIAL (mais vendidos)</div>`;
+        } else if(h._source === 'relevante'){
+          divider = `<div style="font-size:10px;color:var(--text3);font-weight:700;margin:12px 0 6px;letter-spacing:.3px;border-top:1px dashed var(--border);padding-top:10px">📋 RELEVANTES DA CATEGORIA (não é ranking de vendas)</div>`;
+        }
+        lastSource = h._source;
+      }
+
+      return `${divider}<a ${link} style="display:flex;align-items:center;gap:10px;padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;text-decoration:none;color:var(--text);transition:background .15s;${h._source === 'relevante' ? 'opacity:.85' : ''}" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
         <div style="font-size:13px;font-weight:700;color:var(--text3);min-width:24px;text-align:center">${h.position || '—'}</div>
         ${thumb}
         <div style="flex:1;min-width:0">
