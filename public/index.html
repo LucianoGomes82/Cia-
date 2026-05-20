@@ -5150,7 +5150,7 @@ async function loadTendencias(force = false){
     if(trRes.status === 'fulfilled' && trRes.value.ok){
       const data = await trRes.value.json();
       // [{ keyword, url }, ...]
-      searches = (Array.isArray(data) ? data : []).slice(0, 20).map((t, i) => ({
+      searches = (Array.isArray(data) ? data : []).slice(0, 50).map((t, i) => ({
         position: i + 1,
         keyword: t.keyword || '',
         url: t.url || '#',
