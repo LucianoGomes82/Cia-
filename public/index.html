@@ -327,6 +327,7 @@ input:focus,select:focus{border-color:var(--green)}
   <button class="tab" onclick="switchTab('vendas')">💰 Vendas <span id="vendas-msg-badge" style="display:none;background:var(--red);color:white;font-size:10px;padding:1px 6px;border-radius:10px;margin-left:4px;font-weight:700">0</span></button>
   <button class="tab" onclick="switchTab('anunciar')">📝 Anunciar</button>
   <button class="tab" onclick="switchTab('tendencias')">📈 Tendências</button>
+  <button class="tab" onclick="switchTab('financeiro')">💰 Financeiro</button>
   <button class="tab" onclick="switchTab('config')">Config</button>
 </div>
 
@@ -1256,6 +1257,56 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
     </div>
   </div>
 
+  <!-- ── FINANCEIRO / CONCILIAÇÃO ──────────────────────── -->
+  <div class="panel" id="tab-financeiro">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+        <div>
+          <div class="sec" style="margin:0">💰 Financeiro & Conciliação</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:3px">Importe o extrato do Mercado Pago e cruze automaticamente com suas vendas do ML</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="file" id="fin-import-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importExtratoMP(event)">
+          <button class="btn btn-p btn-sm" onclick="document.getElementById('fin-import-file').click()" style="font-size:12px;padding:6px 12px">📥 Importar extrato MP</button>
+          <button class="btn btn-sm" onclick="clearExtratoMP()" id="fin-clear-btn" style="display:none;font-size:12px;padding:6px 12px;background:rgba(239,68,68,.1);color:var(--red);border:1px solid var(--red)">🗑 Limpar</button>
+        </div>
+      </div>
+
+      <div id="fin-empty" style="padding:30px;text-align:center;color:var(--text3)">
+        <div style="font-size:32px;margin-bottom:10px">💰</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px">Conciliação Mercado Pago × Mercado Livre</div>
+        <div style="font-size:11px;line-height:1.6;max-width:480px;margin:0 auto">
+          Baixe o <strong>Extrato de conta</strong> no Mercado Pago (Relatórios → Extrato de conta, formato Excel) e importe aqui.<br>
+          O app cruza cada movimento com suas vendas do ML usando o <strong>nº de operação (payment_id)</strong>.
+        </div>
+        <div style="font-size:10px;color:var(--text3);margin-top:14px;padding:8px;background:var(--bg2);border-radius:6px;max-width:480px;margin-left:auto;margin-right:auto">
+          🔒 Tudo é processado no seu navegador. O extrato não é enviado a nenhum servidor.
+        </div>
+      </div>
+
+      <div id="fin-load" style="display:none" class="alert al-info"><span class="spinner"></span><span id="fin-load-msg">Processando extrato...</span></div>
+      <div id="fin-err" style="display:none" class="alert al-err"><span>✕</span><span id="fin-err-msg"></span></div>
+
+      <div id="fin-content" style="display:none">
+        <!-- Cards de resumo -->
+        <div id="fin-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px"></div>
+
+        <!-- Sub-abas -->
+        <div style="display:flex;gap:6px;border-bottom:1px solid var(--border);margin-bottom:14px;flex-wrap:wrap">
+          <button class="fin-subtab active" onclick="setFinView('conciliacao', this)" style="background:none;border:none;padding:8px 12px;cursor:pointer;color:var(--text);font-size:12px;border-bottom:2px solid transparent">🔗 Conciliação</button>
+          <button class="fin-subtab" onclick="setFinView('categorias', this)" style="background:none;border:none;padding:8px 12px;cursor:pointer;color:var(--text2);font-size:12px;border-bottom:2px solid transparent">📊 Categorias</button>
+          <button class="fin-subtab" onclick="setFinView('ciclo', this)" style="background:none;border:none;padding:8px 12px;cursor:pointer;color:var(--text2);font-size:12px;border-bottom:2px solid transparent">🔄 Ciclo por operação</button>
+          <button class="fin-subtab" onclick="setFinView('movimentos', this)" style="background:none;border:none;padding:8px 12px;cursor:pointer;color:var(--text2);font-size:12px;border-bottom:2px solid transparent">📋 Movimentos</button>
+        </div>
+
+        <div id="fin-view-conciliacao" class="fin-view"></div>
+        <div id="fin-view-categorias" class="fin-view" style="display:none"></div>
+        <div id="fin-view-ciclo" class="fin-view" style="display:none"></div>
+        <div id="fin-view-movimentos" class="fin-view" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── CONFIG ─────────────────────────────────────────── -->
   <div class="panel" id="tab-config">
     <!-- Gerenciamento de Contas ML -->
@@ -1973,6 +2024,7 @@ function switchTab(id){
   if(id==='anunciar') initAnunciar();
   if(id==='perguntas') syncPerguntas();
   if(id==='tendencias') initTendencias();
+  if(id==='financeiro') initFinanceiro();
   if(id==='config'){ renderAccountsList(); renderBlockedStates(); }
 }
 function showUpload(){ document.getElementById('upload-area').style.display='block'; document.getElementById('import-result').style.display='none'; switchTab('import'); }
@@ -5358,6 +5410,469 @@ function formatRelativeTime(ts){
   if(h < 24) return `há ${h}h`;
   const d = Math.floor(h / 24);
   return `há ${d}d`;
+}
+
+
+// ══════════════════════════════════════════════════════════════════════
+// ABA FINANCEIRO & CONCILIAÇÃO — extrato MP × vendas ML
+// ══════════════════════════════════════════════════════════════════════
+let _extratoMP = null;       // { movimentos:[], resumo:{}, periodo:{} }
+let _finView = 'conciliacao';
+const FIN_STORAGE_KEY = 'cia_extrato_mp';
+
+// Categoriza um tipo de transação do extrato MP
+function categorizeMPTransaction(tipo){
+  const t = String(tipo || '').toLowerCase();
+  if(t.includes('liberação de dinheiro cancelada')) return { cat: 'Venda cancelada', grupo: 'neutro' };
+  if(t.includes('liberação de dinheiro'))           return { cat: 'Venda liberada (ML)', grupo: 'entrada' };
+  if(t.includes('entrada de dinheiro') || t.includes('dinheiro recebido')) return { cat: 'Entrada de dinheiro', grupo: 'entrada' };
+  if(t.includes('pagamento com código qr pix') || t.includes('pagamento com codigo qr pix')) return { cat: 'Pix recebido (QR)', grupo: 'entrada' };
+  if(t.includes('transferência pix recebida') || t.includes('transferencia pix recebida')) return { cat: 'Pix recebido (transferência)', grupo: 'entrada' };
+  if(t.includes('transferência pix enviada') || t.includes('transferencia pix enviada')) return { cat: 'Saque (Pix enviado)', grupo: 'saque' };
+  if(t.includes('débito por dívida') || t.includes('debito por divida')) return { cat: 'Débito reclamação ML', grupo: 'debito' };
+  if(t.includes('reembolso de tarifas')) return { cat: 'Reembolso de tarifa', grupo: 'entrada' };
+  if(t.includes('reembolso'))            return { cat: 'Reembolso reclamação', grupo: 'entrada' };
+  if(t.includes('rendimento'))           return { cat: 'Rendimento', grupo: 'entrada' };
+  return { cat: 'Outro', grupo: 'outro' };
+}
+
+// Parse de valor "1.845,66" ou "-1.350,24" → number
+function parseMPValue(s){
+  if(typeof s === 'number') return s;
+  const str = String(s).trim().replace(/\./g, '').replace(',', '.');
+  const n = parseFloat(str);
+  return isNaN(n) ? 0 : n;
+}
+
+// Parse de data "01-01-2026" → ISO
+function parseMPDate(s){
+  if(!s) return null;
+  const str = String(s).trim();
+  const m = str.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if(m) return `${m[3]}-${m[2]}-${m[1]}`;
+  // tenta outros formatos
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+function initFinanceiro(){
+  // Tenta restaurar extrato salvo
+  if(!_extratoMP){
+    try {
+      const saved = localStorage.getItem(FIN_STORAGE_KEY);
+      if(saved) _extratoMP = JSON.parse(saved);
+    } catch {}
+  }
+  if(_extratoMP && _extratoMP.movimentos?.length){
+    document.getElementById('fin-empty').style.display = 'none';
+    document.getElementById('fin-content').style.display = 'block';
+    document.getElementById('fin-clear-btn').style.display = 'inline-block';
+    renderFinanceiro();
+  } else {
+    document.getElementById('fin-empty').style.display = 'block';
+    document.getElementById('fin-content').style.display = 'none';
+    document.getElementById('fin-clear-btn').style.display = 'none';
+  }
+}
+
+async function importExtratoMP(event){
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if(!file) return;
+
+  // Carrega SheetJS se necessário
+  if(typeof XLSX === 'undefined'){
+    try {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+        s.onload = resolve; s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    } catch(e){
+      showFinErr('Erro ao carregar biblioteca de planilhas. Verifique sua conexão.');
+      return;
+    }
+  }
+
+  document.getElementById('fin-empty').style.display = 'none';
+  document.getElementById('fin-err').style.display = 'none';
+  document.getElementById('fin-load').style.display = 'flex';
+  document.getElementById('fin-load-msg').textContent = 'Processando extrato...';
+
+  try {
+    const buffer = await file.arrayBuffer();
+    const wb = XLSX.read(buffer, { type: 'array', cellDates: false });
+    const parsed = parseExtratoMP(wb);
+    if(!parsed || parsed.movimentos.length === 0){
+      throw new Error('Nenhum movimento encontrado. Verifique se é o "Extrato de conta" do Mercado Pago (com colunas RELEASE_DATE, TRANSACTION_TYPE, REFERENCE_ID, TRANSACTION_NET_AMOUNT).');
+    }
+    _extratoMP = parsed;
+    // Persiste (com try — pode estourar quota se extrato gigante)
+    try { localStorage.setItem(FIN_STORAGE_KEY, JSON.stringify(parsed)); }
+    catch { console.warn('[fin] extrato grande demais pra salvar no localStorage'); }
+
+    document.getElementById('fin-load').style.display = 'none';
+    document.getElementById('fin-content').style.display = 'block';
+    document.getElementById('fin-clear-btn').style.display = 'inline-block';
+    renderFinanceiro();
+    showToast(`✓ ${parsed.movimentos.length} movimentos importados`);
+  } catch(e){
+    showFinErr(e.message);
+  }
+}
+
+// Parser do extrato MP — tolerante a variações de layout
+function parseExtratoMP(wb){
+  const movimentos = [];
+  let resumo = { inicial: 0, creditos: 0, debitos: 0, final: 0 };
+
+  for(const sheetName of wb.SheetNames){
+    const sheet = wb.Sheets[sheetName];
+    const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: false });
+
+    // Acha a linha de cabeçalho dos movimentos (tem RELEASE_DATE e TRANSACTION_TYPE)
+    let headerRow = -1, colMap = {};
+    for(let i = 0; i < Math.min(aoa.length, 20); i++){
+      const row = (aoa[i] || []).map(c => String(c || '').trim().toUpperCase());
+      const idxDate = row.findIndex(c => c.includes('RELEASE_DATE') || c === 'DATA' || c.includes('DATE'));
+      const idxType = row.findIndex(c => c.includes('TRANSACTION_TYPE') || c.includes('DESCRI') || c.includes('CONCEPT'));
+      if(idxDate >= 0 && idxType >= 0){
+        headerRow = i;
+        colMap.date = idxDate;
+        colMap.type = idxType;
+        colMap.ref  = row.findIndex(c => c.includes('REFERENCE') || c.includes('OPERAT') || c.includes('OPERAÇ'));
+        colMap.amount = row.findIndex(c => c.includes('NET_AMOUNT') || c.includes('AMOUNT') || c.includes('VALOR') || c.includes('NET'));
+        colMap.balance = row.findIndex(c => c.includes('PARTIAL_BALANCE') || c.includes('BALANCE') || c.includes('SALDO'));
+        break;
+      }
+    }
+
+    // Captura resumo (INITIAL_BALANCE etc.) se presente acima do header
+    for(let i = 0; i < Math.min(aoa.length, 5); i++){
+      const row = (aoa[i] || []).map(c => String(c || '').trim().toUpperCase());
+      if(row.some(c => c.includes('INITIAL_BALANCE'))){
+        const next = aoa[i + 1] || [];
+        const iIni = row.findIndex(c => c.includes('INITIAL_BALANCE'));
+        const iCre = row.findIndex(c => c.includes('CREDIT'));
+        const iDeb = row.findIndex(c => c.includes('DEBIT'));
+        const iFin = row.findIndex(c => c.includes('FINAL_BALANCE'));
+        if(iIni >= 0) resumo.inicial = parseMPValue(next[iIni]);
+        if(iCre >= 0) resumo.creditos = parseMPValue(next[iCre]);
+        if(iDeb >= 0) resumo.debitos = parseMPValue(next[iDeb]);
+        if(iFin >= 0) resumo.final = parseMPValue(next[iFin]);
+      }
+    }
+
+    if(headerRow < 0) continue;
+
+    for(let i = headerRow + 1; i < aoa.length; i++){
+      const row = aoa[i] || [];
+      const tipo = row[colMap.type];
+      if(!tipo || String(tipo).trim() === '') continue;
+      const val = parseMPValue(row[colMap.amount]);
+      const cat = categorizeMPTransaction(tipo);
+      movimentos.push({
+        data: parseMPDate(row[colMap.date]),
+        dataRaw: String(row[colMap.date] || ''),
+        tipo: String(tipo).trim(),
+        ref: colMap.ref >= 0 ? String(row[colMap.ref] || '').trim().replace(/\.0$/, '') : '',
+        valor: val,
+        saldoParcial: colMap.balance >= 0 ? parseMPValue(row[colMap.balance]) : null,
+        categoria: cat.cat,
+        grupo: cat.grupo,
+      });
+    }
+  }
+
+  // Se não capturou resumo, calcula dos movimentos
+  if(resumo.creditos === 0 && resumo.debitos === 0){
+    resumo.creditos = movimentos.filter(m => m.valor > 0).reduce((s, m) => s + m.valor, 0);
+    resumo.debitos  = movimentos.filter(m => m.valor < 0).reduce((s, m) => s + m.valor, 0);
+    resumo.final = resumo.inicial + resumo.creditos + resumo.debitos;
+  }
+
+  const datas = movimentos.map(m => m.data).filter(Boolean).sort();
+  return {
+    movimentos,
+    resumo,
+    periodo: { inicio: datas[0] || null, fim: datas[datas.length - 1] || null },
+    importadoEm: new Date().toISOString(),
+  };
+}
+
+function clearExtratoMP(){
+  if(!confirm('Limpar o extrato importado? Isso não afeta suas vendas, só remove os dados financeiros do MP.')) return;
+  _extratoMP = null;
+  try { localStorage.removeItem(FIN_STORAGE_KEY); } catch {}
+  initFinanceiro();
+}
+
+function setFinView(view, btn){
+  _finView = view;
+  document.querySelectorAll('.fin-view').forEach(v => v.style.display = 'none');
+  const target = document.getElementById('fin-view-' + view);
+  if(target) target.style.display = 'block';
+  document.querySelectorAll('.fin-subtab').forEach(b => {
+    b.classList.remove('active');
+    b.style.borderBottomColor = 'transparent';
+    b.style.color = 'var(--text2)';
+  });
+  if(btn){
+    btn.classList.add('active');
+    btn.style.borderBottomColor = 'var(--blue)';
+    btn.style.color = 'var(--text)';
+  }
+}
+
+function renderFinanceiro(){
+  if(!_extratoMP) return;
+  renderFinSummary();
+  renderFinConciliacao();
+  renderFinCategorias();
+  renderFinCiclo();
+  renderFinMovimentos();
+}
+
+function renderFinSummary(){
+  const { movimentos, resumo, periodo } = _extratoMP;
+  const entradas = movimentos.filter(m => m.grupo === 'entrada').reduce((s, m) => s + m.valor, 0);
+  const debitos  = movimentos.filter(m => m.grupo === 'debito').reduce((s, m) => s + m.valor, 0);
+  const saques   = movimentos.filter(m => m.grupo === 'saque').reduce((s, m) => s + m.valor, 0);
+  const resultadoOp = entradas + debitos;
+
+  const cards = [
+    { label: 'Resultado operacional', val: resultadoOp, color: resultadoOp >= 0 ? 'var(--green)' : 'var(--red)', hint: 'Entradas − débitos (sem saques)' },
+    { label: 'Entradas', val: entradas, color: 'var(--green)', hint: 'Vendas, reembolsos, rendimentos' },
+    { label: 'Débitos (reclamações)', val: debitos, color: 'var(--red)', hint: `${movimentos.filter(m=>m.grupo==='debito').length} débitos` },
+    { label: 'Saques', val: saques, color: 'var(--text2)', hint: 'Pix enviado pra sua conta' },
+    { label: 'Saldo final', val: resumo.final, color: 'var(--blue)', hint: periodo.inicio ? `${periodo.inicio} a ${periodo.fim}` : '' },
+  ];
+
+  document.getElementById('fin-summary').innerHTML = cards.map(c => `
+    <div style="padding:12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.3px">${c.label}</div>
+      <div style="font-size:18px;font-weight:700;color:${c.color};margin:4px 0">${fmtBRL(c.val)}</div>
+      <div style="font-size:9px;color:var(--text3)">${c.hint}</div>
+    </div>`).join('');
+}
+
+// ── CONCILIAÇÃO: cruza payment_id do MP com vendas do ML ──
+function buildPaymentIndex(){
+  // Mapa payment_id → venda do ML
+  const idx = new Map();
+  const dataset = vendasDataFull || vendasData || [];
+  for(const v of dataset){
+    const ids = [];
+    if(v.paymentId) ids.push(String(v.paymentId));
+    if(Array.isArray(v.paymentIds)) ids.push(...v.paymentIds.map(String));
+    for(const id of ids){
+      if(id && !idx.has(id)) idx.set(id, v);
+    }
+  }
+  return idx;
+}
+
+function renderFinConciliacao(){
+  const { movimentos } = _extratoMP;
+  const payIdx = buildPaymentIndex();
+
+  // Agrupa movimentos por referência (payment_id)
+  const porRef = new Map();
+  for(const m of movimentos){
+    if(!m.ref) continue;
+    if(!porRef.has(m.ref)) porRef.set(m.ref, []);
+    porRef.get(m.ref).push(m);
+  }
+
+  const linhas = [];
+  let matched = 0, unmatched = 0;
+  for(const [ref, movs] of porRef){
+    const recebidoMP = movs.reduce((s, m) => s + m.valor, 0);
+    const venda = payIdx.get(ref);
+    if(venda) matched++; else unmatched++;
+    // Esperado do ML = totalLiquido da venda (o que o ML disse que ia pagar)
+    const esperadoML = venda ? (venda.totalLiquido ?? venda.total ?? null) : null;
+    const diff = (esperadoML != null) ? (recebidoMP - esperadoML) : null;
+    linhas.push({ ref, recebidoMP, venda, esperadoML, diff, nMovs: movs.length });
+  }
+
+  // Ordena: divergências primeiro, depois sem match, depois OK
+  linhas.sort((a, b) => {
+    const sev = x => x.diff != null ? (Math.abs(x.diff) > 1 ? 0 : 2) : 1;
+    return sev(a) - sev(b) || Math.abs(b.diff || 0) - Math.abs(a.diff || 0);
+  });
+
+  const totalRecebido = linhas.reduce((s, l) => s + l.recebidoMP, 0);
+  const totalEsperado = linhas.filter(l => l.esperadoML != null).reduce((s, l) => s + l.esperadoML, 0);
+
+  const el = document.getElementById('fin-view-conciliacao');
+  el.innerHTML = `
+    <div style="font-size:11px;color:var(--text2);margin-bottom:10px">
+      Cruzando <strong>${porRef.size}</strong> operações do MP com suas vendas do ML pelo payment_id ·
+      <span style="color:var(--green)">${matched} casaram</span> ·
+      <span style="color:var(--amber)">${unmatched} sem venda correspondente</span>
+      ${matched === 0 ? '<br><span style="color:var(--amber)">⚠ Nenhuma venda casou. Sincronize a aba Vendas primeiro (o app precisa ter os payment_ids do ML carregados).</span>' : ''}
+    </div>
+    <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead><tr style="background:var(--bg2)">
+        <th style="padding:6px 8px;text-align:left">Operação (payment_id)</th>
+        <th style="padding:6px 8px;text-align:left">Venda ML</th>
+        <th style="padding:6px 8px;text-align:right">Esperado ML</th>
+        <th style="padding:6px 8px;text-align:right">Recebido MP</th>
+        <th style="padding:6px 8px;text-align:right">Diferença</th>
+        <th style="padding:6px 8px;text-align:center">Status</th>
+      </tr></thead>
+      <tbody>
+        ${linhas.map(l => {
+          let status, statusColor, rowBg = '';
+          if(l.esperadoML == null){
+            status = l.venda ? 'Sem líquido ML' : 'Sem venda ML';
+            statusColor = 'var(--amber)';
+          } else if(Math.abs(l.diff) < 1){
+            status = '✓ OK'; statusColor = 'var(--green)';
+          } else {
+            status = '⚠ Diverge'; statusColor = 'var(--red)';
+            rowBg = 'background:rgba(239,68,68,.06)';
+          }
+          const produto = l.venda ? escapeHTML((l.venda.firstItem?.title || l.venda.items?.[0]?.item?.title || '—').slice(0, 40)) : '—';
+          return `<tr style="border-bottom:1px solid var(--border);${rowBg}">
+            <td style="padding:6px 8px;font-family:'DM Mono',monospace;font-size:10px">${escapeHTML(l.ref)}</td>
+            <td style="padding:6px 8px">${produto}</td>
+            <td style="padding:6px 8px;text-align:right">${l.esperadoML != null ? fmtBRL(l.esperadoML) : '—'}</td>
+            <td style="padding:6px 8px;text-align:right;color:${l.recebidoMP>=0?'var(--green)':'var(--red)'}">${fmtBRL(l.recebidoMP)}</td>
+            <td style="padding:6px 8px;text-align:right;font-weight:600;color:${l.diff==null?'var(--text3)':Math.abs(l.diff)<1?'var(--text2)':'var(--red)'}">${l.diff != null ? fmtBRL(l.diff) : '—'}</td>
+            <td style="padding:6px 8px;text-align:center;color:${statusColor};font-size:10px;font-weight:600">${status}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+      <tfoot><tr style="border-top:2px solid var(--border);font-weight:700">
+        <td colspan="2" style="padding:8px">TOTAL (${linhas.length} operações)</td>
+        <td style="padding:8px;text-align:right">${fmtBRL(totalEsperado)}</td>
+        <td style="padding:8px;text-align:right">${fmtBRL(totalRecebido)}</td>
+        <td style="padding:8px;text-align:right">${fmtBRL(totalRecebido - totalEsperado)}</td>
+        <td></td>
+      </tr></tfoot>
+    </table>
+    </div>`;
+}
+
+function renderFinCategorias(){
+  const { movimentos } = _extratoMP;
+  const cats = {};
+  for(const m of movimentos){
+    if(!cats[m.categoria]) cats[m.categoria] = { qtd: 0, total: 0 };
+    cats[m.categoria].qtd++;
+    cats[m.categoria].total += m.valor;
+  }
+  const arr = Object.entries(cats).sort((a, b) => b[1].total - a[1].total);
+  const maxAbs = Math.max(...arr.map(([, c]) => Math.abs(c.total)), 1);
+
+  document.getElementById('fin-view-categorias').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:var(--bg2)">
+        <th style="padding:6px 8px;text-align:left">Categoria</th>
+        <th style="padding:6px 8px;text-align:center">Qtd</th>
+        <th style="padding:6px 8px;text-align:right">Total</th>
+        <th style="padding:6px 8px;width:40%">Proporção</th>
+      </tr></thead>
+      <tbody>
+        ${arr.map(([cat, c]) => {
+          const pct = (Math.abs(c.total) / maxAbs * 100).toFixed(0);
+          const color = c.total >= 0 ? 'var(--green)' : 'var(--red)';
+          return `<tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:6px 8px">${escapeHTML(cat)}</td>
+            <td style="padding:6px 8px;text-align:center">${c.qtd}</td>
+            <td style="padding:6px 8px;text-align:right;font-weight:600;color:${color}">${fmtBRL(c.total)}</td>
+            <td style="padding:6px 8px"><div style="background:${color};height:14px;width:${pct}%;border-radius:3px;opacity:.7"></div></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+function renderFinCiclo(){
+  const { movimentos } = _extratoMP;
+  const porRef = new Map();
+  for(const m of movimentos){
+    if(!m.ref) continue;
+    if(!porRef.has(m.ref)) porRef.set(m.ref, []);
+    porRef.get(m.ref).push(m);
+  }
+  const ciclos = [];
+  for(const [ref, movs] of porRef){
+    const ent = movs.filter(m => m.valor > 0).reduce((s, m) => s + m.valor, 0);
+    const deb = movs.filter(m => m.valor < 0).reduce((s, m) => s + m.valor, 0);
+    const saldo = ent + deb;
+    const tipos = [...new Set(movs.map(m => m.categoria))];
+    const temSaque = tipos.some(t => t.includes('Saque'));
+    ciclos.push({ ref, n: movs.length, ent, deb, saldo, tipos, temSaque });
+  }
+  ciclos.sort((a, b) => a.saldo - b.saldo);
+
+  document.getElementById('fin-view-ciclo').innerHTML = `
+    <div style="font-size:11px;color:var(--text2);margin-bottom:10px">
+      Ciclo de vida de cada operação: liberação → débito → reembolso. Linhas em vermelho = saldo negativo que <strong>não é saque</strong> (vale investigar).
+    </div>
+    <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead><tr style="background:var(--bg2)">
+        <th style="padding:6px 8px;text-align:left">Operação</th>
+        <th style="padding:6px 8px;text-align:center">Mov.</th>
+        <th style="padding:6px 8px;text-align:right">Entradas</th>
+        <th style="padding:6px 8px;text-align:right">Débitos</th>
+        <th style="padding:6px 8px;text-align:right">Saldo</th>
+        <th style="padding:6px 8px;text-align:left">Tipos</th>
+      </tr></thead>
+      <tbody>
+        ${ciclos.map(c => {
+          const alerta = c.saldo < -0.01 && !c.temSaque;
+          return `<tr style="border-bottom:1px solid var(--border);${alerta?'background:rgba(239,68,68,.06)':''}">
+            <td style="padding:6px 8px;font-family:'DM Mono',monospace;font-size:10px">${escapeHTML(c.ref)}</td>
+            <td style="padding:6px 8px;text-align:center">${c.n}</td>
+            <td style="padding:6px 8px;text-align:right;color:var(--green)">${fmtBRL(c.ent)}</td>
+            <td style="padding:6px 8px;text-align:right;color:var(--red)">${c.deb !== 0 ? fmtBRL(c.deb) : '—'}</td>
+            <td style="padding:6px 8px;text-align:right;font-weight:600;color:${c.saldo>=0?'var(--green)':'var(--red)'}">${fmtBRL(c.saldo)}</td>
+            <td style="padding:6px 8px;font-size:10px;color:var(--text2)">${c.tipos.map(escapeHTML).join(' + ')}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+    </div>`;
+}
+
+function renderFinMovimentos(){
+  const { movimentos } = _extratoMP;
+  const sorted = [...movimentos].sort((a, b) => (a.data || '').localeCompare(b.data || ''));
+  document.getElementById('fin-view-movimentos').innerHTML = `
+    <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead><tr style="background:var(--bg2)">
+        <th style="padding:6px 8px;text-align:left">Data</th>
+        <th style="padding:6px 8px;text-align:left">Tipo</th>
+        <th style="padding:6px 8px;text-align:left">Operação</th>
+        <th style="padding:6px 8px;text-align:right">Valor</th>
+        <th style="padding:6px 8px;text-align:right">Saldo</th>
+      </tr></thead>
+      <tbody>
+        ${sorted.map(m => `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 8px;white-space:nowrap">${m.data ? m.data.split('-').reverse().join('/') : m.dataRaw}</td>
+          <td style="padding:6px 8px">${escapeHTML(m.tipo)}</td>
+          <td style="padding:6px 8px;font-family:'DM Mono',monospace;font-size:10px">${escapeHTML(m.ref)}</td>
+          <td style="padding:6px 8px;text-align:right;font-weight:600;color:${m.valor>=0?'var(--green)':'var(--red)'}">${fmtBRL(m.valor)}</td>
+          <td style="padding:6px 8px;text-align:right;color:var(--text2)">${m.saldoParcial != null ? fmtBRL(m.saldoParcial) : '—'}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>`;
+}
+
+function showFinErr(msg){
+  document.getElementById('fin-load').style.display = 'none';
+  const el = document.getElementById('fin-err');
+  el.style.display = 'flex';
+  document.getElementById('fin-err-msg').textContent = msg;
 }
 
 async function searchOport(){
@@ -9923,6 +10438,7 @@ function orderToVenda(order){
     subtotal: total - frete,
     frete,
     paymentId: payments[0]?.id || null,
+    paymentIds: payments.map(p => String(p.id)).filter(Boolean),
     buyer: {
       id:        order.buyer?.id,
       nickname:  order.buyer?.nickname || '',
@@ -10099,6 +10615,7 @@ async function loadAllVendasForPlanilha(){
         subtotal: total - frete,
         frete,
         paymentId: payments[0]?.id || null,
+        paymentIds: payments.map(p => String(p.id)).filter(Boolean),
         buyer: {
           id:        order.buyer?.id,
           nickname:  order.buyer?.nickname || '',
