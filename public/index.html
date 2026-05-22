@@ -1303,11 +1303,32 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
 
         <!-- Filtro por categoria (afeta Conciliação, Ciclo e Movimentos) -->
         <div id="fin-filter-bar" style="display:none;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-          <label style="font-size:11px;color:var(--text2)">Filtrar por tipo:</label>
+          <label style="font-size:11px;color:var(--text2)">Tipo:</label>
           <select id="fin-filter-cat" onchange="renderFinanceiro()"
-            style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;min-width:200px">
+            style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;min-width:180px">
             <option value="">Todos os tipos</option>
           </select>
+          <label id="fin-filter-status-label" style="font-size:11px;color:var(--text2)">Status:</label>
+          <select id="fin-filter-status" onchange="renderFinanceiro()"
+            style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
+            <option value="">Todos</option>
+            <option value="ok">✓ OK (bateu)</option>
+            <option value="diverge">⚠ Divergência</option>
+            <option value="sem_venda">Sem venda ML</option>
+            <option value="sem_liquido">Sem líquido ML</option>
+          </select>
+          <label style="font-size:11px;color:var(--text2)">Mês:</label>
+          <select id="fin-filter-mes" onchange="onFinMesChange()"
+            style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
+            <option value="">Todos</option>
+          </select>
+          <label style="font-size:11px;color:var(--text2)">De:</label>
+          <input type="date" id="fin-filter-from" onchange="onFinDateChange()"
+            style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
+          <label style="font-size:11px;color:var(--text2)">Até:</label>
+          <input type="date" id="fin-filter-to" onchange="onFinDateChange()"
+            style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
+          <button class="btn btn-sm" onclick="clearFinDateFilter()" title="Limpar filtros de data" style="font-size:10px;padding:4px 8px;background:rgba(239,68,68,.1);color:var(--red);border:1px solid var(--red)">✕ Data</button>
           <span id="fin-filter-total" style="font-size:11px;font-weight:600"></span>
         </div>
 
@@ -5787,14 +5808,62 @@ function setFinView(view, btn){
   const filterBar = document.getElementById('fin-filter-bar');
   const temExtrato = !!(_extratoMP && _extratoMP.movimentos?.length);
   if(filterBar) filterBar.style.display = (temExtrato && view !== 'previsao') ? 'flex' : 'none';
+
+  // Filtro de status só se aplica à Conciliação — esconde nas outras visões
+  const statusSel = document.getElementById('fin-filter-status');
+  const statusLbl = document.getElementById('fin-filter-status-label');
+  const showStatus = (view === 'conciliacao');
+  if(statusSel) statusSel.style.display = showStatus ? '' : 'none';
+  if(statusLbl) statusLbl.style.display = showStatus ? '' : 'none';
 }
 
-// Retorna os movimentos filtrados pela categoria selecionada (ou todos)
+// Retorna os movimentos filtrados por categoria E intervalo de data
 function getFilteredMovimentos(){
   if(!_extratoMP) return [];
-  const cat = document.getElementById('fin-filter-cat')?.value || '';
-  if(!cat) return _extratoMP.movimentos;
-  return _extratoMP.movimentos.filter(m => m.categoria === cat);
+  const cat  = document.getElementById('fin-filter-cat')?.value || '';
+  const from = document.getElementById('fin-filter-from')?.value || '';
+  const to   = document.getElementById('fin-filter-to')?.value || '';
+
+  return _extratoMP.movimentos.filter(m => {
+    if(cat && m.categoria !== cat) return false;
+    if(from && (!m.data || m.data < from)) return false;
+    if(to   && (!m.data || m.data > to))   return false;
+    return true;
+  });
+}
+
+// Quando muda o mês: ajusta De/Até para o primeiro/último dia daquele mês
+function onFinMesChange(){
+  const mes = document.getElementById('fin-filter-mes')?.value || '';  // formato "2026-04"
+  const fromEl = document.getElementById('fin-filter-from');
+  const toEl   = document.getElementById('fin-filter-to');
+  if(mes && fromEl && toEl){
+    const [ano, m] = mes.split('-').map(Number);
+    const ultimoDia = new Date(ano, m, 0).getDate();  // dia 0 do mês seguinte = último do atual
+    fromEl.value = `${mes}-01`;
+    toEl.value = `${mes}-${String(ultimoDia).padStart(2, '0')}`;
+  } else if(!mes && fromEl && toEl){
+    fromEl.value = '';
+    toEl.value = '';
+  }
+  renderFinanceiro();
+}
+
+// Quando muda De/Até manualmente: zera o seletor de mês (pra não conflitar)
+function onFinDateChange(){
+  const mesEl = document.getElementById('fin-filter-mes');
+  if(mesEl) mesEl.value = '';
+  renderFinanceiro();
+}
+
+function clearFinDateFilter(){
+  const mesEl = document.getElementById('fin-filter-mes');
+  const fromEl = document.getElementById('fin-filter-from');
+  const toEl   = document.getElementById('fin-filter-to');
+  if(mesEl) mesEl.value = '';
+  if(fromEl) fromEl.value = '';
+  if(toEl) toEl.value = '';
+  renderFinanceiro();
 }
 
 // Popula o dropdown de categorias com o que realmente existe nos extratos
@@ -5814,6 +5883,28 @@ function populateFinFilter(){
     arr.map(([cat, c]) => `<option value="${escapeHTML(cat)}">${escapeHTML(cat)} (${c.qtd}) — ${fmtBRL(c.total)}</option>`).join('');
   // Restaura seleção anterior se ainda existe
   if(prev && arr.some(([c]) => c === prev)) sel.value = prev;
+
+  // Popula seletor de mês com os meses presentes no extrato
+  const mesSel = document.getElementById('fin-filter-mes');
+  if(mesSel){
+    const prevMes = mesSel.value;
+    const meses = {};  // "2026-04" → { qtd, total }
+    for(const m of _extratoMP.movimentos){
+      if(!m.data) continue;
+      const ym = m.data.slice(0, 7);  // "2026-04"
+      if(!meses[ym]) meses[ym] = { qtd: 0, total: 0 };
+      meses[ym].qtd++;
+      meses[ym].total += m.valor;
+    }
+    const nomesMes = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const ordenados = Object.keys(meses).sort();  // cronológico
+    mesSel.innerHTML = '<option value="">Todos</option>' +
+      ordenados.map(ym => {
+        const [ano, m] = ym.split('-').map(Number);
+        return `<option value="${ym}">${nomesMes[m]}/${ano} (${meses[ym].qtd})</option>`;
+      }).join('');
+    if(prevMes && meses[prevMes]) mesSel.value = prevMes;
+  }
 }
 
 function renderFinanceiro(){
@@ -5833,11 +5924,13 @@ function renderFinanceiro(){
 
   if(temExtrato){
     populateFinFilter();
-    // Mostra o total da categoria filtrada
-    const cat = document.getElementById('fin-filter-cat')?.value || '';
+    // Mostra o total filtrado quando há QUALQUER filtro ativo (tipo ou data)
+    const cat  = document.getElementById('fin-filter-cat')?.value || '';
+    const from = document.getElementById('fin-filter-from')?.value || '';
+    const to   = document.getElementById('fin-filter-to')?.value || '';
     const totalEl = document.getElementById('fin-filter-total');
     if(totalEl){
-      if(cat){
+      if(cat || from || to){
         const movs = getFilteredMovimentos();
         const total = movs.reduce((s, m) => s + m.valor, 0);
         totalEl.textContent = `→ ${movs.length} movimento(s) · ${fmtBRL(total)}`;
@@ -6022,29 +6115,48 @@ function renderFinConciliacao(){
     // Esperado do ML = totalLiquido da venda (o que o ML disse que ia pagar)
     const esperadoML = venda ? (venda.totalLiquido ?? venda.total ?? null) : null;
     const diff = (esperadoML != null) ? (recebidoMP - esperadoML) : null;
-    linhas.push({ ref, recebidoMP, venda, esperadoML, diff, nMovs: movs.length });
+    // Data mais recente da operação
+    const datas = movs.map(m => m.data).filter(Boolean).sort();
+    const dataOp = datas[datas.length - 1] || null;
+    // Classifica o status da conciliação
+    let statusKey;
+    if(esperadoML == null) statusKey = venda ? 'sem_liquido' : 'sem_venda';
+    else if(Math.abs(diff) < 1) statusKey = 'ok';
+    else statusKey = 'diverge';
+    linhas.push({ ref, recebidoMP, venda, esperadoML, diff, nMovs: movs.length, dataOp, statusKey });
   }
 
+  // Filtro por status da conciliação
+  const filtroStatus = document.getElementById('fin-filter-status')?.value || '';
+  const linhasFiltradas = filtroStatus ? linhas.filter(l => l.statusKey === filtroStatus) : linhas;
+
   // Ordena: divergências primeiro, depois sem match, depois OK
-  linhas.sort((a, b) => {
+  linhasFiltradas.sort((a, b) => {
     const sev = x => x.diff != null ? (Math.abs(x.diff) > 1 ? 0 : 2) : 1;
     return sev(a) - sev(b) || Math.abs(b.diff || 0) - Math.abs(a.diff || 0);
   });
 
-  const totalRecebido = linhas.reduce((s, l) => s + l.recebidoMP, 0);
-  const totalEsperado = linhas.filter(l => l.esperadoML != null).reduce((s, l) => s + l.esperadoML, 0);
+  const totalRecebido = linhasFiltradas.reduce((s, l) => s + l.recebidoMP, 0);
+  const totalEsperado = linhasFiltradas.filter(l => l.esperadoML != null).reduce((s, l) => s + l.esperadoML, 0);
+  // Contadores por status (sobre o conjunto sem filtro de status, mas com filtros de data/tipo)
+  const cOk = linhas.filter(l => l.statusKey==='ok').length;
+  const cDiv = linhas.filter(l => l.statusKey==='diverge').length;
+  const cSemV = linhas.filter(l => l.statusKey==='sem_venda').length;
 
   const el = document.getElementById('fin-view-conciliacao');
   el.innerHTML = `
     <div style="font-size:11px;color:var(--text2);margin-bottom:10px">
-      Cruzando <strong>${porRef.size}</strong> operações do MP com suas vendas do ML pelo payment_id ·
-      <span style="color:var(--green)">${matched} casaram</span> ·
-      <span style="color:var(--amber)">${unmatched} sem venda correspondente</span>
+      Cruzando <strong>${porRef.size}</strong> operações do MP com vendas do ML ·
+      <span style="color:var(--green)">✓ ${cOk} OK</span> ·
+      <span style="color:var(--red)">⚠ ${cDiv} divergência${cDiv!==1?'s':''}</span> ·
+      <span style="color:var(--amber)">${cSemV} sem venda ML</span>
+      ${filtroStatus ? ` · <span style="color:var(--blue)">filtrando: ${linhasFiltradas.length} mostrada(s)</span>` : ''}
       ${matched === 0 ? '<br><span style="color:var(--amber)">⚠ Nenhuma venda casou. Sincronize a aba Vendas primeiro (o app precisa ter os payment_ids do ML carregados).</span>' : ''}
     </div>
     <div style="overflow-x:auto">
     <table style="width:100%;border-collapse:collapse;font-size:11px">
       <thead><tr style="background:var(--bg2)">
+        <th style="padding:6px 8px;text-align:left">Data</th>
         <th style="padding:6px 8px;text-align:left">Operação (payment_id)</th>
         <th style="padding:6px 8px;text-align:left">Venda ML</th>
         <th style="padding:6px 8px;text-align:right">Esperado ML</th>
@@ -6053,19 +6165,16 @@ function renderFinConciliacao(){
         <th style="padding:6px 8px;text-align:center">Status</th>
       </tr></thead>
       <tbody>
-        ${linhas.map(l => {
+        ${linhasFiltradas.map(l => {
           let status, statusColor, rowBg = '';
-          if(l.esperadoML == null){
-            status = l.venda ? 'Sem líquido ML' : 'Sem venda ML';
-            statusColor = 'var(--amber)';
-          } else if(Math.abs(l.diff) < 1){
-            status = '✓ OK'; statusColor = 'var(--green)';
-          } else {
-            status = '⚠ Diverge'; statusColor = 'var(--red)';
-            rowBg = 'background:rgba(239,68,68,.06)';
-          }
+          if(l.statusKey === 'sem_liquido'){ status = 'Sem líquido ML'; statusColor = 'var(--amber)'; }
+          else if(l.statusKey === 'sem_venda'){ status = 'Sem venda ML'; statusColor = 'var(--amber)'; }
+          else if(l.statusKey === 'ok'){ status = '✓ OK'; statusColor = 'var(--green)'; }
+          else { status = '⚠ Diverge'; statusColor = 'var(--red)'; rowBg = 'background:rgba(239,68,68,.06)'; }
           const produto = l.venda ? escapeHTML((l.venda.firstItem?.title || l.venda.items?.[0]?.item?.title || '—').slice(0, 40)) : '—';
+          const dataFmt = l.dataOp ? l.dataOp.split('-').reverse().join('/') : '—';
           return `<tr style="border-bottom:1px solid var(--border);${rowBg}">
+            <td style="padding:6px 8px;white-space:nowrap;font-size:10px;color:var(--text2)">${dataFmt}</td>
             <td style="padding:6px 8px;font-family:'DM Mono',monospace;font-size:10px">${escapeHTML(l.ref)}</td>
             <td style="padding:6px 8px">${produto}</td>
             <td style="padding:6px 8px;text-align:right">${l.esperadoML != null ? fmtBRL(l.esperadoML) : '—'}</td>
@@ -6076,7 +6185,7 @@ function renderFinConciliacao(){
         }).join('')}
       </tbody>
       <tfoot><tr style="border-top:2px solid var(--border);font-weight:700">
-        <td colspan="2" style="padding:8px">TOTAL (${linhas.length} operações)</td>
+        <td colspan="3" style="padding:8px">TOTAL (${linhasFiltradas.length} operações)</td>
         <td style="padding:8px;text-align:right">${fmtBRL(totalEsperado)}</td>
         <td style="padding:8px;text-align:right">${fmtBRL(totalRecebido)}</td>
         <td style="padding:8px;text-align:right">${fmtBRL(totalRecebido - totalEsperado)}</td>
@@ -6087,7 +6196,15 @@ function renderFinConciliacao(){
 }
 
 function renderFinCategorias(){
-  const { movimentos } = _extratoMP;
+  // Respeita filtro de data, mas ignora o filtro de tipo (mostra todas as categorias do período)
+  const cat = document.getElementById('fin-filter-cat')?.value || '';
+  const from = document.getElementById('fin-filter-from')?.value || '';
+  const to   = document.getElementById('fin-filter-to')?.value || '';
+  const movimentos = _extratoMP.movimentos.filter(m => {
+    if(from && (!m.data || m.data < from)) return false;
+    if(to   && (!m.data || m.data > to))   return false;
+    return true;
+  });
   const cats = {};
   for(const m of movimentos){
     if(!cats[m.categoria]) cats[m.categoria] = { qtd: 0, total: 0 };
@@ -6135,9 +6252,14 @@ function renderFinCiclo(){
     const saldo = ent + deb;
     const tipos = [...new Set(movs.map(m => m.categoria))];
     const temSaque = tipos.some(t => t.includes('Saque'));
-    ciclos.push({ ref, n: movs.length, ent, deb, saldo, tipos, temSaque });
+    const datas = movs.map(m => m.data).filter(Boolean).sort();
+    const dataIni = datas[0] || null;
+    const dataFim = datas[datas.length - 1] || null;
+    ciclos.push({ ref, n: movs.length, ent, deb, saldo, tipos, temSaque, dataIni, dataFim });
   }
   ciclos.sort((a, b) => a.saldo - b.saldo);
+
+  const fmtD = d => d ? d.split('-').reverse().slice(0,2).join('/') : '—';
 
   document.getElementById('fin-view-ciclo').innerHTML = `
     <div style="font-size:11px;color:var(--text2);margin-bottom:10px">
@@ -6146,6 +6268,7 @@ function renderFinCiclo(){
     <div style="overflow-x:auto">
     <table style="width:100%;border-collapse:collapse;font-size:11px">
       <thead><tr style="background:var(--bg2)">
+        <th style="padding:6px 8px;text-align:left">Período</th>
         <th style="padding:6px 8px;text-align:left">Operação</th>
         <th style="padding:6px 8px;text-align:center">Mov.</th>
         <th style="padding:6px 8px;text-align:right">Entradas</th>
@@ -6156,7 +6279,9 @@ function renderFinCiclo(){
       <tbody>
         ${ciclos.map(c => {
           const alerta = c.saldo < -0.01 && !c.temSaque;
+          const periodo = (c.dataIni === c.dataFim) ? fmtD(c.dataIni) : `${fmtD(c.dataIni)}–${fmtD(c.dataFim)}`;
           return `<tr style="border-bottom:1px solid var(--border);${alerta?'background:rgba(239,68,68,.06)':''}">
+            <td style="padding:6px 8px;white-space:nowrap;font-size:10px;color:var(--text2)">${periodo}</td>
             <td style="padding:6px 8px;font-family:'DM Mono',monospace;font-size:10px">${escapeHTML(c.ref)}</td>
             <td style="padding:6px 8px;text-align:center">${c.n}</td>
             <td style="padding:6px 8px;text-align:right;color:var(--green)">${fmtBRL(c.ent)}</td>
