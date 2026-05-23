@@ -9831,10 +9831,14 @@ async function syncVendas(force = false){
 
       // Data real de entrega: extrai do status_history o evento "delivered"
       let date_delivered = null;
-      const histDeliv = (shipment?.status_history || []).find(h => h.status === 'delivered');
-      if(histDeliv?.date) date_delivered = histDeliv.date;
-      // Fallback: alguns shipments expõem status_history como objeto com chave date_delivered
-      if(!date_delivered && shipment?.status_history?.date_delivered) date_delivered = shipment.status_history.date_delivered;
+      const sh = shipment?.status_history;
+      if(Array.isArray(sh)){
+        const histDeliv = sh.find(h => h && h.status === 'delivered');
+        if(histDeliv?.date) date_delivered = histDeliv.date;
+      } else if(sh && typeof sh === 'object'){
+        // Algumas respostas trazem status_history como objeto: { date_delivered, date_shipped, ... }
+        date_delivered = sh.date_delivered || null;
+      }
 
       return {
         id: order.id,
