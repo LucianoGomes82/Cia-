@@ -1022,6 +1022,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
                 <option value="receita">🎁 Receitas</option>
                 <option value="outro">📌 Outros</option>
                 <option value="bloqueados">🚫 Estados bloqueados</option>
+                <option value="compra_garantida">🛡 Compra Garantida (≤30d)</option>
               </select>
             </div>
 
@@ -6037,12 +6038,16 @@ function renderFinSummaryPrevisao(){
   const totalRisco = emRisco.reduce((s, v) => s + (v.totalLiquido || 0), 0);
   const totalBruto = vendas.reduce((s, v) => s + (v.total || 0), 0);
   const totalTaxas = vendas.reduce((s, v) => s + (v.mlFee || 0) + (v.shippingPaidBySeller || 0), 0);
+  // Vendas na janela de Compra Garantida (≤30 dias da entrega, ou ainda não entregues)
+  const emCG = vendas.filter(v => isCompraGarantida(v));
+  const totalCG = emCG.reduce((s, v) => s + (v.totalLiquido || 0), 0);
 
   const cards = [
     { label: 'Esperado a receber', val: totalEsperado, color: 'var(--green)', hint: `${vendas.length} vendas (líquido)` },
     { label: 'Faturamento bruto', val: totalBruto, color: 'var(--blue)', hint: 'Antes de taxas' },
     { label: 'Taxas ML + frete', val: -totalTaxas, color: 'var(--text2)', hint: 'Comissão + frete bancado' },
     { label: 'Em risco (mediação)', val: -totalRisco, color: emRisco.length ? 'var(--red)' : 'var(--text3)', hint: `${emRisco.length} venda${emRisco.length!==1?'s':''} com reclamação aberta` },
+    { label: '🛡 Compra Garantida', val: totalCG, color: emCG.length ? 'var(--amber)' : 'var(--text3)', hint: `${emCG.length} venda${emCG.length!==1?'s':''} na janela de 30 dias` },
   ];
 
   document.getElementById('fin-summary').innerHTML = cards.map(c => `
@@ -9824,6 +9829,13 @@ async function syncVendas(force = false){
       // Endereço de entrega
       const recv = shipment?.receiver_address || {};
 
+      // Data real de entrega: extrai do status_history o evento "delivered"
+      let date_delivered = null;
+      const histDeliv = (shipment?.status_history || []).find(h => h.status === 'delivered');
+      if(histDeliv?.date) date_delivered = histDeliv.date;
+      // Fallback: alguns shipments expõem status_history como objeto com chave date_delivered
+      if(!date_delivered && shipment?.status_history?.date_delivered) date_delivered = shipment.status_history.date_delivered;
+
       return {
         id: order.id,
         pack_id: order.pack_id || null,
@@ -9832,6 +9844,7 @@ async function syncVendas(force = false){
         date_estimated: shipment?.shipping_option?.estimated_delivery_final?.date
                      || shipment?.shipping_option?.estimated_delivery_time?.date
                      || null,
+        date_delivered,
         status: order.status,
         substatus: shipment?.substatus || null,
         mediations,
@@ -10989,6 +11002,7 @@ async function syncVendasIncremental(silent = false){
             // Re-aplica data e pack_id da API (XLSX antigo pode ter date_created errado:
             // o XLSX traz hora de criação da ordem, mas o painel ML mostra date_closed)
             date_created: novo.date_created || vAntiga.date_created,
+            date_delivered: novo.date_delivered || vAntiga.date_delivered,
             pack_id: novo.pack_id || vAntiga.pack_id,
             _lastUpdatedAt: new Date().toISOString(),
           };
@@ -11092,6 +11106,16 @@ function orderToVenda(order){
   const total = order.total_amount || 0;
   const frete = order.shipping?.cost || 0;
 
+  // Data real de entrega, se o order trouxer status_history no shipping
+  let date_delivered = null;
+  const sh = order.shipping?.status_history;
+  if(Array.isArray(sh)){
+    const d = sh.find(h => h.status === 'delivered');
+    if(d?.date) date_delivered = d.date;
+  } else if(sh?.date_delivered){
+    date_delivered = sh.date_delivered;
+  }
+
   // Cor da variação
   let color = null;
   const varAttrs = items[0]?.item?.variation_attributes || [];
@@ -11124,6 +11148,7 @@ function orderToVenda(order){
     id: String(order.id),
     pack_id: order.pack_id ? String(order.pack_id) : null,
     date_created: getOrderDate(order),
+    date_delivered,
     status: order.status,
     substatus: order.shipping?.substatus || null,
     mediations: Array.isArray(order.mediations) ? order.mediations : [],
@@ -11378,6 +11403,48 @@ function fmtBRL(n, withSymbol = true){
 
 // Extrai a melhor data disponível de um order da API ML.
 // Tenta várias fontes em ordem de preferência.
+// Determina se uma venda está na janela de Compra Garantida do ML.
+// Regra (definida com o usuário): venda NÃO-cancelada E
+//   (ainda não entregue  OU  entregue há ≤ CG_JANELA_DIAS dias).
+// A contagem dos dias é a partir da data REAL de entrega (status_history "delivered").
+const CG_JANELA_DIAS = 30;
+function isCompraGarantida(v){
+  if(!v) return false;
+  // Cancelada nunca está em CG
+  const st = String(v.status || '').toLowerCase();
+  if(st === 'cancelled' || st === 'canceled') return false;
+  if(v._excludeFromFinancials) return false;
+
+  const sub = String(v.substatus || '').toLowerCase();
+  const entregue = sub === 'delivered' || /entreg/i.test(sub);
+
+  if(!entregue){
+    // Ainda não entregue (a caminho) → está na janela (pode entrar em CG)
+    return true;
+  }
+  // Entregue: precisa da data de entrega pra ver se está dentro de 30 dias
+  if(!v.date_delivered) {
+    // Entregue mas sem data conhecida — não dá pra cravar; trata como dentro da janela
+    // (conservador: melhor mostrar e o usuário avaliar do que esconder).
+    return true;
+  }
+  const dEntrega = new Date(v.date_delivered);
+  if(isNaN(dEntrega.getTime())) return true;
+  // Compara por dias inteiros (zera horas) pra evitar erro de borda em "exatamente 30 dias"
+  const msDia = 86400000;
+  const diasDesde = Math.floor((Date.now() - dEntrega.getTime()) / msDia);
+  return diasDesde <= CG_JANELA_DIAS;
+}
+
+// Dias restantes na janela de CG (pra exibir). null se não entregue ou sem data.
+function cgDiasRestantes(v){
+  if(!v?.date_delivered) return null;
+  const d = new Date(v.date_delivered);
+  if(isNaN(d.getTime())) return null;
+  const diasDesde = (Date.now() - d.getTime()) / 86400000;
+  return Math.max(0, Math.ceil(CG_JANELA_DIAS - diasDesde));
+}
+
 function getOrderDate(order){
   if(!order) return null;
   // Ordem de preferência — date_closed bate com o que o ML mostra no painel
@@ -11469,6 +11536,7 @@ function renderVendas(){
         if(filterTipo === 'vendas')      return !v._isManual && !v._isBlockedState;
         if(filterTipo === 'manuais')     return v._isManual;
         if(filterTipo === 'bloqueados')  return v._isBlockedState;
+        if(filterTipo === 'compra_garantida') return !v._isManual && isCompraGarantida(v);
         // Tipos específicos: aporte, retirada, despesa, receita, outro
         return v._isManual && v.tipo === filterTipo;
       });
