@@ -1302,34 +1302,66 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
         </div>
 
         <!-- Filtro por categoria (afeta Conciliação, Ciclo e Movimentos) -->
-        <div id="fin-filter-bar" style="display:none;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-          <label style="font-size:11px;color:var(--text2)">Tipo:</label>
-          <select id="fin-filter-cat" onchange="renderFinanceiro()"
-            style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;min-width:180px">
-            <option value="">Todos os tipos</option>
-          </select>
-          <label id="fin-filter-status-label" style="font-size:11px;color:var(--text2)">Status:</label>
-          <select id="fin-filter-status" onchange="renderFinanceiro()"
-            style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
-            <option value="">Todos</option>
-            <option value="ok">✓ OK (bateu)</option>
-            <option value="diverge">⚠ Divergência</option>
-            <option value="sem_venda">Sem venda ML</option>
-            <option value="sem_liquido">Sem líquido ML</option>
-          </select>
-          <label style="font-size:11px;color:var(--text2)">Mês:</label>
-          <select id="fin-filter-mes" onchange="onFinMesChange()"
-            style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
-            <option value="">Todos</option>
-          </select>
-          <label style="font-size:11px;color:var(--text2)">De:</label>
-          <input type="date" id="fin-filter-from" onchange="onFinDateChange()"
-            style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
-          <label style="font-size:11px;color:var(--text2)">Até:</label>
-          <input type="date" id="fin-filter-to" onchange="onFinDateChange()"
-            style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
-          <button class="btn btn-sm" onclick="clearFinDateFilter()" title="Limpar filtros de data" style="font-size:10px;padding:4px 8px;background:rgba(239,68,68,.1);color:var(--red);border:1px solid var(--red)">✕ Data</button>
-          <span id="fin-filter-total" style="font-size:11px;font-weight:600"></span>
+        <!-- Barra de filtros redesenhada: grupos com label em cima -->
+        <div id="fin-filter-bar" style="display:none;margin-bottom:14px">
+          <div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;padding:12px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:10px">
+
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <label style="font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3)">Tipo</label>
+              <select id="fin-filter-cat" onchange="renderFinanceiro()"
+                style="padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:12px;min-width:190px;height:32px;cursor:pointer">
+                <option value="">Todos os tipos</option>
+              </select>
+            </div>
+
+            <div id="fin-filter-status-group" style="display:flex;flex-direction:column;gap:4px">
+              <label style="font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3)">Status</label>
+              <select id="fin-filter-status" onchange="renderFinanceiro()"
+                style="padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:12px;height:32px;cursor:pointer">
+                <option value="">Todos</option>
+                <option value="ok">✓ OK (bateu)</option>
+                <option value="diverge">⚠ Divergência</option>
+                <option value="sem_venda">Sem venda ML</option>
+                <option value="sem_liquido">Sem líquido ML</option>
+              </select>
+            </div>
+
+            <!-- Separador vertical -->
+            <div style="width:1px;height:32px;background:var(--border);align-self:flex-end;margin-bottom:0"></div>
+
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <label style="font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3)">Mês</label>
+              <select id="fin-filter-mes" onchange="onFinMesChange()"
+                style="padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:12px;height:32px;cursor:pointer">
+                <option value="">Todos</option>
+              </select>
+            </div>
+
+            <!-- Grupo de período: De/Até juntos -->
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <label style="font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3)">Período</label>
+              <div style="display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:0 8px;height:32px">
+                <input type="date" id="fin-filter-from" onchange="onFinDateChange()"
+                  style="background:transparent;border:none;color:var(--text);font-size:12px;outline:none;color-scheme:dark">
+                <span style="color:var(--text3);font-size:11px">→</span>
+                <input type="date" id="fin-filter-to" onchange="onFinDateChange()"
+                  style="background:transparent;border:none;color:var(--text);font-size:12px;outline:none;color-scheme:dark">
+              </div>
+            </div>
+
+            <button onclick="clearAllFinFilters()" title="Limpar todos os filtros"
+              style="display:flex;align-items:center;gap:5px;height:32px;padding:0 12px;background:transparent;border:1px solid var(--border);border-radius:7px;color:var(--text2);font-size:11px;cursor:pointer;transition:all .15s;align-self:flex-end"
+              onmouseover="this.style.borderColor='var(--red)';this.style.color='var(--red)'"
+              onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)'">
+              ✕ Limpar
+            </button>
+
+            <!-- Total à direita, empurrado -->
+            <div id="fin-filter-total-wrap" style="margin-left:auto;align-self:flex-end;display:none;flex-direction:column;gap:2px;align-items:flex-end">
+              <span style="font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3)">Filtrado</span>
+              <span id="fin-filter-total" style="font-size:15px;font-weight:700"></span>
+            </div>
+          </div>
         </div>
 
         <div id="fin-view-conciliacao" class="fin-view"></div>
@@ -5807,14 +5839,12 @@ function setFinView(view, btn){
   // Barra de filtro não faz sentido na Previsão (que usa vendas ML, não o extrato)
   const filterBar = document.getElementById('fin-filter-bar');
   const temExtrato = !!(_extratoMP && _extratoMP.movimentos?.length);
-  if(filterBar) filterBar.style.display = (temExtrato && view !== 'previsao') ? 'flex' : 'none';
+  if(filterBar) filterBar.style.display = (temExtrato && view !== 'previsao') ? 'block' : 'none';
 
   // Filtro de status só se aplica à Conciliação — esconde nas outras visões
-  const statusSel = document.getElementById('fin-filter-status');
-  const statusLbl = document.getElementById('fin-filter-status-label');
+  const statusGroup = document.getElementById('fin-filter-status-group');
   const showStatus = (view === 'conciliacao');
-  if(statusSel) statusSel.style.display = showStatus ? '' : 'none';
-  if(statusLbl) statusLbl.style.display = showStatus ? '' : 'none';
+  if(statusGroup) statusGroup.style.display = showStatus ? 'flex' : 'none';
 }
 
 // Retorna os movimentos filtrados por categoria E intervalo de data
@@ -5863,6 +5893,15 @@ function clearFinDateFilter(){
   if(mesEl) mesEl.value = '';
   if(fromEl) fromEl.value = '';
   if(toEl) toEl.value = '';
+  renderFinanceiro();
+}
+
+// Limpa TODOS os filtros (tipo, status, mês, período)
+function clearAllFinFilters(){
+  ['fin-filter-cat', 'fin-filter-status', 'fin-filter-mes', 'fin-filter-from', 'fin-filter-to'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.value = '';
+  });
   renderFinanceiro();
 }
 
@@ -5920,7 +5959,7 @@ function renderFinanceiro(){
 
   // Barra de filtro só aparece com extrato e fora da aba Previsão
   const filterBar = document.getElementById('fin-filter-bar');
-  if(filterBar) filterBar.style.display = (temExtrato && _finView !== 'previsao') ? 'flex' : 'none';
+  if(filterBar) filterBar.style.display = (temExtrato && _finView !== 'previsao') ? 'block' : 'none';
 
   if(temExtrato){
     populateFinFilter();
@@ -5929,14 +5968,16 @@ function renderFinanceiro(){
     const from = document.getElementById('fin-filter-from')?.value || '';
     const to   = document.getElementById('fin-filter-to')?.value || '';
     const totalEl = document.getElementById('fin-filter-total');
-    if(totalEl){
+    const totalWrap = document.getElementById('fin-filter-total-wrap');
+    if(totalEl && totalWrap){
       if(cat || from || to){
         const movs = getFilteredMovimentos();
         const total = movs.reduce((s, m) => s + m.valor, 0);
-        totalEl.textContent = `→ ${movs.length} movimento(s) · ${fmtBRL(total)}`;
+        totalEl.textContent = fmtBRL(total);
         totalEl.style.color = total >= 0 ? 'var(--green)' : 'var(--red)';
+        totalWrap.style.display = 'flex';
       } else {
-        totalEl.textContent = '';
+        totalWrap.style.display = 'none';
       }
     }
     renderFinSummary();
