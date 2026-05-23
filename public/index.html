@@ -1299,6 +1299,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
           <button class="fin-subtab" onclick="setFinView('categorias', this)" style="background:none;border:none;padding:8px 12px;cursor:pointer;color:var(--text2);font-size:12px;border-bottom:2px solid transparent">📊 Categorias</button>
           <button class="fin-subtab" onclick="setFinView('ciclo', this)" style="background:none;border:none;padding:8px 12px;cursor:pointer;color:var(--text2);font-size:12px;border-bottom:2px solid transparent">🔄 Ciclo por operação</button>
           <button class="fin-subtab" onclick="setFinView('movimentos', this)" style="background:none;border:none;padding:8px 12px;cursor:pointer;color:var(--text2);font-size:12px;border-bottom:2px solid transparent">📋 Movimentos</button>
+          <button class="fin-subtab" onclick="setFinView('comparar', this)" style="background:none;border:none;padding:8px 12px;cursor:pointer;color:var(--text2);font-size:12px;border-bottom:2px solid transparent">📊 Comparar</button>
         </div>
 
         <!-- Filtro por categoria (afeta Conciliação, Ciclo e Movimentos) -->
@@ -1369,6 +1370,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
         <div id="fin-view-categorias" class="fin-view" style="display:none"></div>
         <div id="fin-view-ciclo" class="fin-view" style="display:none"></div>
         <div id="fin-view-movimentos" class="fin-view" style="display:none"></div>
+        <div id="fin-view-comparar" class="fin-view" style="display:none"></div>
       </div>
     </div>
   </div>
@@ -5836,15 +5838,18 @@ function setFinView(view, btn){
     btn.style.borderBottomColor = 'var(--blue)';
     btn.style.color = 'var(--text)';
   }
-  // Barra de filtro não faz sentido na Previsão (que usa vendas ML, não o extrato)
+  // Barra de filtro principal não faz sentido na Previsão nem na Comparação (têm controles próprios)
   const filterBar = document.getElementById('fin-filter-bar');
   const temExtrato = !!(_extratoMP && _extratoMP.movimentos?.length);
-  if(filterBar) filterBar.style.display = (temExtrato && view !== 'previsao') ? 'block' : 'none';
+  if(filterBar) filterBar.style.display = (temExtrato && view !== 'previsao' && view !== 'comparar') ? 'block' : 'none';
 
   // Filtro de status só se aplica à Conciliação — esconde nas outras visões
   const statusGroup = document.getElementById('fin-filter-status-group');
   const showStatus = (view === 'conciliacao');
   if(statusGroup) statusGroup.style.display = showStatus ? 'flex' : 'none';
+
+  // A aba Comparar renderiza sob demanda (estado próprio)
+  if(view === 'comparar') renderFinComparar();
 }
 
 // Retorna os movimentos filtrados por categoria E intervalo de data
@@ -6373,6 +6378,158 @@ function renderFinCiclo(){
       </tbody>
     </table>
     </div>`;
+}
+
+// ── COMPARAR: tabela cruzada tipo × mês com multi-seleção ──
+let _comparTiposSelecionados = null;  // Set de categorias; null = ainda não inicializado
+
+function toggleComparTipo(cat){
+  if(!_comparTiposSelecionados) _comparTiposSelecionados = new Set();
+  if(_comparTiposSelecionados.has(cat)) _comparTiposSelecionados.delete(cat);
+  else _comparTiposSelecionados.add(cat);
+  renderFinComparar();
+}
+
+function comparSelecionarPreset(preset){
+  if(!_extratoMP) return;
+  const todasCats = [...new Set(_extratoMP.movimentos.map(m => m.categoria))];
+  _comparTiposSelecionados = new Set();
+  if(preset === 'cg'){
+    todasCats.filter(c => c.includes('Compra Garantida')).forEach(c => _comparTiposSelecionados.add(c));
+  } else if(preset === 'debitos'){
+    todasCats.filter(c => c.startsWith('Débito')).forEach(c => _comparTiposSelecionados.add(c));
+  } else if(preset === 'retido'){
+    todasCats.filter(c => c.includes('retido') || c.includes('Retido')).forEach(c => _comparTiposSelecionados.add(c));
+  } else if(preset === 'todos'){
+    todasCats.forEach(c => _comparTiposSelecionados.add(c));
+  } else if(preset === 'nenhum'){
+    _comparTiposSelecionados = new Set();
+  }
+  renderFinComparar();
+}
+
+function renderFinComparar(){
+  const el = document.getElementById('fin-view-comparar');
+  if(!el || !_extratoMP) return;
+
+  // Todas as categorias e meses do extrato
+  const cats = {};
+  const mesesSet = new Set();
+  for(const m of _extratoMP.movimentos){
+    if(!cats[m.categoria]) cats[m.categoria] = 0;
+    cats[m.categoria]++;
+    if(m.data) mesesSet.add(m.data.slice(0, 7));
+  }
+  const todasCats = Object.keys(cats).sort((a, b) => cats[b] - cats[a]);
+  const meses = [...mesesSet].sort();
+
+  // Inicializa seleção: por padrão, os tipos de Compra Garantida (caso de uso do usuário)
+  if(_comparTiposSelecionados === null){
+    _comparTiposSelecionados = new Set(todasCats.filter(c => c.includes('Compra Garantida')));
+    // Se não houver CG, começa vazio
+  }
+
+  const nomesMes = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  const fmtMes = ym => { const [a, m] = ym.split('-').map(Number); return `${nomesMes[m]}/${String(a).slice(2)}`; };
+
+  // Painel de seleção (checkboxes) + presets
+  const selecionados = _comparTiposSelecionados;
+  const checkboxes = todasCats.map(cat => {
+    const on = selecionados.has(cat);
+    return `<label style="display:inline-flex;align-items:center;gap:5px;padding:4px 9px;background:${on?'rgba(59,130,246,.15)':'var(--bg)'};border:1px solid ${on?'var(--blue)':'var(--border)'};border-radius:6px;cursor:pointer;font-size:11px;color:${on?'var(--text)':'var(--text2)'};transition:all .12s">
+      <input type="checkbox" ${on?'checked':''} onchange="toggleComparTipo('${cat.replace(/'/g,"\\'")}')" style="margin:0;cursor:pointer">
+      ${escapeHTML(cat)} <span style="color:var(--text3);font-size:9px">(${cats[cat]})</span>
+    </label>`;
+  }).join('');
+
+  // Calcula matriz tipo × mês
+  const matriz = {};  // cat → { ym → soma }
+  for(const cat of selecionados){
+    matriz[cat] = {};
+    for(const ym of meses) matriz[cat][ym] = 0;
+  }
+  for(const m of _extratoMP.movimentos){
+    if(!m.data || !selecionados.has(m.categoria)) continue;
+    const ym = m.data.slice(0, 7);
+    matriz[m.categoria][ym] += m.valor;
+  }
+
+  // Monta tabela
+  let tabelaHtml = '';
+  if(selecionados.size === 0){
+    tabelaHtml = `<div style="padding:24px;text-align:center;color:var(--text3);font-size:12px">Selecione ao menos um tipo acima para comparar.</div>`;
+  } else if(meses.length === 0){
+    tabelaHtml = `<div style="padding:24px;text-align:center;color:var(--text3);font-size:12px">Sem datas no extrato para comparar por mês.</div>`;
+  } else {
+    const catsArr = [...selecionados];
+    // Totais por mês (combinado) e por tipo
+    const totalMes = {}; meses.forEach(ym => totalMes[ym] = 0);
+    const totalTipo = {};
+    for(const cat of catsArr){
+      totalTipo[cat] = 0;
+      for(const ym of meses){ totalMes[ym] += matriz[cat][ym]; totalTipo[cat] += matriz[cat][ym]; }
+    }
+    const totalGeral = Object.values(totalMes).reduce((s, v) => s + v, 0);
+    const cell = v => {
+      const c = Math.abs(v) < 0.01 ? 'var(--text3)' : (v >= 0 ? 'var(--green)' : 'var(--red)');
+      return `<td style="padding:6px 10px;text-align:right;color:${c};white-space:nowrap">${Math.abs(v) < 0.01 ? '—' : fmtBRL(v)}</td>`;
+    };
+
+    tabelaHtml = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px;min-width:500px">
+      <thead><tr style="background:var(--bg2)">
+        <th style="padding:8px 10px;text-align:left;position:sticky;left:0;background:var(--bg2)">Tipo</th>
+        ${meses.map(ym => `<th style="padding:8px 10px;text-align:right">${fmtMes(ym)}</th>`).join('')}
+        <th style="padding:8px 10px;text-align:right;border-left:2px solid var(--border)">Total</th>
+      </tr></thead>
+      <tbody>
+        ${catsArr.map(cat => `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px;position:sticky;left:0;background:var(--bg)">${escapeHTML(cat)}</td>
+          ${meses.map(ym => cell(matriz[cat][ym])).join('')}
+          <td style="padding:6px 10px;text-align:right;font-weight:700;border-left:2px solid var(--border);color:${totalTipo[cat]>=0?'var(--green)':'var(--red)'}">${fmtBRL(totalTipo[cat])}</td>
+        </tr>`).join('')}
+      </tbody>
+      <tfoot>
+        <tr style="border-top:2px solid var(--border);font-weight:700;background:var(--bg2)">
+          <td style="padding:8px 10px;position:sticky;left:0;background:var(--bg2)">Saldo combinado</td>
+          ${meses.map(ym => {
+            const v = totalMes[ym];
+            const c = Math.abs(v) < 0.01 ? 'var(--text3)' : (v >= 0 ? 'var(--green)' : 'var(--red)');
+            return `<td style="padding:8px 10px;text-align:right;color:${c}">${Math.abs(v)<0.01?'—':fmtBRL(v)}</td>`;
+          }).join('')}
+          <td style="padding:8px 10px;text-align:right;border-left:2px solid var(--border);color:${totalGeral>=0?'var(--green)':'var(--red)'}">${fmtBRL(totalGeral)}</td>
+        </tr>
+      </tfoot>
+    </table></div>`;
+
+    // Insight automático quando há exatamente 2 tipos (ex: retido vs reembolso)
+    if(catsArr.length === 2){
+      const [a, b] = catsArr;
+      const ta = totalTipo[a], tb = totalTipo[b];
+      const maiorAbs = Math.abs(ta) >= Math.abs(tb) ? a : b;
+      const pct = (Math.abs(ta) > 0 && Math.abs(tb) > 0)
+        ? ((Math.min(Math.abs(ta), Math.abs(tb)) / Math.max(Math.abs(ta), Math.abs(tb))) * 100).toFixed(0)
+        : 0;
+      tabelaHtml += `<div style="margin-top:12px;padding:10px 12px;background:var(--bg2);border-radius:6px;font-size:11px;color:var(--text2);line-height:1.6">
+        💡 <strong>Insight:</strong> "${escapeHTML(a)}" soma ${fmtBRL(ta)} e "${escapeHTML(b)}" soma ${fmtBRL(tb)} no período.
+        ${pct > 0 ? `Um representa ~${pct}% do outro em magnitude.` : ''}
+        Saldo combinado: <strong style="color:${totalGeral>=0?'var(--green)':'var(--red)'}">${fmtBRL(totalGeral)}</strong>.
+      </div>`;
+    }
+  }
+
+  el.innerHTML = `
+    <div style="margin-bottom:12px">
+      <div style="font-size:12px;font-weight:600;margin-bottom:6px">Comparar tipos por mês</div>
+      <div style="font-size:10px;color:var(--text3);margin-bottom:8px">Selecione os tipos para ver o saldo de cada um, mês a mês, com o total combinado.</div>
+      <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+        <button onclick="comparSelecionarPreset('cg')" style="font-size:10px;padding:4px 9px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text2);cursor:pointer">Compra Garantida</button>
+        <button onclick="comparSelecionarPreset('debitos')" style="font-size:10px;padding:4px 9px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text2);cursor:pointer">Todos os débitos</button>
+        <button onclick="comparSelecionarPreset('todos')" style="font-size:10px;padding:4px 9px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text2);cursor:pointer">Todos</button>
+        <button onclick="comparSelecionarPreset('nenhum')" style="font-size:10px;padding:4px 9px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text2);cursor:pointer">Limpar</button>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${checkboxes}</div>
+    </div>
+    ${tabelaHtml}`;
 }
 
 function renderFinMovimentos(){
