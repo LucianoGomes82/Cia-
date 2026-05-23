@@ -5910,18 +5910,33 @@ function populateFinFilter(){
   const sel = document.getElementById('fin-filter-cat');
   if(!sel || !_extratoMP) return;
   const prev = sel.value;
-  // Agrupa por categoria com totais
+  // Respeita o filtro de data ao contar categorias (números refletem o período)
+  const from = document.getElementById('fin-filter-from')?.value || '';
+  const to   = document.getElementById('fin-filter-to')?.value || '';
+  const noPeriodo = _extratoMP.movimentos.filter(m => {
+    if(from && (!m.data || m.data < from)) return false;
+    if(to   && (!m.data || m.data > to))   return false;
+    return true;
+  });
+  // Agrupa por categoria com totais (do período filtrado)
   const cats = {};
-  for(const m of _extratoMP.movimentos){
+  for(const m of noPeriodo){
     if(!cats[m.categoria]) cats[m.categoria] = { qtd: 0, total: 0 };
     cats[m.categoria].qtd++;
     cats[m.categoria].total += m.valor;
   }
+  // Garante que a categoria atualmente selecionada apareça mesmo com 0 no período
+  if(prev && !cats[prev]) cats[prev] = { qtd: 0, total: 0 };
+
   const arr = Object.entries(cats).sort((a, b) => Math.abs(b[1].total) - Math.abs(a[1].total));
+  const temFiltroData = !!(from || to);
   sel.innerHTML = '<option value="">Todos os tipos</option>' +
-    arr.map(([cat, c]) => `<option value="${escapeHTML(cat)}">${escapeHTML(cat)} (${c.qtd}) — ${fmtBRL(c.total)}</option>`).join('');
-  // Restaura seleção anterior se ainda existe
-  if(prev && arr.some(([c]) => c === prev)) sel.value = prev;
+    arr.map(([cat, c]) => {
+      const zero = c.qtd === 0 ? ' ⚠ 0 no período' : '';
+      return `<option value="${escapeHTML(cat)}">${escapeHTML(cat)} (${c.qtd})${zero ? zero : ` — ${fmtBRL(c.total)}`}</option>`;
+    }).join('');
+  // Restaura seleção anterior
+  if(prev && (cats[prev] || arr.some(([c]) => c === prev))) sel.value = prev;
 
   // Popula seletor de mês com os meses presentes no extrato
   const mesSel = document.getElementById('fin-filter-mes');
@@ -5973,8 +5988,15 @@ function renderFinanceiro(){
       if(cat || from || to){
         const movs = getFilteredMovimentos();
         const total = movs.reduce((s, m) => s + m.valor, 0);
-        totalEl.textContent = fmtBRL(total);
-        totalEl.style.color = total >= 0 ? 'var(--green)' : 'var(--red)';
+        if(movs.length === 0){
+          totalEl.textContent = 'sem dados';
+          totalEl.style.color = 'var(--amber)';
+          totalEl.style.fontSize = '13px';
+        } else {
+          totalEl.innerHTML = `${fmtBRL(total)} <span style="font-size:10px;color:var(--text3);font-weight:400">(${movs.length})</span>`;
+          totalEl.style.color = total >= 0 ? 'var(--green)' : 'var(--red)';
+          totalEl.style.fontSize = '15px';
+        }
         totalWrap.style.display = 'flex';
       } else {
         totalWrap.style.display = 'none';
@@ -6237,10 +6259,11 @@ function renderFinConciliacao(){
 }
 
 function renderFinCategorias(){
-  // Respeita filtro de data, mas ignora o filtro de tipo (mostra todas as categorias do período)
   const cat = document.getElementById('fin-filter-cat')?.value || '';
   const from = document.getElementById('fin-filter-from')?.value || '';
   const to   = document.getElementById('fin-filter-to')?.value || '';
+  // Respeita filtro de DATA. O filtro de TIPO destaca a linha (não esconde as outras,
+  // pra manter a visão geral do período), mas avisa se a combinação não tem dados.
   const movimentos = _extratoMP.movimentos.filter(m => {
     if(from && (!m.data || m.data < from)) return false;
     if(to   && (!m.data || m.data > to))   return false;
@@ -6255,7 +6278,21 @@ function renderFinCategorias(){
   const arr = Object.entries(cats).sort((a, b) => b[1].total - a[1].total);
   const maxAbs = Math.max(...arr.map(([, c]) => Math.abs(c.total)), 1);
 
-  document.getElementById('fin-view-categorias').innerHTML = `
+  // Aviso quando o tipo filtrado não existe no período selecionado
+  const tipoNoPeriodo = cat ? cats[cat] : null;
+  let avisoHtml = '';
+  if(cat && !tipoNoPeriodo){
+    avisoHtml = `<div style="padding:10px 12px;background:rgba(245,158,11,.1);border:1px solid var(--amber);border-radius:6px;margin-bottom:10px;font-size:11px;color:var(--amber)">
+      ⚠ <strong>${escapeHTML(cat)}</strong> não tem movimentos no período selecionado${from||to?` (${from?from.split('-').reverse().join('/'):'…'} a ${to?to.split('-').reverse().join('/'):'…'})`:''}.
+      Por isso o total filtrado deu R$ 0,00. Ajuste o mês/período ou limpe o filtro de data.
+    </div>`;
+  } else if(cat && tipoNoPeriodo){
+    avisoHtml = `<div style="padding:10px 12px;background:rgba(59,130,246,.08);border:1px solid var(--blue);border-radius:6px;margin-bottom:10px;font-size:11px;color:var(--text2)">
+      Destacando <strong style="color:var(--blue)">${escapeHTML(cat)}</strong>: ${tipoNoPeriodo.qtd} movimento(s) · <strong>${fmtBRL(tipoNoPeriodo.total)}</strong> no período. As demais categorias aparecem em cinza para comparação.
+    </div>`;
+  }
+
+  document.getElementById('fin-view-categorias').innerHTML = avisoHtml + `
     <table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="background:var(--bg2)">
         <th style="padding:6px 8px;text-align:left">Categoria</th>
@@ -6264,11 +6301,13 @@ function renderFinCategorias(){
         <th style="padding:6px 8px;width:40%">Proporção</th>
       </tr></thead>
       <tbody>
-        ${arr.map(([cat, c]) => {
+        ${arr.map(([catNome, c]) => {
           const pct = (Math.abs(c.total) / maxAbs * 100).toFixed(0);
           const color = c.total >= 0 ? 'var(--green)' : 'var(--red)';
-          return `<tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:6px 8px">${escapeHTML(cat)}</td>
+          const destaque = cat && catNome === cat;
+          const dimmed = cat && catNome !== cat;
+          return `<tr style="border-bottom:1px solid var(--border);${destaque?'background:rgba(59,130,246,.1)':''};${dimmed?'opacity:.4':''}">
+            <td style="padding:6px 8px;${destaque?'font-weight:700':''}">${destaque?'▸ ':''}${escapeHTML(catNome)}</td>
             <td style="padding:6px 8px;text-align:center">${c.qtd}</td>
             <td style="padding:6px 8px;text-align:right;font-weight:600;color:${color}">${fmtBRL(c.total)}</td>
             <td style="padding:6px 8px"><div style="background:${color};height:14px;width:${pct}%;border-radius:3px;opacity:.7"></div></td>
