@@ -11465,23 +11465,44 @@ function isCompraGarantida(v){
 
   const sub = String(v.substatus || '').toLowerCase();
   const entregue = sub === 'delivered' || /entreg/i.test(sub);
-
-  if(!entregue){
-    // Ainda não entregue (a caminho) → está na janela (pode entrar em CG)
-    return true;
-  }
-  // Entregue: precisa da data de entrega pra ver se está dentro de 30 dias
-  if(!v.date_delivered) {
-    // Entregue mas sem data conhecida — não dá pra cravar; trata como dentro da janela
-    // (conservador: melhor mostrar e o usuário avaliar do que esconder).
-    return true;
-  }
-  const dEntrega = new Date(v.date_delivered);
-  if(isNaN(dEntrega.getTime())) return true;
-  // Compara por dias inteiros (zera horas) pra evitar erro de borda em "exatamente 30 dias"
   const msDia = 86400000;
-  const diasDesde = Math.floor((Date.now() - dEntrega.getTime()) / msDia);
-  return diasDesde <= CG_JANELA_DIAS;
+
+  if(entregue){
+    // Entregue: idealmente conta 30 dias da data REAL de entrega
+    if(v.date_delivered){
+      const dEntrega = new Date(v.date_delivered);
+      if(!isNaN(dEntrega.getTime())){
+        const diasDesde = Math.floor((Date.now() - dEntrega.getTime()) / msDia);
+        return diasDesde <= CG_JANELA_DIAS;
+      }
+    }
+    // Entregue SEM data de entrega: usa a data da venda como aproximação.
+    // Entrega costuma levar ~7 dias; a janela acaba ~30 dias após a entrega.
+    // Então, sem dado melhor, considera dentro da janela se a venda foi há
+    // no máximo (CG_JANELA_DIAS + margem de entrega) dias.
+    if(v.date_created){
+      const dVenda = new Date(v.date_created);
+      if(!isNaN(dVenda.getTime())){
+        const diasDesdeVenda = Math.floor((Date.now() - dVenda.getTime()) / msDia);
+        return diasDesdeVenda <= (CG_JANELA_DIAS + 15);  // 45 dias da venda como teto
+      }
+    }
+    // Entregue, sem nenhuma data: não dá pra afirmar que está na janela → exclui
+    // (evita encher o filtro com vendas antigas marcadas "entregue" sem data).
+    return false;
+  }
+
+  // Não entregue (a caminho / pendente): está na janela, MAS só se for venda recente.
+  // Vendas antigas não-entregues geralmente são casos perdidos/devolvidos — não infla.
+  if(v.date_created){
+    const dVenda = new Date(v.date_created);
+    if(!isNaN(dVenda.getTime())){
+      const diasDesdeVenda = Math.floor((Date.now() - dVenda.getTime()) / msDia);
+      return diasDesdeVenda <= 60;  // a caminho há ≤60 dias ainda conta
+    }
+  }
+  // A caminho sem data: inclui (é o caso genuinamente indefinido e provavelmente recente)
+  return true;
 }
 
 // Dias restantes na janela de CG (pra exibir). null se não entregue ou sem data.
