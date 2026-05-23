@@ -10615,6 +10615,9 @@ function parseAbaML(aoa, headerRow){
     const dateStr = String(row[cols.date] || '');
     const dateISO = parseMLDateString(dateStr);
     const status = String(row[cols.statusDesc] || '').trim();
+    const statusFullText = String(row[cols.statusFull] || '').trim();
+    // Data de entrega real, extraída da "Descrição do status" ("Chegou em 9 de abril")
+    const date_delivered = parseDeliveryFromStatus(statusFullText, dateISO);
     const total = Number(row[cols.total]) || 0;
     const revProduct = Number(row[cols.revProduct]) || 0;
     const revShip    = Number(row[cols.revShip])    || 0;
@@ -10655,11 +10658,14 @@ function parseAbaML(aoa, headerRow){
     else if(/caminho|despach/i.test(statusLower)) normalizedSubstatus = 'shipped';
     else if(/aguardando/i.test(statusLower)) normalizedSubstatus = 'invoice_pending';
     else if(/pronto|impres/i.test(statusLower)) normalizedSubstatus = 'ready_to_print';
+    // Se a descrição do status diz que CHEGOU, é entregue (mesmo que Estado diga "A caminho")
+    if(date_delivered && normalizedStatus !== 'cancelled') normalizedSubstatus = 'delivered';
 
     vendas.push({
       id: orderId,
       pack_id: orderId,   // "N.º de venda" do XLSX do ML é o pack_id
       date_created: dateISO,
+      date_delivered,     // extraído da "Descrição do status" ("Chegou em...")
       status: normalizedStatus,
       substatus: normalizedSubstatus,
       statusLabel: status,
@@ -11043,6 +11049,8 @@ async function syncVendasIncremental(silent = false){
           // Preserva campos detalhados do XLSX
           buyer: { ...v.buyer, ...existed.buyer },
           receiver: { ...v.receiver, ...existed.receiver },
+          // Data de entrega: mantém a que existir (não sobrescreve uma data boa por null)
+          date_delivered: v.date_delivered || existed.date_delivered || null,
           _lastUpdatedAt: new Date().toISOString(),
         });
       } else {
@@ -11407,6 +11415,42 @@ function fmtBRL(n, withSymbol = true){
 
 // Extrai a melhor data disponível de um order da API ML.
 // Tenta várias fontes em ordem de preferência.
+// Mapa de meses em português (pra parsear textos do XLSX do ML)
+const MESES_PT_CG = {
+  'janeiro':1,'fevereiro':2,'março':3,'marco':3,'abril':4,'maio':5,'junho':6,
+  'julho':7,'agosto':8,'setembro':9,'outubro':10,'novembro':11,'dezembro':12
+};
+
+// Extrai a data de ENTREGA real da coluna "Descrição do status" do XLSX do ML.
+// Formatos cobertos: "Chegou em 9 de abril", "Chegou no dia 5 de maio",
+// "Chegou segunda-feira, 27 de abril", "O pacote chegou quinta-feira, 14 de maio",
+// "Chegou em 20 de abril. O atraso afetou...". Ignora "Chega entre..." (futuro).
+// Usa o ano da data da venda pra inferir o ano (o texto não traz ano).
+function parseDeliveryFromStatus(statusText, vendaDateISO){
+  if(!statusText) return null;
+  const t = String(statusText).toLowerCase();
+  if(!t.includes('chegou')) return null;  // "Chega entre" (futuro) não conta
+
+  const m = t.match(/(\d{1,2})\s+de\s+([a-zçã]+)/);
+  if(!m) return null;
+  const dia = parseInt(m[1], 10);
+  const mes = MESES_PT_CG[m[2]];
+  if(!mes || dia < 1 || dia > 31) return null;
+
+  let ano;
+  if(vendaDateISO){
+    const dv = new Date(vendaDateISO);
+    if(!isNaN(dv.getTime())){
+      ano = dv.getFullYear();
+      const mesVenda = dv.getMonth() + 1;
+      if(mes < mesVenda - 6) ano++;       // vendeu fim do ano, chegou começo do seguinte
+      else if(mes > mesVenda + 6) ano--;  // caso raro inverso
+    }
+  }
+  if(!ano) ano = new Date().getFullYear();
+  return `${ano}-${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`;
+}
+
 // Determina se uma venda está na janela de Compra Garantida do ML.
 // Regra (definida com o usuário): venda NÃO-cancelada E
 //   (ainda não entregue  OU  entregue há ≤ CG_JANELA_DIAS dias).
