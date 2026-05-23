@@ -12140,6 +12140,22 @@ function renderVendasPlanilha(items){
       <td style="padding:6px 8px;font-size:11px">${escapeHTML(buyerName)}</td>
       <td style="padding:6px 8px;font-size:11px;color:var(--text3)">${cidade}</td>
       <td style="padding:6px 8px;font-size:10px;white-space:nowrap;${v.date_created ? 'color:var(--text3)' : 'color:var(--amber);font-weight:600;cursor:pointer'}" ${v.date_created ? '' : `onclick="diagnosticarVenda('${v.id}')" title="Data ausente — clique para diagnosticar"`}>${v.date_created ? dt : '⚠ sem data'}</td>
+      <td style="padding:6px 8px;font-size:10px;white-space:nowrap">${(() => {
+        if(v.date_delivered){
+          const dEntrega = v.date_delivered.slice(0,10).split('-').reverse().join('/');
+          const restam = cgDiasRestantes(v);
+          const naJanela = isCompraGarantida(v);
+          const badge = (restam !== null && restam > 0 && naJanela)
+            ? `<span style="color:var(--amber);font-weight:700"> 🛡${restam}d</span>`
+            : (naJanela ? `<span style="color:var(--amber);font-weight:700"> 🛡</span>` : '');
+          return `<span style="color:var(--text2)">${dEntrega}</span>${badge}`;
+        }
+        // Sem data de entrega: indica se está sendo contada pela aproximação
+        const sub = String(v.substatus || '').toLowerCase();
+        const entregue = sub === 'delivered' || /entreg/i.test(sub);
+        if(entregue) return `<span style="color:var(--text3);font-style:italic" title="Entregue, mas sem data de entrega. Reimporte a planilha para preencher.">— (s/ data)</span>`;
+        return `<span style="color:var(--text3)">—</span>`;
+      })()}</td>
       <td style="padding:6px 8px;font-size:10px;font-weight:600;color:${statusColor};white-space:nowrap">${statusLabel}</td>
       <td style="padding:6px 8px;text-align:center;white-space:nowrap">
         <button class="btn btn-sm" onclick="showRecibo('${v.id}')" style="font-size:10px;padding:3px 6px" title="Ver recibo">🧾</button>
@@ -12174,6 +12190,7 @@ function renderVendasPlanilha(items){
           <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">Comprador</th>
           <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">Estado</th>
           <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">Data</th>
+          <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px" title="Data de entrega real (Compra Garantida: 30 dias a partir daqui)">Entrega</th>
           <th style="padding:8px;text-align:left;color:var(--text2);font-weight:700;font-size:11px">Status</th>
           <th style="padding:8px;text-align:center;color:var(--text2);font-weight:700;font-size:11px">Ações</th>
         </tr>
