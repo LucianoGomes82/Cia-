@@ -9005,6 +9005,39 @@ function setRetirada(orderId, socio, value){
   retiradasVendas[String(orderId)][socio] = v;
   saveRetiradas();
 }
+// Faixa de resumo acima da tabela de vendas: soma Total ML, Investimentos e Lucro
+// dos itens atualmente filtrados. Com o filtro Compra Garantida, o Total ML vira
+// "valor em risco de reclamação".
+function renderVendasResumo(items, filterTipo){
+  const reais = items.filter(v => !v._isManual && !v._excludeFromFinancials);
+  const totalML   = reais.reduce((s, v) => s + (typeof v.totalLiquido === 'number' ? v.totalLiquido : (v.total || 0)), 0);
+  const invLuciano= reais.reduce((s, v) => s + (getInvestimento(v.id, 'luciano') || 0), 0);
+  const invJohnny = reais.reduce((s, v) => s + (getInvestimento(v.id, 'johnny')  || 0), 0);
+  const lucro     = reais.reduce((s, v) => s + calcLucroVenda(v), 0);
+  const ehCG = filterTipo === 'compra_garantida';
+
+  const cards = [
+    {
+      label: ehCG ? '🛡 Total ML em risco' : 'Total ML (líquido)',
+      val: totalML,
+      color: ehCG ? 'var(--amber)' : 'var(--blue)',
+      hint: ehCG ? `${reais.length} vendas na janela de 30 dias` : `${reais.length} vendas`,
+    },
+    { label: 'Investido (Luciano)', val: invLuciano, color: 'var(--purple)', hint: 'Capital aplicado' },
+    { label: 'Investido (Johnny)',  val: invJohnny,  color: 'var(--purple)', hint: 'Capital aplicado' },
+    { label: 'Lucro',               val: lucro,      color: lucro >= 0 ? 'var(--green)' : 'var(--red)', hint: 'Total ML − investimentos' },
+  ];
+
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px">
+    ${cards.map(c => `
+      <div style="padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px${ehCG && c.color==='var(--amber)' ? ';border-color:var(--amber)' : ''}">
+        <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.3px">${c.label}</div>
+        <div style="font-size:17px;font-weight:700;color:${c.color};margin:3px 0">${fmtBRL(c.val)}</div>
+        <div style="font-size:9px;color:var(--text3)">${c.hint}</div>
+      </div>`).join('')}
+  </div>`;
+}
+
 function calcLucroVenda(v){
   // Se é venda de estado bloqueado, não conta no lucro (só fica para acompanhamento)
   if(v._excludeFromFinancials) return 0;
@@ -11832,7 +11865,8 @@ function renderVendas(){
 
   // ── BRANCH: Modo Planilha ──
   if(_vendasView === 'planilha'){
-    list.innerHTML = renderVendasPlanilha(items);
+    const filterTipoAtual = document.getElementById('vendas-filter-tipo')?.value || 'all';
+    list.innerHTML = renderVendasResumo(items, filterTipoAtual) + renderVendasPlanilha(items);
     return;
   }
 
@@ -11983,7 +12017,8 @@ function renderVendas(){
     </div>`;
   }).join('');
 
-  list.innerHTML = header + cards;
+  const filterTipoCards = document.getElementById('vendas-filter-tipo')?.value || 'all';
+  list.innerHTML = renderVendasResumo(items, filterTipoCards) + header + cards;
   updateVendaBulkBar();
 }
 
