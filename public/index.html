@@ -999,6 +999,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <button class="btn btn-sm" onclick="diagnosticarVenda()" title="Investigar dados de uma venda específica (debug)" style="font-size:11px">🔍 Debug</button>
             <button class="btn btn-sm" onclick="document.getElementById('vendas-import-file').click()" title="Importa XLSX de 2 formatos:&#10;• Planilha de vendas exportada do Mercado Livre (importa todas as vendas)&#10;• Planilha exportada por este app (atualiza apenas investimentos)" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📥 Importar XLSX</button>
             <input type="file" id="vendas-import-file" accept=".xlsx,.xls" style="display:none" onchange="importVendasFromXLSX(event)">
+            <button class="btn btn-sm" onclick="openListaBloqueio()" title="Lista de compradores de estados bloqueados para você bloquear no Mercado Livre" style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🚫 Bloquear compradores</button>
             <button class="btn btn-sm" onclick="exportVendasXLSX()" title="Exportar planilha Excel com todas as vendas e investimentos">📤 Exportar XLSX</button>
           </div>
         </div>
@@ -9302,6 +9303,115 @@ function diagnosticarVendaRaw(orderId){
 // ──────────────────────────────────────────────────────────────────────
 // GERENCIAR LANÇAMENTOS — modal com lista, edição e exclusão
 // ──────────────────────────────────────────────────────────────────────
+// ── LISTA DE BLOQUEIO ASSISTIDA ──
+// O ML desativou o bloqueio via API (abr/2025), então geramos a lista de
+// compradores de estados bloqueados e damos link direto pra você bloquear no ML.
+const BLOQUEIO_FEITO_KEY = 'cia_bloqueio_feito';  // localStorage: { buyerId: true }
+
+function getBloqueioFeito(){
+  try { return JSON.parse(localStorage.getItem(BLOQUEIO_FEITO_KEY) || '{}'); }
+  catch { return {}; }
+}
+function marcarBloqueioFeito(buyerId, feito){
+  const map = getBloqueioFeito();
+  if(feito) map[buyerId] = true; else delete map[buyerId];
+  localStorage.setItem(BLOQUEIO_FEITO_KEY, JSON.stringify(map));
+  renderListaBloqueioBody();
+}
+
+function getCompradoresBloqueio(){
+  // Junta todas as vendas de estado bloqueado, agrupa por comprador
+  const fonte = (vendasDataFull && vendasDataFull.length) ? vendasDataFull : vendasData;
+  const porComprador = new Map();
+  for(const v of (fonte || [])){
+    if(!v._isBlockedState) continue;
+    if(v._isManual) continue;
+    const bid = v.buyer?.id || v.buyer?.nickname;
+    if(!bid) continue;
+    if(!porComprador.has(bid)){
+      porComprador.set(bid, {
+        id: v.buyer?.id || null,
+        nickname: v.buyer?.nickname || '(sem apelido)',
+        nome: [v.buyer?.firstName, v.buyer?.lastName].filter(Boolean).join(' ') || v.receiver?.name || '',
+        estado: v.receiver?.state || '',
+        vendas: [],
+      });
+    }
+    porComprador.get(bid).vendas.push(v);
+  }
+  // Ordena por nº de vendas desc (reincidentes primeiro)
+  return [...porComprador.values()].sort((a, b) => b.vendas.length - a.vendas.length);
+}
+
+function openListaBloqueio(){
+  document.querySelectorAll('[data-bloqueio-modal]').forEach(m => m.remove());
+  const modal = document.createElement('div');
+  modal.dataset.bloqueioModal = '1';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+
+  modal.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;max-width:780px;width:100%;max-height:88vh;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:between;gap:12px">
+        <div style="flex:1">
+          <div style="font-size:15px;font-weight:700">🚫 Lista de bloqueio assistida</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">Compradores de estados bloqueados. O Mercado Livre exige que o bloqueio seja feito por você na plataforma deles.</div>
+        </div>
+        <button onclick="this.closest('[data-bloqueio-modal]').remove()" style="background:none;border:none;color:var(--text2);font-size:22px;cursor:pointer;padding:0 4px">×</button>
+      </div>
+      <div style="padding:10px 20px;background:rgba(245,158,11,.08);border-bottom:1px solid var(--border);font-size:11px;color:var(--text2);line-height:1.5">
+        ℹ️ O bloqueio direto via API foi <strong>desativado pelo ML em 2025</strong>. Esta lista te leva direto à venda no Mercado Livre, onde você clica em <strong>"Bloquear comprador"</strong>. Marque os que já bloqueou para acompanhar o progresso.
+      </div>
+      <div id="lista-bloqueio-body" style="overflow-y:auto;flex:1;padding:8px 20px 20px"></div>
+      <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:center;justify-content:space-between">
+        <a href="https://www.mercadolivre.com.br/vendas/configuracoes/bloqueados" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);text-decoration:none">↗ Ver lista oficial de bloqueados no ML</a>
+        <button onclick="this.closest('[data-bloqueio-modal]').remove()" class="btn btn-sm">Fechar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  renderListaBloqueioBody();
+}
+
+function renderListaBloqueioBody(){
+  const body = document.getElementById('lista-bloqueio-body');
+  if(!body) return;
+  const compradores = getCompradoresBloqueio();
+  const feito = getBloqueioFeito();
+
+  if(compradores.length === 0){
+    body.innerHTML = `<div style="padding:30px;text-align:center;color:var(--text3);font-size:12px">
+      Nenhum comprador de estado bloqueado encontrado nas suas vendas.<br>
+      <span style="font-size:10px">Os estados bloqueados são configurados em Config. Sincronize as vendas para popular a lista.</span>
+    </div>`;
+    return;
+  }
+
+  const pendentes = compradores.filter(c => !feito[c.id || c.nickname]).length;
+  body.innerHTML = `
+    <div style="font-size:11px;color:var(--text2);margin:8px 0 12px">
+      <strong>${compradores.length}</strong> comprador(es) de estado bloqueado ·
+      <span style="color:var(--amber)">${pendentes} pendente(s)</span> ·
+      <span style="color:var(--green)">${compradores.length - pendentes} já bloqueado(s)</span>
+    </div>
+    ${compradores.map(c => {
+      const key = c.id || c.nickname;
+      const jaBloqueado = !!feito[key];
+      const ultimaVenda = c.vendas.sort((a,b) => new Date(b.date_created||0) - new Date(a.date_created||0))[0];
+      const vendaId = ultimaVenda?.pack_id || ultimaVenda?.id;
+      const linkVenda = vendaId ? `https://www.mercadolivre.com.br/vendas/${vendaId}/detalhe` : null;
+      return `<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;${jaBloqueado?'opacity:.55;background:rgba(62,207,142,.05)':''}">
+        <input type="checkbox" ${jaBloqueado?'checked':''} onchange="marcarBloqueioFeito('${String(key).replace(/'/g,"\\'")}', this.checked)" title="Marcar como bloqueado" style="width:18px;height:18px;cursor:pointer;flex-shrink:0">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;${jaBloqueado?'text-decoration:line-through':''}">${escapeHTML(c.nickname)}</div>
+          <div style="font-size:10px;color:var(--text3)">${escapeHTML(c.nome||'—')} · ${escapeHTML(c.estado||'?')} · ${c.vendas.length} venda(s)</div>
+        </div>
+        ${linkVenda
+          ? `<a href="${linkVenda}" target="_blank" rel="noopener" style="font-size:11px;padding:6px 12px;background:rgba(239,68,68,.12);color:var(--red);border:1px solid var(--red);border-radius:6px;text-decoration:none;white-space:nowrap;flex-shrink:0">Abrir no ML ↗</a>`
+          : `<span style="font-size:10px;color:var(--text3);flex-shrink:0">sem link</span>`}
+      </div>`;
+    }).join('')}`;
+}
+
 function openGerenciarLancamentos(){
   document.querySelectorAll('[data-gerencia-modal]').forEach(m => m.remove());
 
