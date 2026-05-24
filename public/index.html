@@ -9345,6 +9345,7 @@ function getCompradoresBloqueio(){
 
 function openListaBloqueio(){
   document.querySelectorAll('[data-bloqueio-modal]').forEach(m => m.remove());
+  _bloqueioJaAbertos = new Set();  // novo ciclo de lote a cada abertura
   const modal = document.createElement('div');
   modal.dataset.bloqueioModal = '1';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
@@ -9372,6 +9373,105 @@ function openListaBloqueio(){
   renderListaBloqueioBody();
 }
 
+// Seleção em memória (quais compradores abrir) + helper de URL
+let _bloqueioSelecionados = new Set();
+let _bloqueioJaAbertos = new Set();  // chaves já abertas nesta sessão (controle do lote)
+const BLOQUEIO_LOTE = 10;            // quantos abrir por clique (seguro p/ antifraude)
+
+function bloqueioBuyerKey(c){ return String(c.id || c.nickname); }
+function bloqueioLinkVenda(c){
+  const ultimaVenda = [...c.vendas].sort((a,b) => new Date(b.date_created||0) - new Date(a.date_created||0))[0];
+  const vendaId = ultimaVenda?.pack_id || ultimaVenda?.id;
+  return vendaId ? `https://www.mercadolivre.com.br/vendas/${vendaId}/detalhe` : null;
+}
+
+function toggleBloqueioSel(key, on){
+  if(on) _bloqueioSelecionados.add(key); else _bloqueioSelecionados.delete(key);
+  // Atualiza só o contador do botão, sem re-renderizar tudo (mantém scroll)
+  const btn = document.getElementById('btn-abrir-sel');
+  if(btn) btn.textContent = `↗ Abrir selecionados (${_bloqueioSelecionados.size})`;
+}
+
+function bloqueioSelecionarTodos(on){
+  const compradores = getCompradoresBloqueio();
+  const feito = getBloqueioFeito();
+  _bloqueioSelecionados = new Set();
+  if(on){
+    // seleciona só os pendentes (não marca os já bloqueados)
+    compradores.filter(c => !feito[bloqueioBuyerKey(c)]).forEach(c => _bloqueioSelecionados.add(bloqueioBuyerKey(c)));
+  }
+  renderListaBloqueioBody();
+}
+
+// Abre uma lista de URLs em novas abas. Retorna quantas conseguiu abrir.
+function abrirAbasEmMassa(urls){
+  if(urls.length === 0){ showToast('Nenhum comprador para abrir.'); return; }
+  if(urls.length > 15){
+    if(!confirm(`Você vai abrir ${urls.length} abas de uma vez.\n\nIsso pode deixar o navegador lento e o Mercado Livre pode pedir login/captcha em várias.\n\nNa primeira vez, o navegador vai bloquear as abas extras — clique no ícone de "pop-up bloqueado" na barra de endereço e escolha "Sempre permitir".\n\nContinuar?`)) return;
+  }
+  let abertas = 0, bloqueadas = 0;
+  for(const url of urls){
+    const w = window.open(url, '_blank');
+    if(w) abertas++; else bloqueadas++;
+  }
+  if(bloqueadas > 0){
+    showToast(`Abriu ${abertas}. O navegador bloqueou ${bloqueadas} aba(s) — libere os pop-ups para este site e tente de novo.`);
+  } else {
+    showToast(`${abertas} aba(s) aberta(s).`);
+  }
+}
+
+function abrirSelecionados(){
+  const compradores = getCompradoresBloqueio();
+  const urls = compradores
+    .filter(c => _bloqueioSelecionados.has(bloqueioBuyerKey(c)))
+    .map(bloqueioLinkVenda)
+    .filter(Boolean);
+  abrirAbasEmMassa(urls);
+}
+
+function abrirLoteBloqueio(){
+  const compradores = getCompradoresBloqueio();
+  const feito = getBloqueioFeito();
+  // Pendentes = não bloqueados E ainda não abertos neste ciclo
+  const pendentes = compradores.filter(c => {
+    const k = bloqueioBuyerKey(c);
+    return !feito[k] && !_bloqueioJaAbertos.has(k);
+  });
+  if(pendentes.length === 0){
+    // Todos os pendentes já foram abertos neste ciclo — reinicia para uma nova passada
+    _bloqueioJaAbertos = new Set();
+    showToast('Todos os pendentes já foram abertos. Marque os que bloqueou; o próximo clique recomeça.');
+    renderListaBloqueioBody();
+    return;
+  }
+  const lote = pendentes.slice(0, BLOQUEIO_LOTE);
+  const urls = lote.map(bloqueioLinkVenda).filter(Boolean);
+  // Marca como abertos neste ciclo
+  lote.forEach(c => _bloqueioJaAbertos.add(bloqueioBuyerKey(c)));
+  abrirAbasEmMassa(urls);
+  renderListaBloqueioBody();
+}
+
+function copiarLinksBloqueio(){
+  const compradores = getCompradoresBloqueio();
+  const feito = getBloqueioFeito();
+  const urls = compradores
+    .filter(c => !feito[bloqueioBuyerKey(c)])
+    .map(bloqueioLinkVenda)
+    .filter(Boolean);
+  if(urls.length === 0){ showToast('Nenhum link pendente.'); return; }
+  const txt = urls.join('\n');
+  if(navigator.clipboard?.writeText){
+    navigator.clipboard.writeText(txt).then(
+      () => showToast(`${urls.length} link(s) copiado(s).`),
+      () => showToast('Não consegui copiar. Tente o botão de abrir.')
+    );
+  } else {
+    showToast('Cópia não suportada neste navegador.');
+  }
+}
+
 function renderListaBloqueioBody(){
   const body = document.getElementById('lista-bloqueio-body');
   if(!body) return;
@@ -9386,28 +9486,47 @@ function renderListaBloqueioBody(){
     return;
   }
 
-  const pendentes = compradores.filter(c => !feito[c.id || c.nickname]).length;
+  const pendentes = compradores.filter(c => !feito[bloqueioBuyerKey(c)]).length;
+  // Restantes no ciclo de lote: pendentes que ainda não foram abertos nesta passada
+  const restamNoLote = compradores.filter(c => {
+    const k = bloqueioBuyerKey(c);
+    return !feito[k] && !_bloqueioJaAbertos.has(k);
+  }).length;
+  const todosSelecionados = pendentes > 0 && compradores.filter(c => !feito[bloqueioBuyerKey(c)]).every(c => _bloqueioSelecionados.has(bloqueioBuyerKey(c)));
+
   body.innerHTML = `
-    <div style="font-size:11px;color:var(--text2);margin:8px 0 12px">
+    <div style="font-size:11px;color:var(--text2);margin:8px 0 10px">
       <strong>${compradores.length}</strong> comprador(es) de estado bloqueado ·
       <span style="color:var(--amber)">${pendentes} pendente(s)</span> ·
       <span style="color:var(--green)">${compradores.length - pendentes} já bloqueado(s)</span>
     </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+      <label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text2);cursor:pointer">
+        <input type="checkbox" ${todosSelecionados?'checked':''} onchange="bloqueioSelecionarTodos(this.checked)" style="cursor:pointer">
+        Selecionar pendentes
+      </label>
+      <button id="btn-abrir-sel" onclick="abrirSelecionados()" class="btn btn-sm" style="font-size:11px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">↗ Abrir selecionados (${_bloqueioSelecionados.size})</button>
+      <button onclick="abrirLoteBloqueio()" class="btn btn-sm" style="font-size:11px;background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)" title="Abre os próximos ${BLOQUEIO_LOTE} pendentes. Mais seguro: evita disparar verificação antifraude do ML.">↗ Abrir próximos ${BLOQUEIO_LOTE} (${restamNoLote} restantes)</button>
+      <button onclick="copiarLinksBloqueio()" class="btn btn-sm" style="font-size:11px" title="Copia os links pendentes (à prova de bloqueio de pop-up)">📋 Copiar links</button>
+    </div>
     ${compradores.map(c => {
-      const key = c.id || c.nickname;
+      const key = bloqueioBuyerKey(c);
       const jaBloqueado = !!feito[key];
-      const ultimaVenda = c.vendas.sort((a,b) => new Date(b.date_created||0) - new Date(a.date_created||0))[0];
-      const vendaId = ultimaVenda?.pack_id || ultimaVenda?.id;
-      const linkVenda = vendaId ? `https://www.mercadolivre.com.br/vendas/${vendaId}/detalhe` : null;
-      return `<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;${jaBloqueado?'opacity:.55;background:rgba(62,207,142,.05)':''}">
-        <input type="checkbox" ${jaBloqueado?'checked':''} onchange="marcarBloqueioFeito('${String(key).replace(/'/g,"\\'")}', this.checked)" title="Marcar como bloqueado" style="width:18px;height:18px;cursor:pointer;flex-shrink:0">
+      const selecionado = _bloqueioSelecionados.has(key);
+      const linkVenda = bloqueioLinkVenda(c);
+      return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid ${selecionado?'var(--blue)':'var(--border)'};border-radius:8px;margin-bottom:8px;${jaBloqueado?'opacity:.55;background:rgba(62,207,142,.05)':(selecionado?'background:rgba(96,165,250,.06)':'')}">
+        <input type="checkbox" ${selecionado?'checked':''} ${jaBloqueado?'disabled':''} onchange="toggleBloqueioSel('${key.replace(/'/g,"\\'")}', this.checked)" title="Selecionar para abrir" style="width:17px;height:17px;cursor:pointer;flex-shrink:0">
         <div style="flex:1;min-width:0">
           <div style="font-size:13px;font-weight:600;${jaBloqueado?'text-decoration:line-through':''}">${escapeHTML(c.nickname)}</div>
           <div style="font-size:10px;color:var(--text3)">${escapeHTML(c.nome||'—')} · ${escapeHTML(c.estado||'?')} · ${c.vendas.length} venda(s)</div>
         </div>
         ${linkVenda
-          ? `<a href="${linkVenda}" target="_blank" rel="noopener" style="font-size:11px;padding:6px 12px;background:rgba(239,68,68,.12);color:var(--red);border:1px solid var(--red);border-radius:6px;text-decoration:none;white-space:nowrap;flex-shrink:0">Abrir no ML ↗</a>`
+          ? `<a href="${linkVenda}" target="_blank" rel="noopener" style="font-size:11px;padding:6px 10px;background:rgba(239,68,68,.12);color:var(--red);border:1px solid var(--red);border-radius:6px;text-decoration:none;white-space:nowrap;flex-shrink:0">Abrir ↗</a>`
           : `<span style="font-size:10px;color:var(--text3);flex-shrink:0">sem link</span>`}
+        <label style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--text3);cursor:pointer;white-space:nowrap;flex-shrink:0" title="Marcar como já bloqueado">
+          <input type="checkbox" ${jaBloqueado?'checked':''} onchange="marcarBloqueioFeito('${key.replace(/'/g,"\\'")}', this.checked)" style="cursor:pointer">
+          ✓ bloqueado
+        </label>
       </div>`;
     }).join('')}`;
 }
