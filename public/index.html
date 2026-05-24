@@ -9343,6 +9343,50 @@ function getCompradoresBloqueio(){
   return [...porComprador.values()].sort((a, b) => b.vendas.length - a.vendas.length);
 }
 
+// Testa se a API de CONSULTA de bloqueio do ML responde (GET, não executa ação).
+// Usa um comprador da lista pra ver se o ML retorna o status de bloqueio.
+async function testarApiBloqueio(){
+  const compradores = getCompradoresBloqueio();
+  const comId = compradores.find(c => c.id);  // precisa de um comprador com ID numérico
+  if(!comId){
+    alert('Não há comprador com ID numérico na lista para testar. Sincronize as vendas pela API (não só XLSX) para ter os IDs dos compradores.');
+    return;
+  }
+  const btn = document.getElementById('btn-testar-api-bloq');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Testando...'; }
+
+  const resultados = [];
+  // Testa os dois tipos de consulta documentados
+  for(const tipo of ['blocked_by_order', 'blocked_by_questions']){
+    const path = `/block-api/search/users/${comId.id}?type=${tipo}`;
+    try {
+      const r = await proxyFetch(path);
+      const status = r.status;
+      let corpo = '';
+      try { corpo = JSON.stringify(await r.json()).slice(0, 200); }
+      catch { corpo = '(resposta não-JSON)'; }
+      resultados.push({ tipo, status, ok: r.ok, corpo });
+    } catch(e){
+      resultados.push({ tipo, status: 'ERRO', ok: false, corpo: String(e.message).slice(0,150) });
+    }
+  }
+
+  if(btn){ btn.disabled = false; btn.textContent = '🔬 Testar API de bloqueio'; }
+
+  // Monta diagnóstico claro
+  const funcionou = resultados.some(r => r.ok || r.status === 200);
+  const linhas = resultados.map(r =>
+    `• ${r.tipo}: HTTP ${r.status} ${r.ok ? '✓' : '✗'}\n   ${r.corpo}`
+  ).join('\n\n');
+
+  const veredito = funcionou
+    ? '✅ A API de consulta RESPONDEU! Dá para implementar a verificação automática de bloqueio.\n\nMe avise que eu ligo essa verificação no app.'
+    : '❌ A API não respondeu como esperado (provavelmente desativada para apps, igual ao bloqueio).\n\nNesse caso, o melhor é o controle manual (marcar "✓ bloqueado").';
+
+  alert(`TESTE DA API DE CONSULTA DE BLOQUEIO\nComprador testado: ${comId.nickname} (ID ${comId.id})\n\n${linhas}\n\n${'─'.repeat(30)}\n${veredito}`);
+  console.log('[teste API bloqueio]', resultados);
+}
+
 function openListaBloqueio(){
   document.querySelectorAll('[data-bloqueio-modal]').forEach(m => m.remove());
   _bloqueioJaAbertos = new Set();  // novo ciclo de lote a cada abertura
@@ -9364,8 +9408,11 @@ function openListaBloqueio(){
         ℹ️ O bloqueio direto via API foi <strong>desativado pelo ML em 2025</strong>. Esta lista te leva direto à venda no Mercado Livre, onde você clica em <strong>"Bloquear comprador"</strong>. Marque os que já bloqueou para acompanhar o progresso.
       </div>
       <div id="lista-bloqueio-body" style="overflow-y:auto;flex:1;padding:8px 20px 20px"></div>
-      <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:center;justify-content:space-between">
-        <a href="https://www.mercadolivre.com.br/vendas/configuracoes/bloqueados" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);text-decoration:none">↗ Ver lista oficial de bloqueados no ML</a>
+      <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+        <div style="display:flex;gap:10px;align-items:center">
+          <a href="https://www.mercadolivre.com.br/vendas/configuracoes/bloqueados" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);text-decoration:none">↗ Ver lista oficial de bloqueados no ML</a>
+          <button id="btn-testar-api-bloq" onclick="testarApiBloqueio()" class="btn btn-sm" style="font-size:10px" title="Testa se a API de consulta de bloqueio do ML funciona (só leitura, não bloqueia nada)">🔬 Testar API de bloqueio</button>
+        </div>
         <button onclick="this.closest('[data-bloqueio-modal]').remove()" class="btn btn-sm">Fechar</button>
       </div>
     </div>`;
