@@ -9319,6 +9319,28 @@ function marcarBloqueioFeito(buyerId, feito){
   renderListaBloqueioBody();
 }
 
+// Marca vários compradores de uma vez (uma escrita só no localStorage)
+function marcarBloqueioFeitoVarios(keys){
+  if(!keys || keys.length === 0) return;
+  const map = getBloqueioFeito();
+  keys.forEach(k => { map[k] = true; });
+  localStorage.setItem(BLOQUEIO_FEITO_KEY, JSON.stringify(map));
+  renderListaBloqueioBody();
+}
+
+// Marca como bloqueados todos os que foram abertos nesta sessão
+function marcarAbertosComoFeitos(){
+  const keys = [..._bloqueioJaAbertos];
+  if(keys.length === 0){ showToast('Nenhum comprador foi aberto ainda nesta sessão.'); return; }
+  marcarBloqueioFeitoVarios(keys);
+  showToast(`${keys.length} comprador(es) marcado(s) como bloqueado(s).`);
+}
+
+function toggleMostrarFeitos(){
+  _bloqueioMostrarFeitos = !_bloqueioMostrarFeitos;
+  renderListaBloqueioBody();
+}
+
 function getCompradoresBloqueio(){
   // Junta todas as vendas de estado bloqueado, agrupa por comprador
   const fonte = (vendasDataFull && vendasDataFull.length) ? vendasDataFull : vendasData;
@@ -9346,26 +9368,34 @@ function getCompradoresBloqueio(){
 // Testa se a API de CONSULTA de bloqueio do ML responde (GET, não executa ação).
 // Usa um comprador da lista pra ver se o ML retorna o status de bloqueio.
 async function testarApiBloqueio(){
+  // Para TESTAR a API, basta qualquer comprador com ID numérico (não precisa ser
+  // de estado bloqueado). Procura primeiro nos bloqueados, depois em todas as vendas.
   const compradores = getCompradoresBloqueio();
-  const comId = compradores.find(c => c.id);  // precisa de um comprador com ID numérico
-  if(!comId){
-    alert('Não há comprador com ID numérico na lista para testar. Sincronize as vendas pela API (não só XLSX) para ter os IDs dos compradores.');
+  let alvo = compradores.find(c => c.id && /^\d+$/.test(String(c.id)));
+  if(!alvo){
+    // Procura em todas as vendas por qualquer comprador com ID numérico
+    const fonte = (vendasDataFull && vendasDataFull.length) ? vendasDataFull : vendasData;
+    const comId = (fonte || []).find(v => v.buyer?.id && /^\d+$/.test(String(v.buyer.id)));
+    if(comId){
+      alvo = { id: comId.buyer.id, nickname: comId.buyer.nickname || '(comprador)' };
+    }
+  }
+  if(!alvo){
+    alert('Nenhuma venda tem ID de comprador.\n\nO ID só vem em vendas sincronizadas pela API (botão "🔄 Sync" ou "↻ Atualizar"), não na importação de planilha.\n\nRode o Sync uma vez e tente o teste de novo — basta UMA venda com ID para testar a API.');
     return;
   }
   const btn = document.getElementById('btn-testar-api-bloq');
   if(btn){ btn.disabled = true; btn.textContent = '⏳ Testando...'; }
 
   const resultados = [];
-  // Testa os dois tipos de consulta documentados
   for(const tipo of ['blocked_by_order', 'blocked_by_questions']){
-    const path = `/block-api/search/users/${comId.id}?type=${tipo}`;
+    const path = `/block-api/search/users/${alvo.id}?type=${tipo}`;
     try {
       const r = await proxyFetch(path);
-      const status = r.status;
       let corpo = '';
       try { corpo = JSON.stringify(await r.json()).slice(0, 200); }
       catch { corpo = '(resposta não-JSON)'; }
-      resultados.push({ tipo, status, ok: r.ok, corpo });
+      resultados.push({ tipo, status: r.status, ok: r.ok, corpo });
     } catch(e){
       resultados.push({ tipo, status: 'ERRO', ok: false, corpo: String(e.message).slice(0,150) });
     }
@@ -9373,17 +9403,15 @@ async function testarApiBloqueio(){
 
   if(btn){ btn.disabled = false; btn.textContent = '🔬 Testar API de bloqueio'; }
 
-  // Monta diagnóstico claro
   const funcionou = resultados.some(r => r.ok || r.status === 200);
   const linhas = resultados.map(r =>
     `• ${r.tipo}: HTTP ${r.status} ${r.ok ? '✓' : '✗'}\n   ${r.corpo}`
   ).join('\n\n');
-
   const veredito = funcionou
-    ? '✅ A API de consulta RESPONDEU! Dá para implementar a verificação automática de bloqueio.\n\nMe avise que eu ligo essa verificação no app.'
-    : '❌ A API não respondeu como esperado (provavelmente desativada para apps, igual ao bloqueio).\n\nNesse caso, o melhor é o controle manual (marcar "✓ bloqueado").';
+    ? '✅ A API de consulta RESPONDEU! Dá para implementar a verificação automática.\n\nMe avise que eu ligo essa verificação no app.'
+    : '❌ A API não respondeu como esperado (provavelmente desativada para apps).\n\nNesse caso, o melhor é o controle manual (marcar "✓ bloqueado").';
 
-  alert(`TESTE DA API DE CONSULTA DE BLOQUEIO\nComprador testado: ${comId.nickname} (ID ${comId.id})\n\n${linhas}\n\n${'─'.repeat(30)}\n${veredito}`);
+  alert(`TESTE DA API DE CONSULTA DE BLOQUEIO\nComprador testado: ${alvo.nickname} (ID ${alvo.id})\n\n${linhas}\n\n${'─'.repeat(30)}\n${veredito}`);
   console.log('[teste API bloqueio]', resultados);
 }
 
@@ -9423,6 +9451,7 @@ function openListaBloqueio(){
 // Seleção em memória (quais compradores abrir) + helper de URL
 let _bloqueioSelecionados = new Set();
 let _bloqueioJaAbertos = new Set();  // chaves já abertas nesta sessão (controle do lote)
+let _bloqueioMostrarFeitos = false;  // toggle: mostrar também os já bloqueados
 const BLOQUEIO_LOTE = 10;            // quantos abrir por clique (seguro p/ antifraude)
 
 function bloqueioBuyerKey(c){ return String(c.id || c.nickname); }
@@ -9500,6 +9529,29 @@ function abrirLoteBloqueio(){
   renderListaBloqueioBody();
 }
 
+// Abre o próximo lote E já marca como bloqueados (pra quem confia que vai bloquear todos)
+function abrirLoteEMarcar(){
+  const compradores = getCompradoresBloqueio();
+  const feito = getBloqueioFeito();
+  const pendentes = compradores.filter(c => {
+    const k = bloqueioBuyerKey(c);
+    return !feito[k] && !_bloqueioJaAbertos.has(k);
+  });
+  if(pendentes.length === 0){
+    _bloqueioJaAbertos = new Set();
+    showToast('Não há mais pendentes para abrir.');
+    renderListaBloqueioBody();
+    return;
+  }
+  const lote = pendentes.slice(0, BLOQUEIO_LOTE);
+  const urls = lote.map(bloqueioLinkVenda).filter(Boolean);
+  const keys = lote.map(bloqueioBuyerKey);
+  lote.forEach(c => _bloqueioJaAbertos.add(bloqueioBuyerKey(c)));
+  abrirAbasEmMassa(urls);
+  marcarBloqueioFeitoVarios(keys);  // já marca; usuário pode desmarcar se não bloqueou algum
+  showToast(`${urls.length} aberto(s) e marcado(s). Desmarque se não bloquear algum.`);
+}
+
 function copiarLinksBloqueio(){
   const compradores = getCompradoresBloqueio();
   const feito = getBloqueioFeito();
@@ -9540,6 +9592,10 @@ function renderListaBloqueioBody(){
     return !feito[k] && !_bloqueioJaAbertos.has(k);
   }).length;
   const todosSelecionados = pendentes > 0 && compradores.filter(c => !feito[bloqueioBuyerKey(c)]).every(c => _bloqueioSelecionados.has(bloqueioBuyerKey(c)));
+  const abertosNaSessao = _bloqueioJaAbertos.size;
+
+  // Lista visível: por padrão esconde os já bloqueados (toggle mostra)
+  const visiveis = _bloqueioMostrarFeitos ? compradores : compradores.filter(c => !feito[bloqueioBuyerKey(c)]);
 
   body.innerHTML = `
     <div style="font-size:11px;color:var(--text2);margin:8px 0 10px">
@@ -9547,16 +9603,26 @@ function renderListaBloqueioBody(){
       <span style="color:var(--amber)">${pendentes} pendente(s)</span> ·
       <span style="color:var(--green)">${compradores.length - pendentes} já bloqueado(s)</span>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
-      <label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text2);cursor:pointer">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+      <button onclick="abrirLoteEMarcar()" class="btn btn-sm" style="font-size:11px;background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)" title="Abre os próximos ${BLOQUEIO_LOTE} e já marca como bloqueados (desmarque se não bloquear algum)">↗✓ Abrir ${BLOQUEIO_LOTE} + marcar (${restamNoLote} restantes)</button>
+      <button onclick="abrirLoteBloqueio()" class="btn btn-sm" style="font-size:11px" title="Só abre os próximos ${BLOQUEIO_LOTE}, sem marcar">↗ Abrir ${BLOQUEIO_LOTE} (sem marcar)</button>
+      ${abertosNaSessao > 0 ? `<button onclick="marcarAbertosComoFeitos()" class="btn btn-sm" style="font-size:11px;background:rgba(62,207,142,.15);color:var(--green);border:1px solid var(--green)" title="Marca como bloqueados todos que você abriu nesta sessão">✓ Marcar abertos (${abertosNaSessao})</button>` : ''}
+      <button onclick="copiarLinksBloqueio()" class="btn btn-sm" style="font-size:11px" title="Copia os links pendentes (à prova de bloqueio de pop-up)">📋 Copiar links</button>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:center;font-size:11px">
+      <label style="display:inline-flex;align-items:center;gap:5px;color:var(--text2);cursor:pointer">
         <input type="checkbox" ${todosSelecionados?'checked':''} onchange="bloqueioSelecionarTodos(this.checked)" style="cursor:pointer">
         Selecionar pendentes
       </label>
       <button id="btn-abrir-sel" onclick="abrirSelecionados()" class="btn btn-sm" style="font-size:11px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">↗ Abrir selecionados (${_bloqueioSelecionados.size})</button>
-      <button onclick="abrirLoteBloqueio()" class="btn btn-sm" style="font-size:11px;background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)" title="Abre os próximos ${BLOQUEIO_LOTE} pendentes. Mais seguro: evita disparar verificação antifraude do ML.">↗ Abrir próximos ${BLOQUEIO_LOTE} (${restamNoLote} restantes)</button>
-      <button onclick="copiarLinksBloqueio()" class="btn btn-sm" style="font-size:11px" title="Copia os links pendentes (à prova de bloqueio de pop-up)">📋 Copiar links</button>
+      <label style="display:inline-flex;align-items:center;gap:5px;color:var(--text3);cursor:pointer;margin-left:auto">
+        <input type="checkbox" ${_bloqueioMostrarFeitos?'checked':''} onchange="toggleMostrarFeitos()" style="cursor:pointer">
+        Mostrar já bloqueados
+      </label>
     </div>
-    ${compradores.map(c => {
+    ${visiveis.length === 0
+      ? `<div style="padding:24px;text-align:center;color:var(--green);font-size:12px">✓ Todos os compradores de estado bloqueado já foram bloqueados!<br><span style="font-size:10px;color:var(--text3)">Marque "Mostrar já bloqueados" para revê-los.</span></div>`
+      : visiveis.map(c => {
       const key = bloqueioBuyerKey(c);
       const jaBloqueado = !!feito[key];
       const selecionado = _bloqueioSelecionados.has(key);
