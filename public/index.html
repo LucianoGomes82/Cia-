@@ -1310,6 +1310,16 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
           <div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;padding:12px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:10px">
 
             <div style="display:flex;flex-direction:column;gap:4px">
+              <label style="font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3)">Payment ID</label>
+              <div style="display:flex;align-items:center;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:0 8px;height:32px">
+                <span style="color:var(--text3);font-size:11px;margin-right:4px">🔎</span>
+                <input type="text" id="fin-filter-payid" oninput="renderFinanceiro()" placeholder="buscar ID..." autocomplete="off"
+                  style="background:transparent;border:none;color:var(--text);font-size:12px;outline:none;width:130px;font-family:'DM Mono',monospace">
+                <span onclick="document.getElementById('fin-filter-payid').value='';renderFinanceiro()" title="Limpar" style="color:var(--text3);font-size:13px;cursor:pointer;padding:0 2px">×</span>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:4px">
               <label style="font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3)">Tipo</label>
               <select id="fin-filter-cat" onchange="renderFinanceiro()"
                 style="padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:12px;min-width:190px;height:32px;cursor:pointer">
@@ -5873,24 +5883,28 @@ function getFilteredMovimentos(){
   const cat  = document.getElementById('fin-filter-cat')?.value || '';
   const from = document.getElementById('fin-filter-from')?.value || '';
   const to   = document.getElementById('fin-filter-to')?.value || '';
+  const payid = (document.getElementById('fin-filter-payid')?.value || '').trim();
 
   return _extratoMP.movimentos.filter(m => {
     if(cat && m.categoria !== cat) return false;
     if(from && (!m.data || m.data < from)) return false;
     if(to   && (!m.data || m.data > to))   return false;
+    if(payid && !String(m.ref || '').includes(payid)) return false;
     return true;
   });
 }
 
-// Filtra SÓ por data (ignora tipo) — usado na Conciliação, que não pode
+// Filtra SÓ por data e payment_id (ignora tipo) — usado na Conciliação, que não pode
 // fragmentar um payment_id mostrando só parte dos seus movimentos.
 function getFilteredMovimentosSoData(){
   if(!_extratoMP) return [];
   const from = document.getElementById('fin-filter-from')?.value || '';
   const to   = document.getElementById('fin-filter-to')?.value || '';
+  const payid = (document.getElementById('fin-filter-payid')?.value || '').trim();
   return _extratoMP.movimentos.filter(m => {
     if(from && (!m.data || m.data < from)) return false;
     if(to   && (!m.data || m.data > to))   return false;
+    if(payid && !String(m.ref || '').includes(payid)) return false;
     return true;
   });
 }
@@ -5931,7 +5945,7 @@ function clearFinDateFilter(){
 
 // Limpa TODOS os filtros (tipo, status, mês, período)
 function clearAllFinFilters(){
-  ['fin-filter-cat', 'fin-filter-status', 'fin-filter-mes', 'fin-filter-from', 'fin-filter-to'].forEach(id => {
+  ['fin-filter-cat', 'fin-filter-status', 'fin-filter-mes', 'fin-filter-from', 'fin-filter-to', 'fin-filter-payid'].forEach(id => {
     const el = document.getElementById(id);
     if(el) el.value = '';
   });
@@ -6011,14 +6025,15 @@ function renderFinanceiro(){
 
   if(temExtrato){
     populateFinFilter();
-    // Mostra o total filtrado quando há QUALQUER filtro ativo (tipo ou data)
+    // Mostra o total filtrado quando há QUALQUER filtro ativo (tipo, data ou ID)
     const cat  = document.getElementById('fin-filter-cat')?.value || '';
     const from = document.getElementById('fin-filter-from')?.value || '';
     const to   = document.getElementById('fin-filter-to')?.value || '';
+    const payid = (document.getElementById('fin-filter-payid')?.value || '').trim();
     const totalEl = document.getElementById('fin-filter-total');
     const totalWrap = document.getElementById('fin-filter-total-wrap');
     if(totalEl && totalWrap){
-      if(cat || from || to){
+      if(cat || from || to || payid){
         const movs = getFilteredMovimentos();
         const total = movs.reduce((s, m) => s + m.valor, 0);
         if(movs.length === 0){
@@ -6306,11 +6321,13 @@ function renderFinCategorias(){
   const cat = document.getElementById('fin-filter-cat')?.value || '';
   const from = document.getElementById('fin-filter-from')?.value || '';
   const to   = document.getElementById('fin-filter-to')?.value || '';
-  // Respeita filtro de DATA. O filtro de TIPO destaca a linha (não esconde as outras,
-  // pra manter a visão geral do período), mas avisa se a combinação não tem dados.
+  const payid = (document.getElementById('fin-filter-payid')?.value || '').trim();
+  // Respeita filtro de DATA e PAYMENT ID. O filtro de TIPO destaca a linha (não esconde
+  // as outras, pra manter a visão geral do período), mas avisa se não tem dados.
   const movimentos = _extratoMP.movimentos.filter(m => {
     if(from && (!m.data || m.data < from)) return false;
     if(to   && (!m.data || m.data > to))   return false;
+    if(payid && !String(m.ref || '').includes(payid)) return false;
     return true;
   });
   const cats = {};
