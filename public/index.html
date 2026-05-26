@@ -5669,7 +5669,13 @@ async function importExtratoMP(event){
   try {
     // Parte do que já está carregado (acumula em vez de substituir)
     const existentes = (_extratoMP?.movimentos || []).slice();
-    const vistos = new Set(existentes.map(movKey));
+    // Conta ocorrências de cada chave-base nos já existentes, pra desambiguar
+    // movimentos legitimamente idênticos (ex.: 2 retenções de mesmo valor/data).
+    const vistos = new Map();  // chaveBase → quantas vezes já vista
+    for(const m of existentes){
+      const kb = movKey(m);
+      vistos.set(kb, (vistos.get(kb) || 0) + 1);
+    }
     let novos = 0, duplicados = 0, arquivosOk = 0;
     const errosArquivo = [];
 
@@ -5684,10 +5690,17 @@ async function importExtratoMP(event){
           errosArquivo.push(`${file.name}: nenhum movimento reconhecido`);
           continue;
         }
+        // Conta ocorrências DENTRO deste arquivo, pra dar índice a cada duplicata legítima
+        const ocorrenciaArquivo = new Map();
         for(const m of parsed.movimentos){
-          const k = movKey(m);
-          if(vistos.has(k)){ duplicados++; continue; }
-          vistos.add(k);
+          const kb = movKey(m);
+          const idx = (ocorrenciaArquivo.get(kb) || 0);  // 0,1,2... dentro do arquivo
+          ocorrenciaArquivo.set(kb, idx + 1);
+          const jaTem = vistos.get(kb) || 0;
+          // Se este arquivo já produziu mais ocorrências dessa chave do que existem
+          // no acumulado, é um movimento novo legítimo. Senão, é reimportação → pula.
+          if(idx < jaTem){ duplicados++; continue; }
+          vistos.set(kb, jaTem + 1);
           existentes.push(m);
           novos++;
         }
@@ -5863,6 +5876,19 @@ function getFilteredMovimentos(){
 
   return _extratoMP.movimentos.filter(m => {
     if(cat && m.categoria !== cat) return false;
+    if(from && (!m.data || m.data < from)) return false;
+    if(to   && (!m.data || m.data > to))   return false;
+    return true;
+  });
+}
+
+// Filtra SÓ por data (ignora tipo) — usado na Conciliação, que não pode
+// fragmentar um payment_id mostrando só parte dos seus movimentos.
+function getFilteredMovimentosSoData(){
+  if(!_extratoMP) return [];
+  const from = document.getElementById('fin-filter-from')?.value || '';
+  const to   = document.getElementById('fin-filter-to')?.value || '';
+  return _extratoMP.movimentos.filter(m => {
     if(from && (!m.data || m.data < from)) return false;
     if(to   && (!m.data || m.data > to))   return false;
     return true;
@@ -6169,8 +6195,14 @@ function buildPaymentIndex(){
 }
 
 function renderFinConciliacao(){
-  const movimentos = getFilteredMovimentos();
+  // A conciliação agrupa por payment_id e compara com a venda. Por isso ela
+  // respeita SÓ o filtro de data — nunca o de tipo, que fragmentaria o payment
+  // (ex.: mostrar só os "retidos" de um payment e esconder o Pix de entrada,
+  // dando um total que não representa a operação real).
+  const movimentos = getFilteredMovimentosSoData();
   const payIdx = buildPaymentIndex();
+  // Avisa se há filtro de tipo ativo (que está sendo ignorado aqui de propósito)
+  const tipoAtivo = document.getElementById('fin-filter-cat')?.value || '';
 
   // Agrupa movimentos por referência (payment_id)
   const porRef = new Map();
@@ -6225,6 +6257,7 @@ function renderFinConciliacao(){
       <span style="color:var(--red)">⚠ ${cDiv} divergência${cDiv!==1?'s':''}</span> ·
       <span style="color:var(--amber)">${cSemV} sem venda ML</span>
       ${filtroStatus ? ` · <span style="color:var(--blue)">filtrando: ${linhasFiltradas.length} mostrada(s)</span>` : ''}
+      ${tipoAtivo ? `<br><span style="color:var(--text3);font-size:10px">ℹ️ O filtro de tipo "${escapeHTML(tipoAtivo)}" não se aplica aqui: a conciliação sempre mostra cada operação completa (todos os movimentos do payment_id). Use o filtro de tipo nas abas Categorias, Movimentos ou Comparar.</span>` : ''}
       ${matched === 0 ? '<br><span style="color:var(--amber)">⚠ Nenhuma venda casou. Sincronize a aba Vendas primeiro (o app precisa ter os payment_ids do ML carregados).</span>' : ''}
     </div>
     <div style="overflow-x:auto">
