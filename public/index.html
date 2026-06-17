@@ -9872,6 +9872,8 @@ async function diagnosticarVenda(orderId){
   // tenta /packs/{id} e busca o primeiro order do pack via /orders/{order_id}.
   let apiData = null;
   let apiError = null;
+  let shipmentData = null;          // dados crus do /shipments/{id} — onde fica o endereço
+  let shipmentError = null;
   let resolvedFrom = null;  // 'order' | 'pack' — pra mostrar no relatório
   try {
     const r = await proxyFetch(`/orders/${orderId}`);
@@ -9903,6 +9905,15 @@ async function diagnosticarVenda(orderId){
     }
   } catch(e){
     apiError = e.message;
+  }
+
+  // Busca o shipment separadamente — é lá que ficam o endereço e dados do receiver
+  if(apiData?.shipping?.id){
+    try {
+      const rs = await proxyFetch(`/shipments/${apiData.shipping.id}`);
+      if(rs.ok) shipmentData = await rs.json();
+      else      shipmentError = `HTTP ${rs.status}`;
+    } catch(e){ shipmentError = e.message; }
   }
 
   // Monta relatório
@@ -9953,6 +9964,47 @@ async function diagnosticarVenda(orderId){
     lines.push(`  shipping.cost: ${apiData.shipping?.cost ?? '(NULL)'}`);
     lines.push('');
     lines.push(`  → Data resolvida pelo helper: ${getOrderDate(apiData) || '(VAZIO)'}`);
+    lines.push('');
+    // BUYER cru — aqui descobrimos se o ML está retornando nome/CPF
+    lines.push('👤 BUYER (cru da API):');
+    const b = apiData.buyer || {};
+    lines.push(`  id: ${b.id ?? '(NULL)'}`);
+    lines.push(`  nickname: ${b.nickname ?? '(NULL)'}`);
+    lines.push(`  first_name: ${b.first_name ?? '(NULL)'}`);
+    lines.push(`  last_name: ${b.last_name ?? '(NULL)'}`);
+    lines.push(`  email: ${b.email ? '(presente)' : '(NULL)'}`);
+    lines.push(`  billing_info: ${b.billing_info ? JSON.stringify(b.billing_info) : '(NULL/AUSENTE)'}`);
+    lines.push(`  phone: ${b.phone ? JSON.stringify(b.phone) : '(NULL)'}`);
+    lines.push(`  Todas as chaves do buyer: ${Object.keys(b).join(', ') || '(vazio)'}`);
+  }
+
+  // SHIPMENT cru — aqui descobrimos se o ML está retornando endereço
+  if(shipmentError){
+    lines.push('');
+    lines.push(`❌ Erro ao buscar shipment: ${shipmentError}`);
+  } else if(shipmentData){
+    lines.push('');
+    lines.push('📦 SHIPMENT (cru da API):');
+    lines.push(`  id: ${shipmentData.id || '(VAZIO)'}`);
+    lines.push(`  status: ${shipmentData.status || '(VAZIO)'} / substatus: ${shipmentData.substatus || '(NULL)'}`);
+    lines.push(`  logistic_type: ${shipmentData.logistic_type || '(VAZIO)'}`);
+    const ra = shipmentData.receiver_address;
+    if(ra){
+      lines.push('  receiver_address:');
+      lines.push(`    receiver_name: ${ra.receiver_name ?? '(NULL)'}`);
+      lines.push(`    address_line: ${ra.address_line ?? '(NULL)'}`);
+      lines.push(`    street_name: ${ra.street_name ?? '(NULL)'}`);
+      lines.push(`    street_number: ${ra.street_number ?? '(NULL)'}`);
+      lines.push(`    comment: ${ra.comment ?? '(NULL)'}`);
+      lines.push(`    neighborhood.name: ${ra.neighborhood?.name ?? '(NULL)'}`);
+      lines.push(`    city.name: ${ra.city?.name ?? '(NULL)'}`);
+      lines.push(`    state.name: ${ra.state?.name ?? '(NULL)'} / state.id: ${ra.state?.id ?? '(NULL)'}`);
+      lines.push(`    zip_code: ${ra.zip_code ?? '(NULL)'}`);
+      lines.push(`    Todas as chaves: ${Object.keys(ra).join(', ')}`);
+    } else {
+      lines.push(`  receiver_address: (AUSENTE) — ML não retornou endereço`);
+    }
+    lines.push(`  Todas as chaves do shipment: ${Object.keys(shipmentData).join(', ')}`);
   }
 
   // Cria o modal (estava sem declaração — bug que travava o Debug)
