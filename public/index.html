@@ -11650,6 +11650,20 @@ function parseAbaML(aoa, headerRow){
     }
     return -1;
   };
+  // Pega a N-ésima ocorrência (0-indexed) de uma coluna — usado para colunas
+  // que aparecem duplicadas no relatório do ML (ex.: "Estado" é tanto status
+  // do pedido na col 2 quanto UF do comprador na col 38).
+  const findColN = (name, n) => {
+    const want = String(name).toLowerCase().trim();
+    let found = 0;
+    for(let i = 0; i < headers.length; i++){
+      if(headers[i] === want){
+        if(found === n) return i;
+        found++;
+      }
+    }
+    return -1;
+  };
 
   const cols = {
     orderId:   findCol(['n.º de venda', 'numero da venda', 'numero do pedido']),
@@ -11669,8 +11683,20 @@ function parseAbaML(aoa, headerRow){
     unitPrice: findCol(['preço unitário de venda do anúncio (brl)']),
     listingType: findCol(['tipo de anúncio', 'tipo de anuncio']),
     nfe:       findCol(['nf-e em anexo']),
-    buyerName: findCol(['dados pessoais ou da empresa']),
+    // Identificação do comprador (importante: a planilha do ML tem 2 nomes
+    // diferentes pra "comprador" — "Dados pessoais ou da empresa" tem o NOME
+    // JURÍDICO (CNPJ) quando é empresa, e "Comprador" tem o nome real)
+    buyerEnt:  findCol(['dados pessoais ou da empresa']),  // razão social / nome jurídico
+    buyerName: findCol(['comprador']),                      // nome real (pessoa física)
     buyerDoc:  findCol(['tipo e número do documento']),
+    buyerCPF:  findCol(['cpf']),                            // CPF do comprador (col 35)
+    // Endereço do comprador (NFe): a coluna "Endereço" aparece 2x.
+    // Col 30 = endereço completo concatenado; Col 36 = só endereço sem cidade/UF.
+    // Usamos a 2ª ocorrência (idx 1) que é mais limpa pra colunar separadamente.
+    buyerAddr: findColN('endereço', 1),
+    buyerCity: findCol(['cidade']),
+    buyerState: findColN('estado', 1),  // 2ª ocorrência = UF do comprador (não status)
+    buyerZip:  findCol(['cep']),
     deliveryMethod: findCol(['forma de entrega']),
     trackingNumber: findCol(['número de rastreamento', 'numero de rastreamento']),
     moneyReleased:  findCol(['dinheiro liberado']),
@@ -11706,10 +11732,14 @@ function parseAbaML(aoa, headerRow){
     const refund     = Number(row[cols.refund]) || 0;
     const totalBruto = revProduct + revShip;
 
-    const buyerName = String(row[cols.buyerName] || '').trim();
+    const buyerEnt  = String(row[cols.buyerEnt] || '').trim();   // Dados pessoais ou empresa (Col 28)
+    const buyerName = String(row[cols.buyerName] || '').trim();  // Comprador real (Col 33)
     const buyerDoc  = String(row[cols.buyerDoc]  || '').trim();
-    const cidade    = String(row[cols.cidade]    || '').trim();
-    const estadoFull= String(row[cols.estadoComprador] || '').trim();
+    const buyerCPF  = String(row[cols.buyerCPF]  || '').trim();
+    const buyerAddr = String(row[cols.buyerAddr] || '').trim();
+    const cidade    = String(row[cols.buyerCity] || '').trim();
+    const estadoFull= String(row[cols.buyerState] || '').trim();
+    const buyerZip  = String(row[cols.buyerZip] || '').trim();
     const productId = String(row[cols.productId] || '').trim();
     const title     = String(row[cols.title]     || '').trim();
     const variation = String(row[cols.variation] || '').trim();
@@ -11764,13 +11794,24 @@ function parseAbaML(aoa, headerRow){
       }],
       color,
       buyer: {
-        nickname: buyerName,
-        firstName: buyerName.split(' ')[0] || '',
-        lastName:  buyerName.split(' ').slice(1).join(' ') || '',
-        docNumber: buyerDoc.replace(/^[^:]+:\s*/, ''),
-        docType:   buyerDoc.split(':')[0] || null,
+        // Pra NFe a planilha usa o nome jurídico (col 28) quando empresa.
+        // displayName cai pro nome de pessoa (col 33) se não tiver empresa.
+        nickname: buyerEnt || buyerName,
+        firstName: (buyerEnt || buyerName).split(' ')[0] || '',
+        lastName:  (buyerEnt || buyerName).split(' ').slice(1).join(' ') || '',
+        // CPF: prefere a coluna dedicada; cai pro número extraído de "Tipo: NN..."
+        docNumber: buyerCPF || buyerDoc.replace(/^[^:]+:\s*/, ''),
+        docType:   buyerCPF ? 'CPF' : (buyerDoc.split(':')[0] || null),
+        // Guarda os 2 nomes separados pra uso futuro (recibo etc.)
+        nameEnt:   buyerEnt,
+        namePerson: buyerName,
       },
-      receiver: { city: cidade, state: estadoFull },
+      receiver: {
+        address: buyerAddr,
+        city:    cidade,
+        state:   estadoFull,
+        zip:     buyerZip,
+      },
       logistic_type: deliveryMethod.toLowerCase().includes('flex') ? 'self_service' :
                      deliveryMethod.toLowerCase().includes('full') ? 'fulfillment' :
                      deliveryMethod.toLowerCase().includes('agência') ? 'cross_docking' : null,
@@ -12935,12 +12976,13 @@ function renderVendas(){
           </button>
         </div>` : ''}
     </div>
-    <div id="venda-bulk-bar" style="display:none;align-items:center;gap:8px;padding:10px 12px;background:linear-gradient(135deg, rgba(62,207,142,.12), rgba(96,165,250,.08));border:1px solid var(--green);border-radius:6px;margin-bottom:8px;position:sticky;top:50px;z-index:5">
-      <span style="font-size:18px">🏷</span>
-      <div style="flex:1;font-size:12px;font-weight:600">
+    <div id="venda-bulk-bar" style="display:none;align-items:center;gap:8px;padding:10px 12px;background:linear-gradient(135deg, rgba(62,207,142,.12), rgba(96,165,250,.08));border:1px solid var(--green);border-radius:6px;margin-bottom:8px;position:sticky;top:50px;z-index:5;flex-wrap:wrap">
+      <span style="font-size:18px">✓</span>
+      <div style="flex:1;font-size:12px;font-weight:600;min-width:160px">
         <span id="venda-bulk-count">0</span> venda(s) selecionada(s)
       </div>
       <button class="btn btn-sm" onclick="clearVendaSelection()" style="font-size:10px;padding:3px 8px">Limpar</button>
+      <button class="btn btn-sm" onclick="exportNFXLSX()" title="Gerar planilha no formato de NF emitidas (aceita vendas em qualquer estado, exceto canceladas/não entregues)" style="font-size:11px;padding:5px 10px;background:rgba(168,85,247,.15);color:var(--purple);border:1px solid var(--purple)">📋 Gerar XLSX para NF</button>
       <button class="btn btn-p btn-sm" onclick="printLabelsBulk()" style="font-size:11px;padding:5px 10px">🖨 Imprimir etiquetas</button>
     </div>`;
 
@@ -13031,11 +13073,10 @@ function renderVendas(){
 
     return `<div style="display:grid;grid-template-columns:30px 64px 1fr auto;gap:12px;padding:12px;background:${cardBgColor};border:1px solid ${cardBorderColor};border-radius:10px;margin-bottom:10px;align-items:center">
       <div style="display:flex;justify-content:center">
-        ${labelCheck.ok
-          ? `<input type="checkbox" data-venda-id="${v.id}" data-can-print="1" ${isSelected?'checked':''}
-              onchange="toggleVendaSelection('${v.id}', this.checked)"
-              style="width:18px;height:18px;cursor:pointer">`
-          : `<span style="color:var(--text3);font-size:14px" title="${escapeHTML(labelCheck.reason)}">—</span>`}
+        <input type="checkbox" data-venda-id="${v.id}" data-can-print="${labelCheck.ok?'1':'0'}" ${isSelected?'checked':''}
+          onchange="toggleVendaSelection('${v.id}', this.checked)"
+          title="${labelCheck.ok?'Marcar venda':'Marcar venda (etiqueta indisponível: '+escapeHTML(labelCheck.reason)+')'}"
+          style="width:18px;height:18px;cursor:pointer">
       </div>
       ${thumb ? `<img src="${thumb}" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:8px">` : '<div style="width:64px;height:64px;background:var(--bg3);border-radius:8px"></div>'}
       <div style="min-width:0">
@@ -13347,13 +13388,26 @@ async function exportNFXLSX(){
   const fonte = (vendasDataFull && vendasDataFull.length) ? vendasDataFull : vendasData;
   const selecionadas = [];
   const naoEncontradas = [];
+  const descartadas = [];  // {id, motivo} — pra avisar
+  // Status que indicam que a venda NÃO deve gerar NF (decisão do usuário)
+  const STATUS_DESCARTAR = new Set(['cancelled','not_delivered']);
   for(const id of _selectedVendaIds){
     const v = fonte.find(x => String(x.id) === String(id));
-    if(v) selecionadas.push(v);
-    else naoEncontradas.push(id);
+    if(!v){ naoEncontradas.push(id); continue; }
+    // status pode estar em v.status (raiz) ou v.shipment.substatus
+    const status = String(v.status || '').toLowerCase();
+    const substatus = String(v.shipment?.substatus || v.substatus || '').toLowerCase();
+    if(STATUS_DESCARTAR.has(status) || STATUS_DESCARTAR.has(substatus)){
+      descartadas.push({ id, motivo: substatus === 'cancelled' || status === 'cancelled' ? 'cancelada' : 'não entregue' });
+      continue;
+    }
+    selecionadas.push(v);
   }
   if(selecionadas.length === 0){
-    alert('Nenhuma das vendas selecionadas foi encontrada nos dados carregados.');
+    let msg = 'Nenhuma venda válida para gerar NF.';
+    if(naoEncontradas.length) msg += `\n• ${naoEncontradas.length} não encontradas nos dados carregados.`;
+    if(descartadas.length) msg += `\n• ${descartadas.length} descartadas por status (canceladas/não entregues).`;
+    alert(msg);
     return;
   }
 
@@ -13451,6 +13505,14 @@ async function exportNFXLSX(){
 
   let msg = `✓ Planilha gerada com ${selecionadas.length} venda(s).`;
   if(naoEncontradas.length) msg += `\n\n⚠ ${naoEncontradas.length} venda(s) selecionada(s) não foram encontradas nos dados carregados.`;
+  if(descartadas.length){
+    const canc = descartadas.filter(d => d.motivo === 'cancelada').length;
+    const ne   = descartadas.filter(d => d.motivo === 'não entregue').length;
+    const parts = [];
+    if(canc) parts.push(`${canc} cancelada(s)`);
+    if(ne)   parts.push(`${ne} não entregue(s)`);
+    msg += `\n\n⚠ ${descartadas.length} venda(s) descartada(s) por status: ${parts.join(', ')}.`;
+  }
   if(nicknameFonte === 'ml') msg += `\n\nConta: ${nomeConta} (nickname atual do Mercado Livre).`;
   else if(nicknameFonte === 'cadastro') msg += `\n\n⚠ Nickname do ML indisponível (token ausente ou expirado). Coluna "Conta" preenchida com o nome cadastrado: ${nomeConta}.`;
   else msg += `\n\nℹ Nenhuma conta ativa nem nickname disponível — a coluna "Conta" ficou vazia.`;
@@ -13613,20 +13675,49 @@ async function printSingleLabel(shipmentId, orderId){
 // Imprime várias etiquetas em lote
 async function printLabelsBulk(){
   if(_selectedVendaIds.size === 0){ alert('Selecione pelo menos uma venda.'); return; }
+  // O checkbox agora aparece em todas as vendas (pra permitir uso em NFe etc.),
+  // mas a impressão de etiqueta só funciona pras imprimíveis. Filtramos aqui e
+  // avisamos quantas foram descartadas, pra não confundir o usuário.
   const shipmentIds = [];
+  let descartadasEstadoBloq = 0;
+  let descartadasSubstatus = 0;
+  let descartadasSemShipment = 0;
+  const fonte = (vendasDataFull && vendasDataFull.length) ? vendasDataFull : vendasData;
   for(const id of _selectedVendaIds){
-    const v = vendasData.find(x => String(x.id) === String(id));
-    if(v?.shipment?.id) shipmentIds.push(v.shipment.id);
+    const v = fonte.find(x => String(x.id) === String(id));
+    if(!v){ descartadasSemShipment++; continue; }
+    const chk = canPrintLabel(v);
+    if(chk.ok && v.shipment?.id){
+      shipmentIds.push(v.shipment.id);
+    } else if(chk.blocked){
+      descartadasEstadoBloq++;
+    } else if(!v.shipment?.id){
+      descartadasSemShipment++;
+    } else {
+      descartadasSubstatus++;
+    }
   }
-  if(!shipmentIds.length){ alert('Nenhuma venda válida selecionada.'); return; }
+  if(!shipmentIds.length){
+    alert(`Nenhuma das ${_selectedVendaIds.size} venda(s) selecionada(s) pode ter etiqueta impressa agora.\n\n` +
+      (descartadasEstadoBloq?`• ${descartadasEstadoBloq} para estado bloqueado\n`:'') +
+      (descartadasSubstatus?`• ${descartadasSubstatus} com status incompatível (entregue, cancelado, aguardando DC-e etc.)\n`:'') +
+      (descartadasSemShipment?`• ${descartadasSemShipment} sem envio associado\n`:'') +
+      `\nDica: para gerar NF, use o botão "Gerar XLSX para NF" — ele aceita vendas em qualquer estado.`);
+    return;
+  }
+  const totalDescartadas = descartadasEstadoBloq + descartadasSubstatus + descartadasSemShipment;
+  let aviso = '';
+  if(totalDescartadas){
+    aviso = `\n\n⚠ ${totalDescartadas} das ${_selectedVendaIds.size} selecionada(s) serão ignoradas (estado bloqueado, status incompatível ou sem envio).`;
+  }
 
   // Limite de 30 etiquetas por lote para evitar 503/timeout (cada PDF pesa MB)
   const MAX_LOTE = 30;
   if(shipmentIds.length > MAX_LOTE){
-    if(!confirm(`Você selecionou ${shipmentIds.length} etiquetas, mas o limite por lote é ${MAX_LOTE} (PDFs pesados podem causar timeout/503).\n\nDeseja gerar apenas as primeiras ${MAX_LOTE}?\n\nApós imprimir, marque novamente as próximas e gere outro lote.`)) return;
+    if(!confirm(`Você selecionou ${shipmentIds.length} etiquetas, mas o limite por lote é ${MAX_LOTE} (PDFs pesados podem causar timeout/503).\n\nDeseja gerar apenas as primeiras ${MAX_LOTE}?${aviso}\n\nApós imprimir, marque novamente as próximas e gere outro lote.`)) return;
     shipmentIds.length = MAX_LOTE; // trunca
   } else {
-    if(!confirm(`Gerar etiquetas para ${shipmentIds.length} pedido(s)?\n\nO PDF será aberto em nova aba para você imprimir.`)) return;
+    if(!confirm(`Gerar etiquetas para ${shipmentIds.length} pedido(s)?${aviso}\n\nO PDF será aberto em nova aba para você imprimir.`)) return;
   }
 
   const dt = new Date().toISOString().split('T')[0];
