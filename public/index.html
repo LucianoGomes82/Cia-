@@ -1027,6 +1027,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <input type="file" id="vendas-import-file" accept=".xlsx,.xls" style="display:none" onchange="importVendasFromXLSX(event)">
             <button class="btn btn-sm" onclick="openListaBloqueio()" title="Lista de compradores de estados bloqueados para você bloquear no Mercado Livre" style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🚫 Bloquear compradores</button>
             <button class="btn btn-sm" onclick="exportVendasXLSX()" title="Exportar planilha Excel com todas as vendas e investimentos">📤 Exportar XLSX</button>
+            <button class="btn btn-sm" onclick="exportNFXLSX()" title="Gerar planilha no formato de NF emitidas para as vendas marcadas com checkbox" style="background:rgba(168,85,247,.15);color:var(--purple);border:1px solid var(--purple)">📋 Gerar XLSX para NF</button>
           </div>
         </div>
 
@@ -13332,6 +13333,130 @@ function updateInvestimento(orderId, socio, value){
 }
 
 // Exporta planilha XLSX completa com todas as vendas
+// Gera planilha no formato "NF emitidas" com as vendas selecionadas (checkbox).
+// Funciona com vendas vindas da API E do XLSX (busca em vendasDataFull → vendasData).
+// Cabeçalho/colunas reproduzem o modelo: Solicitado em, Unidades, Receita por
+// produtos, Título do anúncio, Variação, Comprador, CPF, Endereço, Cidade,
+// Estado, CEP, Observação (vazia), Conta (nome da conta ativa).
+async function exportNFXLSX(){
+  // 1) Pega as vendas marcadas
+  if(!_selectedVendaIds || _selectedVendaIds.size === 0){
+    alert('Nenhuma venda selecionada.\n\nMarque as vendas com o checkbox antes de gerar a planilha.');
+    return;
+  }
+  const fonte = (vendasDataFull && vendasDataFull.length) ? vendasDataFull : vendasData;
+  const selecionadas = [];
+  const naoEncontradas = [];
+  for(const id of _selectedVendaIds){
+    const v = fonte.find(x => String(x.id) === String(id));
+    if(v) selecionadas.push(v);
+    else naoEncontradas.push(id);
+  }
+  if(selecionadas.length === 0){
+    alert('Nenhuma das vendas selecionadas foi encontrada nos dados carregados.');
+    return;
+  }
+
+  // 2) Carrega SheetJS se necessário
+  if(typeof XLSX === 'undefined'){
+    try {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+        s.onload = resolve; s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    } catch(e){
+      alert('Erro ao carregar biblioteca de planilhas. Verifique sua conexão.');
+      return;
+    }
+  }
+
+  // 3) Nome para a coluna "Conta": usa o NICKNAME atual do ML (via API).
+  // Se a busca falhar (sem token, expirado etc.), cai pro nome da conta cadastrada.
+  const acc = (typeof getActiveAccount === 'function') ? getActiveAccount() : null;
+  let nomeConta = '';
+  let nicknameFonte = '';  // 'ml' | 'cadastro' | 'vazio' — usado na mensagem final
+  try {
+    if(cfg.at){  // só tenta se tem token
+      const r = await proxyFetch('/users/me');
+      if(r.ok){
+        const body = await r.json().catch(() => ({}));
+        if(body.nickname){
+          nomeConta = String(body.nickname).trim();
+          nicknameFonte = 'ml';
+        }
+      }
+    }
+  } catch(e){ /* silencia — vai pro fallback */ }
+  if(!nomeConta){
+    nomeConta = acc?.name || '';
+    nicknameFonte = nomeConta ? 'cadastro' : 'vazio';
+  }
+
+  // 4) Monta as linhas no formato do modelo
+  const HEADERS = [
+    'Solicitado em:', 'Unidades', 'Receita por produtos (BRL)', 'Título do anúncio',
+    'Variação', 'Comprador', 'CPF', 'Endereço', 'Cidade', 'Estado', 'CEP',
+    'Observação', 'Conta'
+  ];
+  const rows = [HEADERS];
+  for(const v of selecionadas){
+    const dataObj = v.date_created ? new Date(v.date_created) : null;
+    const dataStr = dataObj && !isNaN(dataObj.getTime()) ? dataObj : '';
+    const unidades = (v.items || []).reduce((s, it) => s + (Number(it.quantity)||1), 0) || 1;
+    // Receita por produtos: revProduct (XLSX) → soma itens → totalLiquido/total
+    const receita = Number(v.revProduct)
+      || ((v.items||[]).reduce((s, it) => s + (Number(it.unit_price)||0) * (Number(it.quantity)||1), 0))
+      || Number(v.totalLiquido) || Number(v.total) || 0;
+    const titulo = v.firstItem?.title || v.items?.[0]?.item?.title || '';
+    const variacao = v.color ? `Cor : ${v.color}` : '';
+    const buyer = v.buyer || {};
+    const comprador = [(buyer.firstName||''), (buyer.lastName||'')].join(' ').trim()
+                   || buyer.nickname || '';
+    const cpf = buyer.docNumber || '';
+    const recv = v.receiver || {};
+    const endereco = recv.address
+      ? (recv.comment ? `${recv.address} / ${recv.comment}` : recv.address)
+      : '';
+    rows.push([
+      dataStr,
+      unidades,
+      Number(receita) || 0,
+      titulo,
+      variacao,
+      comprador,
+      cpf,
+      endereco,
+      recv.city || '',
+      recv.state || '',
+      recv.zip || '',
+      '',           // Observação vazia (decisão do usuário)
+      nomeConta,    // Conta = nome da conta ativa
+    ]);
+  }
+
+  // 5) Cria a planilha
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [
+    { wch: 18 }, { wch: 9 },  { wch: 18 }, { wch: 40 },
+    { wch: 18 }, { wch: 25 }, { wch: 14 }, { wch: 40 },
+    { wch: 20 }, { wch: 15 }, { wch: 10 }, { wch: 18 }, { wch: 18 },
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'NF emitidas');
+  const today = new Date().toISOString().split('T')[0];
+  const accSuffix = nomeConta ? `-${nomeConta.replace(/[^a-z0-9]+/gi,'_')}` : '';
+  XLSX.writeFile(wb, `NF_Emitidas_ML${accSuffix}-${today}.xlsx`);
+
+  let msg = `✓ Planilha gerada com ${selecionadas.length} venda(s).`;
+  if(naoEncontradas.length) msg += `\n\n⚠ ${naoEncontradas.length} venda(s) selecionada(s) não foram encontradas nos dados carregados.`;
+  if(nicknameFonte === 'ml') msg += `\n\nConta: ${nomeConta} (nickname atual do Mercado Livre).`;
+  else if(nicknameFonte === 'cadastro') msg += `\n\n⚠ Nickname do ML indisponível (token ausente ou expirado). Coluna "Conta" preenchida com o nome cadastrado: ${nomeConta}.`;
+  else msg += `\n\nℹ Nenhuma conta ativa nem nickname disponível — a coluna "Conta" ficou vazia.`;
+  alert(msg);
+}
+
 async function exportVendasXLSX(){
   // Usa dataset completo se disponível, senão dataset cards
   const dataToExport = vendasDataFull || vendasData;
@@ -14312,11 +14437,15 @@ function showRecibo(orderId){
   // não o líquido que cai pro vendedor. Em vendas da planilha o `v.total` é o
   // líquido (= totalLiquido); o bruto vem em `v.totalBruto`. Em vendas da API,
   // `v.total` já é o bruto. Preferimos: totalBruto → soma dos itens → v.total.
+  // O FRETE também difere por origem:
+  //   - API: v.frete é o que o cliente pagou
+  //   - XLSX: v.frete não existe; o que o cliente pagou está em v.revShip
+  //     (v.shippingPaidBySeller é o que o VENDEDOR bancou — não vai no recibo)
   const fmtMoney = n => (Number(n)||0).toFixed(2).replace('.', ',');
-  const frete = Number(v.frete) || 0;
+  const frete = v.frete != null ? Number(v.frete) : (Number(v.revShip) || 0);
   const subtotal = v.subtotal != null
     ? Number(v.subtotal)
-    : ((v.items||[]).reduce((s, it) => s + (Number(it.unit_price)||0) * (Number(it.quantity)||1), 0));
+    : (Number(v.revProduct) || (v.items||[]).reduce((s, it) => s + (Number(it.unit_price)||0) * (Number(it.quantity)||1), 0));
   const totalCobrado = Number(v.totalBruto)
     || (subtotal + frete)
     || Number(v.total)
