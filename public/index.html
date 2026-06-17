@@ -395,6 +395,32 @@ input:focus,select:focus{border-color:var(--green)}
       </div>
     </div>
 
+    <!-- ── IMPORTAÇÃO POR FORNECEDOR (WhatsApp avançado) ── -->
+    <div style="margin-top:28px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <div style="height:1px;flex:1;background:var(--border)"></div>
+        <span style="font-size:12px;color:var(--text3);white-space:nowrap">📱 ou importe conversas individuais por fornecedor</span>
+        <div style="height:1px;flex:1;background:var(--border)"></div>
+      </div>
+
+      <div style="padding:16px;background:var(--bg2);border:1px solid var(--border);border-radius:10px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:6px">📱 Importar do WhatsApp por fornecedor</div>
+        <div style="font-size:11px;color:var(--text3);line-height:1.6;margin-bottom:12px">
+          Exporte a conversa do fornecedor no WhatsApp (3 pontos → Mais → Exportar conversa → Sem mídia)
+          e arraste aqui — pode ser um ou vários arquivos de uma vez. O app <strong>cadastra automaticamente</strong>
+          cada fornecedor a partir do nome do arquivo e lê apenas as mensagens do <strong>dia mais recente</strong>
+          do arquivo (ignora o histórico antigo, mesmo se o fornecedor nunca limpa as mensagens).
+          Você pode revisar/editar os cadastros depois em <a href="#" onclick="switchTab('config');return false;" style="color:var(--blue);text-decoration:none">Config → Fornecedores monitorados</a>.
+        </div>
+        <input type="file" id="wa-fornecedores-input" accept=".txt,.zip" multiple style="display:none" onchange="handleWAFornecedoresFiles(this.files)">
+        <button class="btn btn-p btn-sm" onclick="document.getElementById('wa-fornecedores-input').click()">📂 Escolher arquivos do WhatsApp</button>
+        <button class="btn btn-sm" onclick="switchTab('config')" style="margin-left:6px">Configurar fornecedores</button>
+
+        <div id="wa-fornecedores-status" style="margin-top:14px"></div>
+        <div id="wa-fornecedores-result" style="margin-top:14px"></div>
+      </div>
+    </div>
+
     <!-- Debug tester -->
     <div style="margin-top:28px">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
@@ -1500,6 +1526,26 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
       <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Os dados ficam salvos no navegador. Fechar a aba não apaga — só reimportar substitui.</p>
       <button class="btn btn-del btn-sm" onclick="clearData()">Apagar todos os dados</button>
     </div>
+
+    <!-- Fornecedores monitorados (importação por conversa WhatsApp) -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div>
+          <div class="sec" style="margin:0">📱 Fornecedores monitorados (WhatsApp)</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:3px">
+            Cadastre os fornecedores cujas conversas você exporta do WhatsApp.
+            Na importação, o app identifica de qual fornecedor é cada arquivo e pega a lista do dia.
+          </div>
+        </div>
+        <button class="btn btn-p btn-sm" onclick="addFornecedorWA()">+ Novo</button>
+      </div>
+      <div id="fornecedores-wa-list" style="margin-top:10px"></div>
+      <div style="font-size:10px;color:var(--text3);margin-top:8px;line-height:1.6">
+        💡 <strong>Como funciona o reconhecimento:</strong> o WhatsApp nomeia o arquivo exportado como
+        <code style="font-size:9px">"Conversa do WhatsApp com NOME DO CONTATO"</code>. O app procura o nome (ou alias)
+        que você cadastrou aqui dentro do nome do arquivo. Cadastre o nome como aparece no seu WhatsApp.
+      </div>
+    </div>
   </div>
 
 </div><!-- /app -->
@@ -1808,6 +1854,85 @@ function toggleAccDropdown(force){
   menu.style.display = newState ? 'block' : 'none';
 }
 
+// ── Fornecedores monitorados (WhatsApp) ─────────────────────────────────────
+// Lista de fornecedores cuja conversa o usuário exporta do WhatsApp. Salva em
+// localStorage. Cada item: { id, name, aliases:[], active: true }.
+// O `name` é o que aparece no WhatsApp do usuário (ex.: "JR Celular");
+// `aliases` são variantes alternativas pra reconhecer o arquivo.
+const FORN_WA_KEY = 'cia_fornecedores_wa';
+
+function getFornecedoresWA(){
+  try { return JSON.parse(localStorage.getItem(FORN_WA_KEY) || '[]'); }
+  catch { return []; }
+}
+function saveFornecedoresWA(list){
+  localStorage.setItem(FORN_WA_KEY, JSON.stringify(list));
+  renderFornecedoresWA();
+}
+function addFornecedorWA(){
+  const name = prompt('Nome do fornecedor (como aparece no seu WhatsApp):');
+  if(!name || !name.trim()) return;
+  const list = getFornecedoresWA();
+  const id = 'forn_' + Date.now().toString(36);
+  list.push({ id, name: name.trim(), aliases: [], active: true });
+  saveFornecedoresWA(list);
+}
+function removeFornecedorWA(id){
+  const list = getFornecedoresWA();
+  const item = list.find(f => f.id === id);
+  if(!item) return;
+  if(!confirm(`Remover "${item.name}" da lista de fornecedores monitorados?`)) return;
+  saveFornecedoresWA(list.filter(f => f.id !== id));
+}
+function toggleFornecedorWA(id){
+  const list = getFornecedoresWA();
+  const item = list.find(f => f.id === id);
+  if(!item) return;
+  item.active = !item.active;
+  saveFornecedoresWA(list);
+}
+function editAliasesFornecedorWA(id){
+  const list = getFornecedoresWA();
+  const item = list.find(f => f.id === id);
+  if(!item) return;
+  const atual = (item.aliases || []).join(', ');
+  const novo = prompt(
+    `Aliases (apelidos) para "${item.name}", separados por vírgula.\n\n` +
+    `O app procura o nome principal OU qualquer alias dentro do nome do arquivo do WhatsApp. ` +
+    `Útil se o nome no WhatsApp tem variações (ex.: "JR Celular", "JR CELULAR-WT", "JR Celulares").`,
+    atual
+  );
+  if(novo === null) return;
+  item.aliases = novo.split(',').map(s => s.trim()).filter(Boolean);
+  saveFornecedoresWA(list);
+}
+
+function renderFornecedoresWA(){
+  const el = document.getElementById('fornecedores-wa-list');
+  if(!el) return;
+  const list = getFornecedoresWA();
+  if(list.length === 0){
+    el.innerHTML = `<div style="padding:18px;text-align:center;color:var(--text3);font-size:12px;border:1px dashed var(--border);border-radius:8px">
+      Nenhum fornecedor cadastrado. Clique em <strong>+ Novo</strong> para começar.
+    </div>`;
+    return;
+  }
+  el.innerHTML = list.map(f => {
+    const aliasTxt = (f.aliases && f.aliases.length)
+      ? f.aliases.map(escapeHTML).join(', ')
+      : '<span style="color:var(--text3);font-style:italic">sem aliases</span>';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;${f.active===false?'opacity:.5':''}">
+      <input type="checkbox" ${f.active!==false?'checked':''} onchange="toggleFornecedorWA('${f.id}')" title="Ativar/desativar" style="width:16px;height:16px;cursor:pointer;flex-shrink:0">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600">${escapeHTML(f.name)}</div>
+        <div style="font-size:10px;color:var(--text3)">Aliases: ${aliasTxt}</div>
+      </div>
+      <button class="btn btn-sm" onclick="editAliasesFornecedorWA('${f.id}')" style="font-size:10px">Aliases</button>
+      <button class="btn btn-sm btn-del" onclick="removeFornecedorWA('${f.id}')" style="font-size:10px">Remover</button>
+    </div>`;
+  }).join('');
+}
+
 function addNewAccount(){
   const name = prompt('Nome da conta (ex: Loja Principal, CNPJ Filial):');
   if(!name) return;
@@ -2105,7 +2230,7 @@ function switchTab(id){
   if(id==='perguntas') syncPerguntas();
   if(id==='tendencias') initTendencias();
   if(id==='financeiro') initFinanceiro();
-  if(id==='config'){ renderAccountsList(); renderBlockedStates(); }
+  if(id==='config'){ renderAccountsList(); renderBlockedStates(); renderFornecedoresWA(); }
 }
 function showUpload(){ document.getElementById('upload-area').style.display='block'; document.getElementById('import-result').style.display='none'; switchTab('import'); }
 
@@ -2446,6 +2571,317 @@ async function updateAutoLoadStatus(){
     `;
   }
   boxes.forEach(b => b.innerHTML = html);
+}
+
+// ── IMPORTAÇÃO POR FORNECEDOR (WhatsApp avançado) ────────────────────────────
+// Recebe múltiplos arquivos exportados do WhatsApp (cada um de um fornecedor),
+// identifica cada fornecedor pelo nome do arquivo cruzando com a lista cadastrada
+// em Config, e para cada um pega a "lista mestra" do último dia disponível.
+
+// Lê um arquivo (.txt ou .zip) e devolve o texto cru da conversa
+async function lerArquivoWA(file){
+  if(file.name.toLowerCase().endsWith('.zip')){
+    const zip = await JSZip.loadAsync(file);
+    const chatFile = Object.values(zip.files).find(f => f.name.endsWith('.txt') && !f.dir);
+    if(!chatFile) throw new Error('Arquivo .txt não encontrado dentro do .zip');
+    return await chatFile.async('string');
+  }
+  return await file.text();
+}
+
+// Identifica qual fornecedor cadastrado bate com o nome do arquivo.
+// Retorna o fornecedor ou null se nenhum bater.
+function identificarFornecedorPorArquivo(fileName, fornecedores){
+  const fnNorm = fileName.toLowerCase().replace(/[_\-]/g, ' ');
+  for(const f of fornecedores){
+    if(f.active === false) continue;
+    const candidatos = [f.name, ...(f.aliases || [])].map(s => s.toLowerCase().replace(/[_\-]/g, ' '));
+    if(candidatos.some(c => c && fnNorm.includes(c))) return f;
+  }
+  return null;
+}
+
+// Extrai um nome "amigável" do fornecedor a partir do nome do arquivo do WhatsApp.
+// Formatos comuns:
+//   "Conversa do WhatsApp com NOME-WT.zip" (PT)
+//   "WhatsApp Chat with NOME.zip" (EN)
+//   "WhatsApp Chat - NOME.txt"
+// Devolve { nome, alias } — `nome` é exibido ao usuário (capitalizado quando estava em CAPS),
+// `alias` é uma forma normalizada do nome original do arquivo, pra garantir que o
+// próximo arquivo desse mesmo contato case na identificação.
+function extrairNomeFornecedorDoArquivo(fileName){
+  let n = fileName.replace(/\.(txt|zip)$/i, '');
+  let m = n.match(/^Conversa do WhatsApp com (.+?)$/i)
+       || n.match(/^WhatsApp Chat (?:with |- )(.+?)$/i);
+  if(!m) return null;
+  let nome = m[1].trim();
+  // Remove sufixos comuns do WhatsApp Web (-WT)
+  const alias = nome;  // alias mantém o nome cru pra garantir match futuro
+  nome = nome.replace(/\s*-?WT$/i, '').trim();
+  // Se está todo em CAPS e é longo, aplica title case pra ficar legível
+  if(nome === nome.toUpperCase() && nome.length > 4){
+    nome = nome.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
+  }
+  return { nome, alias };
+}
+
+// Cadastra um fornecedor a partir do nome do arquivo. Retorna o fornecedor criado
+// (ou null se não conseguiu extrair um nome do arquivo).
+function autoCadastrarFornecedor(fileName){
+  const extraido = extrairNomeFornecedorDoArquivo(fileName);
+  if(!extraido) return null;
+  const list = getFornecedoresWA();
+  const id = 'forn_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,6);
+  const novo = {
+    id,
+    name: extraido.nome,
+    aliases: [extraido.alias],
+    active: true,
+    autoCadastrado: true,  // marca pra mostrar no UI que foi automático
+  };
+  list.push(novo);
+  // Salva sem disparar re-render (a tela de Config pode nem estar aberta)
+  localStorage.setItem(FORN_WA_KEY, JSON.stringify(list));
+  return novo;
+}
+
+// Dentro das mensagens parseadas de uma conversa, identifica qual sender é o
+// fornecedor (NÃO é o próprio usuário). Heurística simples: o sender com mais
+// mensagens "lista" (com vários produtos) é o fornecedor. Como fallback, o
+// sender com mais mensagens em geral.
+function identificarSenderFornecedor(messages){
+  const score = new Map();
+  for(const m of messages){
+    const s = m.sender;
+    if(!score.has(s)) score.set(s, { total: 0, listas: 0 });
+    const e = score.get(s);
+    e.total++;
+    if(ehMensagemLista(m.body)) e.listas++;
+  }
+  if(score.size === 0) return null;
+  // Prefere quem tem mais listas; em empate, mais mensagens totais
+  const ranked = [...score.entries()].sort((a, b) =>
+    (b[1].listas - a[1].listas) || (b[1].total - a[1].total)
+  );
+  return ranked[0][0];
+}
+
+function ehMensagemLista(body){
+  if(!body) return false;
+  const nPreco = (body.match(/💰/g) || []).length;
+  const nProd  = (body.match(/📲/g) || []).length;
+  const nVar   = (body.match(/🚦/g) || []).length;
+  // Critério conservador: tem que ter vários produtos ou variantes
+  return nPreco >= 3 || nProd >= 3 || nVar >= 5;
+}
+
+// Dado o conjunto de mensagens-lista de um fornecedor, escolhe a "lista mestra"
+// do último dia disponível. Critério: dentre as listas do dia mais recente que
+// teve qualquer lista, pega a maior (mais produtos). Isso evita confundir
+// "adendos" curtos ("chegou X") com a lista completa do dia.
+function escolherListaMestra(listas){
+  if(!listas || listas.length === 0) return null;
+  // Agrupa por data
+  const porDia = new Map();
+  for(const m of listas){
+    if(!porDia.has(m.date)) porDia.set(m.date, []);
+    porDia.get(m.date).push(m);
+  }
+  const datasOrdenadas = [...porDia.keys()].sort();
+  const ultimoDia = datasOrdenadas[datasOrdenadas.length - 1];
+  const listasDoDia = porDia.get(ultimoDia);
+  // A maior do dia = a lista mais completa
+  return listasDoDia.reduce((maior, m) =>
+    !maior || m.body.length > maior.body.length ? m : maior, null);
+}
+
+async function handleWAFornecedoresFiles(fileList){
+  const files = Array.from(fileList || []);
+  if(files.length === 0) return;
+  const statusEl = document.getElementById('wa-fornecedores-status');
+  const resultEl = document.getElementById('wa-fornecedores-result');
+  resultEl.innerHTML = '';
+
+  statusEl.innerHTML = `<div style="font-size:12px;color:var(--text2)">⏳ Processando ${files.length} arquivo(s)...</div>`;
+  const processados = [];
+  const naoIdentificados = [];
+  const autoCadastrados = [];  // fornecedores criados automaticamente nesta importação
+
+  for(const file of files){
+    try {
+      const text = await lerArquivoWA(file);
+      // Lê SÓ o último dia presente no arquivo (otimizado: para de ler
+      // assim que cruza pra um dia anterior). Pra arquivos onde o fornecedor
+      // não limpa o histórico, economiza muita coisa.
+      const parseResult = parseWhatsAppMessagesUltimoDia(text);
+      const messages = parseResult.messages;
+      const ultimoDia = parseResult.ultimoDia;
+      // Releitura da lista a cada arquivo, pois auto-cadastros anteriores
+      // já podem estar lá (e queremos que case se 2 arquivos forem do mesmo contato)
+      let fornecedores = getFornecedoresWA();
+      let fornecedor = identificarFornecedorPorArquivo(file.name, fornecedores);
+
+      if(!fornecedor){
+        // Não bateu com nenhum: tenta auto-cadastrar a partir do nome do arquivo
+        fornecedor = autoCadastrarFornecedor(file.name);
+        if(fornecedor){
+          autoCadastrados.push(fornecedor);
+        } else {
+          naoIdentificados.push({ file: file.name, motivo: 'Nome do arquivo não está no formato padrão do WhatsApp ("Conversa do WhatsApp com ...")' });
+          continue;
+        }
+      }
+      // Identifica e filtra mensagens do fornecedor (já só do último dia)
+      const senderFornecedor = identificarSenderFornecedor(messages);
+      const msgsFornecedor = messages.filter(m => m.sender === senderFornecedor);
+      const listas = msgsFornecedor.filter(m => ehMensagemLista(m.body));
+      // A "lista mestra" agora é simplesmente a maior das listas do dia
+      const listaMestra = listas.length === 0
+        ? null
+        : listas.reduce((maior, m) => !maior || m.body.length > maior.body.length ? m : maior, null);
+      processados.push({
+        fileName: file.name,
+        fornecedor,
+        senderFornecedor,
+        totalMsgs: messages.length,
+        msgsFornecedor: msgsFornecedor.length,
+        totalListas: listas.length,
+        ultimoDia,
+        linhasLidas: parseResult.linhasLidas,
+        totalLinhas: parseResult.totalLinhas,
+        listaMestra,
+        todasListas: listas,
+        autoCadastrado: autoCadastrados.includes(fornecedor),
+      });
+    } catch(e){
+      naoIdentificados.push({ file: file.name, motivo: e.message });
+    }
+  }
+
+  document.getElementById('wa-fornecedores-input').value = '';
+  // Atualiza a tela de Config se estiver aberta (sem chamar switchTab)
+  renderFornecedoresWA();
+  renderWAFornecedoresResultado(processados, naoIdentificados, autoCadastrados);
+}
+
+function renderWAFornecedoresResultado(processados, naoIdentificados, autoCadastrados){
+  const statusEl = document.getElementById('wa-fornecedores-status');
+  const resultEl = document.getElementById('wa-fornecedores-result');
+
+  statusEl.innerHTML = `<div style="font-size:12px;color:var(--text2)">
+    ✓ ${processados.length} fornecedor(es) processado(s)${naoIdentificados.length?` · ⚠ ${naoIdentificados.length} arquivo(s) não identificado(s)`:''}
+  </div>`;
+
+  let html = '';
+  // Aviso de auto-cadastros (transparência)
+  if(autoCadastrados && autoCadastrados.length){
+    html += `<div class="alert al-ok" style="padding:10px 12px;font-size:11px;margin-bottom:10px">
+      ✨ <strong>${autoCadastrados.length} fornecedor(es) cadastrado(s) automaticamente</strong> a partir do nome do arquivo:
+      ${autoCadastrados.map(f => `<span style="display:inline-block;background:rgba(62,207,142,.15);color:var(--green);padding:2px 8px;border-radius:4px;font-weight:600;margin:2px 4px 2px 0">${escapeHTML(f.name)}</span>`).join('')}
+      <br><small style="color:var(--text3)">Edite os nomes em <a href="#" onclick="switchTab('config');return false;" style="color:var(--blue)">Config</a> se quiser.</small>
+    </div>`;
+  }
+  if(naoIdentificados.length){
+    html += `<div class="alert al-err" style="padding:10px 12px;font-size:11px;margin-bottom:10px">
+      <strong>Arquivos não processados:</strong><br>
+      ${naoIdentificados.map(n => `• <code style="font-size:10px">${escapeHTML(n.file)}</code> — ${escapeHTML(n.motivo)}`).join('<br>')}
+    </div>`;
+  }
+  for(const p of processados){
+    const dataLista = p.listaMestra ? p.listaMestra.date : null;
+    const horaLista = p.listaMestra ? p.listaMestra.time : null;
+    const tamLista  = p.listaMestra ? p.listaMestra.body.length : 0;
+    const corOk = p.listaMestra ? 'var(--green)' : 'var(--amber)';
+    const badgeNovo = p.autoCadastrado
+      ? `<span style="display:inline-block;background:rgba(62,207,142,.15);color:var(--green);font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:middle">✨ novo</span>`
+      : '';
+    html += `<div style="padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:13px;font-weight:700">${escapeHTML(p.fornecedor.name)}${badgeNovo}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">
+            <code style="font-size:10px">${escapeHTML(p.fileName)}</code>
+          </div>
+          <div style="font-size:11px;color:var(--text2);margin-top:6px">
+            ${p.totalMsgs} mensagens do último dia · ${p.msgsFornecedor} do fornecedor · ${p.totalListas} lista(s)
+            <span style="color:var(--text3)"> · lidas ${p.linhasLidas?.toLocaleString('pt-BR')} de ${p.totalLinhas?.toLocaleString('pt-BR')} linhas do arquivo</span>
+          </div>
+        </div>
+        ${p.listaMestra
+          ? `<div style="text-align:right">
+              <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.3px">Última lista</div>
+              <div style="font-size:14px;font-weight:700;color:${corOk}">${dataLista.split('-').reverse().join('/')}</div>
+              <div style="font-size:10px;color:var(--text3)">${horaLista} · ${tamLista} chars</div>
+            </div>`
+          : `<div style="font-size:11px;color:var(--amber)">Nenhuma lista identificada</div>`
+        }
+      </div>
+      ${p.listaMestra
+        ? `<details style="margin-top:10px">
+            <summary style="font-size:11px;color:var(--blue);cursor:pointer;user-select:none">Ver conteúdo da lista</summary>
+            <pre style="margin-top:8px;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;font-size:10px;font-family:'DM Mono',monospace;line-height:1.5;white-space:pre-wrap;max-height:280px;overflow:auto">${escapeHTML(p.listaMestra.body)}</pre>
+          </details>`
+        : ''
+      }
+    </div>`;
+  }
+
+  const totalListas = processados.filter(p => p.listaMestra).length;
+  if(totalListas > 0){
+    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+      <button class="btn btn-p" onclick="importarListasFornecedores()">⤴ Importar ${totalListas} lista(s) para o app</button>
+      <button class="btn btn-sm" onclick="document.getElementById('wa-fornecedores-result').innerHTML='';document.getElementById('wa-fornecedores-status').innerHTML=''">Limpar</button>
+    </div>
+    <div style="font-size:10px;color:var(--text3);margin-top:8px">
+      Ao importar, cada lista vira uma "loja" no comparativo da aba <strong>Comparar</strong> e os produtos entram no índice geral.
+    </div>`;
+    window._waFornecedoresProcessados = processados;
+  }
+  resultEl.innerHTML = html;
+}
+
+// Importa as listas mestras processadas pro estado do app (state.stores/products)
+function importarListasFornecedores(){
+  const procs = window._waFornecedoresProcessados || [];
+  const validos = procs.filter(p => p.listaMestra);
+  if(validos.length === 0){ alert('Nada para importar.'); return; }
+
+  // Monta o texto sintético que parseWhatsAppExport entende:
+  // cada lista vira uma mensagem com "Loja: <Nome do fornecedor>" no início,
+  // seguida do corpo da mensagem original.
+  const linhasSinteticas = [];
+  const hoje = new Date();
+  const hojeStr = `${String(hoje.getDate()).padStart(2,'0')}/${String(hoje.getMonth()+1).padStart(2,'0')}/${hoje.getFullYear()} ${String(hoje.getHours()).padStart(2,'0')}:${String(hoje.getMinutes()).padStart(2,'0')}`;
+  for(const p of validos){
+    // Linha sintética no formato Android BR que o parseWhatsAppExport reconhece
+    const header = `${hojeStr} - ${p.fornecedor.name}: Loja: ${p.fornecedor.name}`;
+    linhasSinteticas.push(header);
+    // Corpo da mensagem (cada linha como continuação)
+    linhasSinteticas.push(p.listaMestra.body);
+    linhasSinteticas.push('');  // separador
+  }
+  const textoSintetico = linhasSinteticas.join('\n');
+
+  try {
+    const result = parseWhatsAppExport(textoSintetico);
+    if(!result.products || result.products.length === 0){
+      alert('Não foi possível extrair produtos das listas. O formato pode ser diferente do esperado.');
+      return;
+    }
+    // Atualiza o estado do app
+    state = result;
+    // Aplica cores
+    storeClr = {};
+    state.stores.forEach((s, i) => { storeClr[normKey(s.name)] = s.color; });
+    active = new Set(state.stores.map(s => normKey(s.name)));
+    saveData();
+    showAlert('al-ok', `✓ ${validos.length} lista(s) importada(s) · ${result.products.length} produto(s) único(s) · ${state.stores.length} loja(s)`);
+    document.getElementById('upload-area').style.display = 'none';
+    document.getElementById('import-result').style.display = 'block';
+    document.getElementById('import-ok-msg').innerHTML = `✓ <strong>${result.products.length} produtos</strong> de <strong>${state.stores.length} fornecedor(es)</strong> importados das últimas listas do WhatsApp.`;
+  } catch(e){
+    alert('Erro ao importar: ' + e.message);
+  }
 }
 
 async function handleFile(file){
@@ -3093,6 +3529,170 @@ function groupIntoBlocks(lines){
 
 // ── WhatsApp export parser ────────────────────────────────────────────────────
 function hasLojaTag(t){ return /loja\s*:/i.test(t); }
+
+// Parser de mensagens do WhatsApp que PRESERVA timestamp (data e hora) de cada
+// mensagem. Diferente de parseWhatsAppExport (que extrai produtos), este retorna
+// as mensagens cruas — usado pelo fluxo "Importar do WhatsApp por fornecedor"
+// que precisa pegar "a lista do dia X".
+//
+// Formatos cobertos:
+//   - [DD/MM/AAAA, HH:MM:SS] Nome: corpo       (iOS, com colchetes)
+//   - DD/MM/AAAA HH:MM - Nome: corpo            (Android, BR)
+//   - DD/MM/AA, HH:MM - Nome: corpo             (Android antigo)
+//   - DD/MM/AAAA HH:MM AM/PM - Nome: corpo      (Android EN)
+// Variante otimizada de parseWhatsAppMessages que lê apenas as mensagens do
+// ÚLTIMO DIA presente no arquivo, ignorando todo o histórico. Lê de trás pra
+// frente e para assim que muda de dia. Pra arquivos grandes (fornecedor que
+// nunca limpa o histórico), economiza muito processamento.
+//
+// Retorna o mesmo formato de parseWhatsAppMessages, mas filtrado.
+function parseWhatsAppMessagesUltimoDia(raw){
+  const text = raw.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+  const lines = text.split('\n');
+
+  // Regex que extrai SÓ a data (mais barato que o parse completo).
+  // Cobre os mesmos formatos do parseWhatsAppMessages.
+  const DATE_ONLY = /^(?:\[\s*)?(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/;
+
+  function normDate(d, mo, y){
+    const yr = y.length === 2 ? (Number(y) >= 70 ? '19'+y : '20'+y) : y;
+    return `${yr}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+
+  // Passo 1: varre de trás pra frente e acha o índice da PRIMEIRA linha
+  // (em ordem cronológica) que pertence ao último dia. Para no momento em que
+  // encontra uma data DIFERENTE (anterior) do último dia visto.
+  let ultimoDia = null;
+  let inicioUltimoDia = -1;  // índice da primeira linha do último dia
+  for(let i = lines.length - 1; i >= 0; i--){
+    const m = DATE_ONLY.exec(lines[i]);
+    if(!m) continue;  // linhas de continuação não têm data, ignora aqui
+    const data = normDate(m[1], m[2], m[3]);
+    if(ultimoDia === null){
+      ultimoDia = data;
+      inicioUltimoDia = i;
+      continue;
+    }
+    if(data === ultimoDia){
+      inicioUltimoDia = i;  // ainda no último dia, vai subindo
+    } else {
+      break;  // chegou em um dia anterior, para
+    }
+  }
+
+  if(ultimoDia === null || inicioUltimoDia < 0){
+    return { messages: [], ultimoDia: null, linhasLidas: 0 };
+  }
+
+  // Passo 2: parse completo SÓ a partir de inicioUltimoDia até o fim
+  const RXS = [
+    {
+      rx: /^\[(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})[,\s]+(\d{1,2}):(\d{2})(?::\d{2})?\]\s*[-–]?\s*(.+?):\s*(.*)$/,
+      norm: m => normWA(m[1], m[2], m[3], m[4], m[5], m[6], m[7]),
+    },
+    {
+      rx: /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\s+(\d{1,2}):(\d{2})(?::\d{2})?\s*[-–]\s*(.+?):\s*(.*)$/,
+      norm: m => normWA(m[1], m[2], m[3], m[4], m[5], m[6], m[7]),
+    },
+    {
+      rx: /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4}),\s+(\d{1,2}):(\d{2})(?::\d{2})?(?:\s?[AP]M)?\s*[-–]\s*(.+?):\s*(.*)$/i,
+      norm: m => normWA(m[1], m[2], m[3], m[4], m[5], m[6], m[7]),
+    },
+  ];
+  function normWA(d, mo, y, h, mi, sender, body){
+    const yr = y.length === 2 ? (Number(y) >= 70 ? '19'+y : '20'+y) : y;
+    const date = `${yr}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    const time = `${h.padStart(2,'0')}:${mi.padStart(2,'0')}`;
+    return { date, time, sender: sender.trim(), body };
+  }
+
+  const messages = [];
+  let cur = null;
+  for(let i = inicioUltimoDia; i < lines.length; i++){
+    const line = lines[i];
+    let matched = false;
+    for(const {rx, norm} of RXS){
+      const m = rx.exec(line);
+      if(m){
+        if(cur) messages.push(cur);
+        const parsed = norm(m);
+        const body = (parsed.body || '').trim();
+        const skip = !body
+          || body === '<Mídia omitida>' || body === 'image omitted' || body === '<Media omitted>'
+          || /^(Messages and calls|As mensagens|Você criou|criou o grupo|criou a comunidade|adicionou|foi adicionad|saiu|Bem-vindo|Esta conversa)/i.test(body)
+          || /^[‎]/.test(line);
+        cur = skip ? null : { ...parsed, body };
+        matched = true; break;
+      }
+    }
+    if(!matched && cur && line.trim()) cur.body += '\n' + line;
+  }
+  if(cur) messages.push(cur);
+
+  return {
+    messages,
+    ultimoDia,
+    linhasLidas: lines.length - inicioUltimoDia,
+    totalLinhas: lines.length,
+  };
+}
+
+function parseWhatsAppMessages(raw){
+  const text = raw.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+  const lines = text.split('\n');
+
+  // Cada item: [regex, função que extrai {date, time, sender, body}]
+  // Data ISO: YYYY-MM-DD; hora: HH:MM (24h)
+  const RXS = [
+    // iOS: [12/05/2026, 14:32:05] Nome: msg
+    {
+      rx: /^\[(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})[,\s]+(\d{1,2}):(\d{2})(?::\d{2})?\]\s*[-–]?\s*(.+?):\s*(.*)$/,
+      norm: m => normWA(m[1], m[2], m[3], m[4], m[5], m[6], m[7]),
+    },
+    // Android BR: 26/05/2026 12:38 - Nome: msg
+    {
+      rx: /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\s+(\d{1,2}):(\d{2})(?::\d{2})?\s*[-–]\s*(.+?):\s*(.*)$/,
+      norm: m => normWA(m[1], m[2], m[3], m[4], m[5], m[6], m[7]),
+    },
+    // Android com vírgula: 26/05/26, 12:38 - Nome: msg
+    {
+      rx: /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4}),\s+(\d{1,2}):(\d{2})(?::\d{2})?(?:\s?[AP]M)?\s*[-–]\s*(.+?):\s*(.*)$/i,
+      norm: m => normWA(m[1], m[2], m[3], m[4], m[5], m[6], m[7]),
+    },
+  ];
+
+  function normWA(d, mo, y, h, mi, sender, body){
+    const yr = y.length === 2 ? (Number(y) >= 70 ? '19'+y : '20'+y) : y;
+    const date = `${yr}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    const time = `${h.padStart(2,'0')}:${mi.padStart(2,'0')}`;
+    return { date, time, sender: sender.trim(), body: body };
+  }
+
+  const messages = [];
+  let cur = null;
+  for(const line of lines){
+    let matched = false;
+    for(const {rx, norm} of RXS){
+      const m = rx.exec(line);
+      if(m){
+        if(cur) messages.push(cur);
+        const parsed = norm(m);
+        const body = (parsed.body || '').trim();
+        // Filtra mensagens de sistema/sem conteúdo útil
+        const skip = !body
+          || body === '<Mídia omitida>' || body === 'image omitted' || body === '<Media omitted>'
+          || /^(Messages and calls|As mensagens|Você criou|criou o grupo|criou a comunidade|adicionou|foi adicionad|saiu|Bem-vindo|Esta conversa)/i.test(body)
+          || /^[‎]/.test(line);  // linhas de sistema do iOS começam com U+200E
+        cur = skip ? null : { ...parsed, body };
+        matched = true; break;
+      }
+    }
+    if(!matched && cur && line.trim()) cur.body += '\n' + line;
+  }
+  if(cur) messages.push(cur);
+
+  return messages;
+}
 
 function parseWhatsAppExport(raw, onProgress){
   const text = raw.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
@@ -13630,21 +14230,38 @@ async function markVendaChatRead(orderId, silent = false){
 }
 
 function showRecibo(orderId){
-  const v = vendasData.find(x => String(x.id) === String(orderId));
+  // Busca primeiro no dataset completo (que inclui vendas importadas via XLSX);
+  // se não achar, cai pro dataset de Cards (sincronizadas pela API).
+  const oid = String(orderId);
+  let v = (vendasDataFull || []).find(x => String(x.id) === oid)
+       || vendasData.find(x => String(x.id) === oid);
   if(!v){ alert('Venda não encontrada.'); return; }
 
-  const buyerName = (v.buyer.firstName + ' ' + v.buyer.lastName).trim() || v.buyer.nickname || '—';
-  const docLabel  = v.buyer.docType ? `${v.buyer.docType.toUpperCase()}: ` : '';
-  const docNum    = v.buyer.docNumber || '—';
-  const phoneStr  = v.buyer.phone ? `<div class="address"><span class="FontLatoBold">Tel:</span> ${escapeHTML(v.buyer.phone)}</div>` : '';
+  // ATENÇÃO: vendas importadas via XLSX têm metadados parciais — buyer pode não
+  // ter firstName/lastName/docType/phone, receiver pode não ter address/zip/etc.
+  // Tudo aqui usa fallbacks pra não quebrar e renderiza '—' quando falta dado.
+  const buyer = v.buyer || {};
+  const buyerName = [(buyer.firstName||''), (buyer.lastName||'')].join(' ').trim() || buyer.nickname || '—';
+  const docLabel  = buyer.docType ? `${String(buyer.docType).toUpperCase()}: ` : '';
+  const docNum    = buyer.docNumber || '—';
+  const phoneStr  = buyer.phone ? `<div class="address"><span class="FontLatoBold">Tel:</span> ${escapeHTML(buyer.phone)}</div>` : '';
 
-  const recv = v.receiver;
+  const recv = v.receiver || {};
   const recvAddr  = recv.address ? `${recv.address}${recv.comment ? ' — ' + recv.comment : ''}${recv.neighborhood ? ', ' + recv.neighborhood : ''}` : '—';
-  const recvCity  = recv.city ? `${recv.city} - ${recv.state}` : '—';
+  const recvCity  = recv.city ? `${recv.city}${recv.state ? ' - ' + recv.state : ''}` : (recv.state || '—');
   const recvZip   = recv.zip || '—';
 
   const dtPedido     = v.date_created ? new Date(v.date_created).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' }) : '—';
   const dtPrev       = v.date_estimated ? new Date(v.date_estimated).toLocaleDateString('pt-BR') : '—';
+
+  // Valores monetários — vendas da planilha podem não ter subtotal/frete separados.
+  // Se faltar subtotal, calcula a partir dos itens; se faltar frete, assume 0.
+  const fmtMoney = n => (Number(n)||0).toFixed(2).replace('.', ',');
+  const total = Number(v.total) || 0;
+  const frete = Number(v.frete) || 0;
+  const subtotal = v.subtotal != null
+    ? Number(v.subtotal)
+    : ((v.items||[]).reduce((s, it) => s + (Number(it.unit_price)||0) * (Number(it.quantity)||1), 0) || Math.max(0, total - frete));
 
   // Linhas dos produtos
   const itemRows = (v.items || []).map((it, idx) => {
@@ -13762,9 +14379,9 @@ function showRecibo(orderId){
     </thead>
     <tbody>${itemRows}</tbody>
     <tfoot>
-      <tr><td colspan="2"></td><td colspan="2">SUBTOTAL</td><td>R$&nbsp;${v.subtotal.toFixed(2).replace('.',',')}</td></tr>
-      <tr><td colspan="2"></td><td colspan="2">FRETE</td><td>R$&nbsp;${v.frete.toFixed(2).replace('.',',')}</td></tr>
-      <tr><td colspan="2"></td><td colspan="2">TOTAL</td><td>R$&nbsp;${v.total.toFixed(2).replace('.',',')}</td></tr>
+      <tr><td colspan="2"></td><td colspan="2">SUBTOTAL</td><td>R$&nbsp;${fmtMoney(subtotal)}</td></tr>
+      <tr><td colspan="2"></td><td colspan="2">FRETE</td><td>R$&nbsp;${fmtMoney(frete)}</td></tr>
+      <tr><td colspan="2"></td><td colspan="2">TOTAL</td><td>R$&nbsp;${fmtMoney(total)}</td></tr>
     </tfoot>
   </table>
 
@@ -13800,7 +14417,7 @@ function showRecibo(orderId){
     <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border);background:var(--bg2)">
       <div>
         <div style="font-size:14px;font-weight:700">🧾 Recibo do Pedido ${v.id}</div>
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">${escapeHTML(buyerName)} · R$${v.total.toFixed(2).replace('.',',')}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">${escapeHTML(buyerName)} · R$${fmtMoney(total)}</div>
       </div>
       <div style="display:flex;gap:8px">
         <button class="btn btn-sm" onclick="downloadReciboPDF('${v.id}')" title="Salvar como PDF">📥 PDF</button>
