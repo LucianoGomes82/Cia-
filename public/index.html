@@ -2668,11 +2668,28 @@ function identificarSenderFornecedor(messages){
 
 function ehMensagemLista(body){
   if(!body) return false;
+  // Sinais "fortes" via emoji (formato JR Celular)
   const nPreco = (body.match(/💰/g) || []).length;
   const nProd  = (body.match(/📲/g) || []).length;
   const nVar   = (body.match(/🚦/g) || []).length;
-  // Critério conservador: tem que ter vários produtos ou variantes
-  return nPreco >= 3 || nProd >= 3 || nVar >= 5;
+  if(nPreco >= 3 || nProd >= 3 || nVar >= 5) return true;
+
+  // Heurística genérica: conta linhas que terminam com preço (formato Estrela/Loja 97
+  // e outros). Padrões cobertos: "produto-NNN", "produto-NNN$", "produto NNN R$".
+  const lines = body.split('\n');
+  let comPreco = 0;
+  for(const line of lines){
+    // produto-NNN(.NNN)?(,NN)? no fim, com possível $/✅/❌ depois
+    if(/[-—–]\s*\d{2,5}(?:[.,]\d{2,3})?\s*[*$✅❌\s]*$/.test(line)){
+      const m = line.match(/[-—–]\s*(\d{2,5})/);
+      if(m && parseInt(m[1]) >= 30){ comPreco++; continue; }
+    }
+    // R$ ou 💰 explícito
+    if(/(?:R\$|💰)\s*\d{2,5}/.test(line)){ comPreco++; continue; }
+  }
+  // 4 ou mais linhas com preço já caracteriza uma lista (em vez das 3 anteriores,
+  // pra reduzir falso positivo em mensagens curtas tipo "Chegou X-1200")
+  return comPreco >= 4;
 }
 
 // Dado o conjunto de mensagens-lista de um fornecedor, escolhe a "lista mestra"
@@ -2868,17 +2885,29 @@ function importarListasFornecedores(){
       alert('Não foi possível extrair produtos das listas. O formato pode ser diferente do esperado.');
       return;
     }
-    // Atualiza o estado do app
+    // Atualiza o estado do app no padrão usado em outras importações:
+    // delega aplicação a applyState (que normaliza cores e ativos do jeito certo)
+    // e persiste com saveState.
     state = result;
-    // Aplica cores
-    storeClr = {};
-    state.stores.forEach((s, i) => { storeClr[normKey(s.name)] = s.color; });
-    active = new Set(state.stores.map(s => normKey(s.name)));
-    saveData();
-    showAlert('al-ok', `✓ ${validos.length} lista(s) importada(s) · ${result.products.length} produto(s) único(s) · ${state.stores.length} loja(s)`);
-    document.getElementById('upload-area').style.display = 'none';
-    document.getElementById('import-result').style.display = 'block';
-    document.getElementById('import-ok-msg').innerHTML = `✓ <strong>${result.products.length} produtos</strong> de <strong>${state.stores.length} fornecedor(es)</strong> importados das últimas listas do WhatsApp.`;
+    applyState();
+    saveState();
+    // Mostra mensagem de sucesso na área existente do fluxo de import.
+    // Não usar showAlert aqui porque ele sobrescreve o innerHTML do container
+    // e destrói o #import-ok-msg que precisamos preencher.
+    const uploadArea = document.getElementById('upload-area');
+    const importResult = document.getElementById('import-result');
+    const okMsg = document.getElementById('import-ok-msg');
+    if(uploadArea) uploadArea.style.display = 'none';
+    if(importResult) importResult.style.display = 'block';
+    if(okMsg) okMsg.innerHTML = `✓ <strong>${result.products.length} produtos</strong> de <strong>${state.stores.length} fornecedor(es)</strong> importados das últimas listas do WhatsApp.`;
+    // Toast extra na seção de fornecedores
+    const statusEl = document.getElementById('wa-fornecedores-status');
+    if(statusEl){
+      statusEl.innerHTML = `<div class="alert al-ok" style="padding:10px 12px;font-size:12px">
+        ✓ <strong>${validos.length} lista(s) importada(s)</strong> · ${result.products.length} produto(s) único(s) · ${state.stores.length} loja(s).
+        Veja em <a href="#" onclick="switchTab('comparar');return false;" style="color:var(--blue)">Comparar</a>.
+      </div>`;
+    }
   } catch(e){
     alert('Erro ao importar: ' + e.message);
   }
@@ -3083,7 +3112,7 @@ function colorDot(name){
 
 // ── Regex de preço ────────────────────────────────────────────────────────────
 // Captura: R$530 | R$ 1.299,00 | 620,00 | 2.150 | 750 (min 3 dígitos para evitar anos)
-const PRICE_RX = /(?:💰\s*|R\$\s?|RS\s?)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d{3,5})(?=[*\s💸,;.\n\)🔋]|$)/i;
+const PRICE_RX = /(?:💰\s*|R\$\s?|RS\s?)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d{3,5})(?=[*\s💸,;.\n\)🔋$❌]|$)/i;
 
 function extractPrice(s){
   // 0) "-1250" ou "-1250,00" no início — preço em linha separada com traço
@@ -3091,6 +3120,31 @@ function extractPrice(s){
   if(dashM){
     const dp = parseFloat(dashM[1].replace(',','.'));
     if(!isNaN(dp) && dp >= 100 && dp <= 99999) return dp;
+  }
+
+  // 0b) "preço seguido de $" no final, sem R$ na frente (formato Estrela: "Mac M5-7700$✅")
+  // Tem que ser último número da linha + $, pra não pegar "Modelo A3404$" no meio.
+  const dollarSuffix = s.match(/(\d{2,5}(?:[.,]\d{2,3})?)\s*\$\s*[✅❌]?/);
+  if(dollarSuffix){
+    const dp = parseFloat(dollarSuffix[1].replace(',','.'));
+    if(!isNaN(dp) && dp >= 30 && dp <= 99999) return dp;
+  }
+
+  // 0c) "produto-PREÇO" no fim de linha sem símbolo $ (formato Loja 97: "B110 3g preto branco-95")
+  // Pega o ÚLTIMO número de 2-5 dígitos da linha, precedido de hífen,
+  // desde que NÃO seja uma das specs comuns (4G, 5G, 64GB, 128GB etc.).
+  // Aceita a partir de R$ 30 pra cobrir acessórios (cabos, fones etc.).
+  const tailDash = s.match(/[-—–]\s*(\d{2,5}(?:[.,]\d{2,3})?)\s*[*✅❌\s]*$/);
+  if(tailDash){
+    const raw = tailDash[1];
+    let num = parseFloat(raw.replace(/\./g, c => '').replace(',','.'));
+    // se tem .NNN considera como milhar (1.200 = 1200), exceto se já foi tratado
+    if(/^\d{1,2}\.\d{3}$/.test(raw)) num = parseFloat(raw.replace('.',''));
+    if(!isNaN(num) && num >= 30 && num <= 99999){
+      // Exclui specs comuns
+      const SPEC_NUMS = new Set([128, 256, 512, 1024, 32, 64, 16, 4, 5, 8, 12]);
+      if(!SPEC_NUMS.has(num)) return num;
+    }
   }
 
   // Limpeza prévia de tokens que não são preço
