@@ -9916,6 +9916,17 @@ async function diagnosticarVenda(orderId){
     } catch(e){ shipmentError = e.message; }
   }
 
+  // Busca billing_info (CPF do comprador) — ML removeu do response do /orders
+  let billingData = null;
+  let billingError = null;
+  if(apiData?.id){
+    try {
+      const rb = await proxyFetch(`/orders/${apiData.id}/billing_info`, { headers: { 'x-version': '2' } });
+      if(rb.ok) billingData = await rb.json();
+      else      billingError = `HTTP ${rb.status}`;
+    } catch(e){ billingError = e.message; }
+  }
+
   // Monta relatório
   const lines = [];
   lines.push(`📋 Diagnóstico da venda ${orderId}`);
@@ -10005,6 +10016,25 @@ async function diagnosticarVenda(orderId){
       lines.push(`  receiver_address: (AUSENTE) — ML não retornou endereço`);
     }
     lines.push(`  Todas as chaves do shipment: ${Object.keys(shipmentData).join(', ')}`);
+  }
+
+  // Billing info — CPF do comprador (chamada separada agora)
+  lines.push('');
+  if(billingError){
+    lines.push(`❌ Erro ao buscar /orders/${apiData?.id}/billing_info: ${billingError}`);
+  } else if(billingData){
+    lines.push('💳 BILLING_INFO (cru da API — chamada x-version:2):');
+    const bi = billingData.buyer?.billing_info || billingData.billing_info || billingData;
+    lines.push(`  site_id: ${billingData.site_id || '(NULL)'}`);
+    lines.push(`  buyer.cust_id: ${billingData.buyer?.cust_id || '(NULL)'}`);
+    lines.push(`  billing_info.name: ${bi?.name ?? '(NULL)'}`);
+    lines.push(`  billing_info.last_name: ${bi?.last_name ?? '(NULL)'}`);
+    lines.push(`  billing_info.identification: ${bi?.identification ? JSON.stringify(bi.identification) : '(NULL)'}`);
+    lines.push(`  billing_info.address: ${bi?.address ? JSON.stringify(bi.address) : '(NULL)'}`);
+    lines.push(`  Todas as chaves: ${Object.keys(bi || {}).join(', ') || '(vazio)'}`);
+    lines.push(`  Resposta completa (primeiros 400 chars): ${JSON.stringify(billingData).slice(0, 400)}`);
+  } else {
+    lines.push(`⚠ /orders/${apiData?.id}/billing_info não foi chamado`);
   }
 
   // Cria o modal (estava sem declaração — bug que travava o Debug)
