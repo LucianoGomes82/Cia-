@@ -1028,6 +1028,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <button class="btn btn-sm" onclick="openListaBloqueio()" title="Lista de compradores de estados bloqueados para você bloquear no Mercado Livre" style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🚫 Bloquear compradores</button>
             <button class="btn btn-sm" onclick="exportVendasXLSX()" title="Exportar planilha Excel com todas as vendas e investimentos">📤 Exportar XLSX</button>
             <button class="btn btn-sm" onclick="exportNFXLSX()" title="Gerar planilha no formato de NF emitidas para as vendas marcadas com checkbox" style="background:rgba(168,85,247,.15);color:var(--purple);border:1px solid var(--purple)">📋 Gerar XLSX para NF</button>
+            <button class="btn btn-sm" onclick="forceReloadVendasViaAPI()" title="Limpa cache e rebusca todas as vendas direto da API ML (use se faltam dados como CPF, endereço, estado)" style="background:rgba(96,165,250,.12);color:var(--blue);border:1px solid var(--blue)">🔄 Recarregar via API</button>
           </div>
         </div>
 
@@ -11423,6 +11424,40 @@ async function loadImportedVendas(){
       req.onerror = () => resolve([]);
     });
   } catch { return []; }
+}
+
+// Limpa IndexedDB de vendas importadas e força recarregar tudo via API ML.
+// Útil quando dados antigos (importados de XLSX por versão velha do app, ou
+// faltando campos como CPF/endereço) precisam ser rebuscados com lógica nova.
+async function forceReloadVendasViaAPI(){
+  if(!cfg.at){ alert('Conecte sua conta ML em Config primeiro.'); return; }
+  const ok = confirm(
+    '⚠ Isso vai APAGAR os dados de vendas em cache (planilha importada e/ou sincronização anterior) ' +
+    'e rebuscar TUDO direto na API do Mercado Livre.\n\n' +
+    'Use isso se as vendas estão sem CPF, endereço ou outros dados que deveriam aparecer.\n\n' +
+    'Pode demorar alguns minutos. Continuar?'
+  );
+  if(!ok) return;
+  try {
+    // Limpa IndexedDB (vendas importadas via XLSX)
+    const db = await openVendasDB();
+    await new Promise((resolve) => {
+      const tx = db.transaction(VENDAS_STORE, 'readwrite');
+      tx.objectStore(VENDAS_STORE).clear();
+      tx.oncomplete = resolve;
+      tx.onerror = resolve;  // ignora erro, vai rebuscar de qualquer jeito
+    });
+    // Limpa caches em memória
+    vendasDataFull = null;
+    _vendasFullCacheTime = 0;
+    localStorage.removeItem('cia_vendas_import_meta');
+    // Garante que estamos na visão Planilha pra disparar o load
+    _vendasView = 'planilha';
+    // Força rebuscar
+    await loadAllVendasForPlanilha();
+  } catch(e){
+    alert('Erro ao limpar cache: ' + e.message);
+  }
 }
 
 async function getLastImportInfo(){
