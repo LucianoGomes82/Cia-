@@ -10876,13 +10876,24 @@ async function syncVendas(force = false){
       const batch = allOrders.slice(i, i+batchSize);
       const promises = batch.map(async (order) => {
         let shipment = null;
+        let billing  = null;  // dados de billing_info (CPF) — ML removeu do response do /orders
+        const subPromises = [];
         if(order.shipping?.id){
-          try {
-            const r = await proxyFetch(`/shipments/${order.shipping.id}`);
-            if(r.ok) shipment = await r.json();
-          } catch(e){}
+          subPromises.push(
+            proxyFetch(`/shipments/${order.shipping.id}`)
+              .then(r => r.ok ? r.json() : null)
+              .then(s => { shipment = s; })
+              .catch(() => {})
+          );
         }
-        return { order, shipment };
+        subPromises.push(
+          proxyFetch(`/orders/${order.id}/billing_info`, { headers: { 'x-version': '2' } })
+            .then(r => r.ok ? r.json() : null)
+            .then(bi => { billing = bi?.buyer?.billing_info || null; })
+            .catch(() => {})
+        );
+        await Promise.all(subPromises);
+        return { order, shipment, billing };
       });
       const results = await Promise.all(promises);
       enrichedSales.push(...results);
@@ -10897,7 +10908,7 @@ async function syncVendas(force = false){
 
     setVendasProgress(95, 'Processando vendas...');
 
-    vendasData = enrichedSales.map(({order, shipment}) => {
+    vendasData = enrichedSales.map(({order, shipment, billing}) => {
       const items = order.order_items || [];
       const firstItem = items[0]?.item || {};
 
@@ -11000,10 +11011,10 @@ async function syncVendas(force = false){
         buyer: {
           id:        order.buyer?.id,
           nickname:  order.buyer?.nickname || '',
-          firstName: order.buyer?.first_name || '',
-          lastName:  order.buyer?.last_name  || '',
-          docType:   order.buyer?.billing_info?.doc_type    || null,
-          docNumber: order.buyer?.billing_info?.doc_number  || null,
+          firstName: order.buyer?.first_name || billing?.name || '',
+          lastName:  order.buyer?.last_name  || billing?.last_name || '',
+          docType:   billing?.identification?.type || order.buyer?.billing_info?.doc_type || null,
+          docNumber: billing?.identification?.number || order.buyer?.billing_info?.doc_number || null,
           phone:     order.buyer?.phone?.area_code
                    ? `(${order.buyer.phone.area_code}) ${order.buyer.phone.number||''}`
                    : null,
@@ -12474,11 +12485,57 @@ async function loadAllVendasForPlanilha(){
 
     setProg(75, `Processando ${allOrders.length} vendas...`);
 
-    // ── Processa as orders SEM buscar shipments (planilha não precisa) ──
-    // Diferença vs syncVendas: aqui não fazemos GET /shipments/{id} (economiza ~50% das chamadas)
+    // ── Busca shipments + billing_info em paralelo (necessários pra NFe) ──
+    // Antes essa função pulava o GET /shipments/{id} pra economizar. Mas sem
+    // o shipment, o endereço/cidade/estado/CEP do comprador ficam VAZIOS —
+    // o /orders/search só traz `order.shipping.id`, não o endereço.
+    // Já o CPF foi removido do response de /orders pelo ML — agora precisa de
+    // GET /orders/{id}/billing_info separado (header x-version: 2 = formato novo).
+    const shipmentMap = new Map();      // shipment_id → shipmentData
+    const billingMap  = new Map();      // order_id → billing_info data
+    const ordersWithShipping = allOrders.filter(o => o.shipping?.id);
+    if(allOrders.length){
+      setProg(78, `Buscando endereços e CPFs de ${allOrders.length} pedidos...`);
+      const batchSize = 6;  // 6 orders × 2 chamadas = 12 paralelas
+      let done = 0;
+      for(let i=0; i<allOrders.length; i+=batchSize){
+        if(_vendasFullCancel) throw new Error('CANCELLED');
+        const batch = allOrders.slice(i, i+batchSize);
+        const promises = [];
+        for(const o of batch){
+          if(o.shipping?.id){
+            promises.push(
+              proxyFetch(`/shipments/${o.shipping.id}`)
+                .then(r => r.ok ? r.json() : null)
+                .then(s => { if(s) shipmentMap.set(String(o.shipping.id), s); })
+                .catch(() => {})
+            );
+          }
+          // CPF via /orders/{id}/billing_info (header x-version:2 = formato novo do ML)
+          promises.push(
+            proxyFetch(`/orders/${o.id}/billing_info`, { headers: { 'x-version': '2' } })
+              .then(r => r.ok ? r.json() : null)
+              .then(bi => { if(bi) billingMap.set(String(o.id), bi); })
+              .catch(() => {})
+          );
+        }
+        await Promise.all(promises);
+        done += batch.length;
+        const pct = 78 + (done / allOrders.length) * 15;
+        setProg(pct, `Endereços/CPFs ${done}/${allOrders.length}...`);
+        if(i + batchSize < allOrders.length){
+          await new Promise(r => setTimeout(r, 150));
+        }
+      }
+    }
+
+    setProg(94, `Montando objetos...`);
     const enriched = allOrders.map(order => {
       const items     = order.order_items || [];
       const firstItem = items[0]?.item || {};
+      const shipment  = order.shipping?.id ? shipmentMap.get(String(order.shipping.id)) : null;
+      const recv      = shipment?.receiver_address || {};
+      const billing   = billingMap.get(String(order.id))?.buyer?.billing_info || null;
 
       // Cor da variação
       let color = null;
@@ -12514,7 +12571,7 @@ async function loadAllVendasForPlanilha(){
         pack_id: order.pack_id || null,
         date_created: getOrderDate(order),
         status: order.status,
-        substatus: null, // sem shipment fetch
+        substatus: shipment?.substatus || null,
         items,
         firstItem,
         color,
@@ -12530,18 +12587,22 @@ async function loadAllVendasForPlanilha(){
         buyer: {
           id:        order.buyer?.id,
           nickname:  order.buyer?.nickname || '',
-          firstName: order.buyer?.first_name || '',
-          lastName:  order.buyer?.last_name  || '',
-          docType:   order.buyer?.billing_info?.doc_type    || null,
-          docNumber: order.buyer?.billing_info?.doc_number  || null,
+          firstName: order.buyer?.first_name || billing?.name || '',
+          lastName:  order.buyer?.last_name  || billing?.last_name || '',
+          docType:   billing?.identification?.type || order.buyer?.billing_info?.doc_type || null,
+          docNumber: billing?.identification?.number || order.buyer?.billing_info?.doc_number || null,
         },
         receiver: {
-          state: order.shipping?.receiver_address?.state?.id ||
-                 order.shipping?.receiver_address?.state?.name || '',
-          city:  order.shipping?.receiver_address?.city?.name || '',
+          name:        recv.receiver_name || '',
+          address:     recv.address_line || (recv.street_name ? `${recv.street_name}, ${recv.street_number||''}` : ''),
+          comment:     recv.comment || '',
+          neighborhood: recv.neighborhood?.name || '',
+          city:        recv.city?.name  || '',
+          state:       recv.state?.name || recv.state?.id || '',
+          zip:         recv.zip_code || '',
         },
-        logistic_type: order.shipping?.logistic_type || null,
-        shipment: null,
+        logistic_type: shipment?.logistic_type || order.shipping?.logistic_type || null,
+        shipment,
         order,
       };
     });
