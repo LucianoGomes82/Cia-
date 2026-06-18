@@ -9946,7 +9946,11 @@ async function diagnosticarVenda(orderId){
     lines.push(`  mlFee: R$ ${(localVenda.mlFee||0).toFixed(2)} (${localVenda.mlFeeSource || 'desconhecido'})`);
     lines.push(`  shippingPaidBySeller: R$ ${(localVenda.shippingPaidBySeller||0).toFixed(2)}`);
     lines.push(`  comprador: ${localVenda.buyer?.firstName || ''} ${localVenda.buyer?.lastName || ''} (${localVenda.buyer?.nickname || ''})`);
+    lines.push(`  CPF local: ${localVenda.buyer?.docNumber || '(VAZIO)'} (tipo: ${localVenda.buyer?.docType || '?'})`);
     lines.push(`  estado: ${localVenda.receiver?.state || '(?)'}`);
+    lines.push(`  cidade local: ${localVenda.receiver?.city || '(VAZIO)'}`);
+    lines.push(`  endereço local: ${localVenda.receiver?.address || '(VAZIO)'}`);
+    lines.push(`  CEP local: ${localVenda.receiver?.zip || '(VAZIO)'}`);
     lines.push(`  isBlocked: ${localVenda._isBlockedState ? 'SIM' : 'não'}`);
     lines.push(`  origem: ${localVenda._source || '(?)'}`);
     lines.push('');
@@ -11111,6 +11115,20 @@ function clearVendaSelection(){
   document.querySelectorAll('input[type="checkbox"][data-venda-id]').forEach(cb => cb.checked = false);
   const masterCb = document.getElementById('venda-select-all');
   if(masterCb){ masterCb.checked = false; masterCb.indeterminate = false; }
+  const planilhaMaster = document.getElementById('planilha-select-all');
+  if(planilhaMaster){ planilhaMaster.checked = false; planilhaMaster.indeterminate = false; }
+  updateVendaBulkBar();
+}
+
+// Marca/desmarca TODAS as vendas visíveis na página atual da Planilha (sem filtro
+// de can-print, ao contrário do selectAllVendas usado em Cards — porque na
+// Planilha o objetivo principal é a NF, que aceita qualquer status).
+function planilhaSelectAllPage(checked){
+  document.querySelectorAll('input[type="checkbox"][data-venda-id]').forEach(cb => {
+    cb.checked = checked;
+    if(checked) _selectedVendaIds.add(cb.dataset.vendaId);
+    else        _selectedVendaIds.delete(cb.dataset.vendaId);
+  });
   updateVendaBulkBar();
 }
 
@@ -13342,6 +13360,7 @@ function renderVendasPlanilha(items){
       const valPrefix = sign > 0 ? '+' : (sign < 0 ? '-' : '');
 
       return `<tr style="border-bottom:1px solid var(--border);background:rgba(245,158,11,.04);border-left:3px solid ${t.color}">
+        <td style="padding:6px 8px;text-align:center;width:32px">—</td>
         <td style="padding:6px 8px;text-align:center;color:${t.color};font-size:14px" title="${t.label}">${t.icon}</td>
         <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;color:${valColor};font-weight:600">${valPrefix}${fmtBRL(valTotal, false)}</td>
         <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-size:11px;color:${(v.valorLuciano||0) > 0 ? valColor : 'var(--text3)'}">${(v.valorLuciano||0) > 0 ? `${valPrefix}${fmtBRL(v.valorLuciano, false)}` : '—'}</td>
@@ -13427,6 +13446,12 @@ function renderVendasPlanilha(items){
       : `<td class="lucro-cell" style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;color:${lucroColor}">${fmtBRL(lucro, false)}</td>`;
 
     return `<tr data-order-id="${v.id}" style="border-bottom:1px solid var(--border);background:${rowBg};opacity:${rowOpacity}">
+      <td style="padding:6px 8px;text-align:center;width:32px">
+        <input type="checkbox" data-venda-id="${v.id}" data-can-print="${canPrintLabel(v).ok?'1':'0'}"
+          ${_selectedVendaIds.has(String(v.id))?'checked':''}
+          onchange="toggleVendaSelection('${v.id}', this.checked)"
+          style="cursor:pointer;width:14px;height:14px">
+      </td>
       <td style="padding:6px 8px;text-align:center;font-weight:600;font-family:'DM Mono',monospace">${qtd}</td>
       ${totalCell}
       ${invLucianoCell}
@@ -13481,6 +13506,10 @@ function renderVendasPlanilha(items){
     <table style="width:100%;font-size:11px;border-collapse:collapse;background:var(--bg)">
       <thead>
         <tr style="background:var(--bg3);border-bottom:2px solid var(--border);position:sticky;top:0;z-index:5">
+          <th style="padding:8px;text-align:center;color:var(--text2);font-weight:700;font-size:11px;width:32px">
+            <input type="checkbox" id="planilha-select-all" onchange="planilhaSelectAllPage(this.checked)"
+              title="Marcar todas as vendas da página atual" style="cursor:pointer;width:14px;height:14px">
+          </th>
           <th style="padding:8px;text-align:center;color:var(--text2);font-weight:700;font-size:11px">Unid.</th>
           <th style="padding:8px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;background:rgba(96,165,250,.1)" title="Total Líquido = Bruto - Comissão ML - Frete bancado pelo vendedor.&#10;Esse é o valor que entra na conta do Mercado Pago.">Total ML</th>
           <th style="padding:8px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;background:rgba(167,139,250,.1)">Inv. Luciano</th>
