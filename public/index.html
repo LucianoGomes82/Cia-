@@ -13662,38 +13662,50 @@ async function exportNFXLSX(){
     'Observação', 'Conta'
   ];
   const rows = [HEADERS];
+  // Formatar dados como strings simples evita problemas que travam o Excel ao abrir
+  // (objetos Date, números muito grandes, strings de números longas etc.).
+  // Garantia de compatibilidade máxima com Excel mobile e desktop.
+  const fmt2 = n => String(n).padStart(2, '0');
   for(const v of selecionadas){
-    const dataObj = v.date_created ? new Date(v.date_created) : null;
-    const dataStr = dataObj && !isNaN(dataObj.getTime()) ? dataObj : '';
+    let dataStr = '';
+    if(v.date_created){
+      const d = new Date(v.date_created);
+      if(!isNaN(d.getTime())){
+        // Formato igual ao modelo do usuário: DD/MM/AAAA HH:MM:SS
+        dataStr = `${fmt2(d.getDate())}/${fmt2(d.getMonth()+1)}/${d.getFullYear()} ${fmt2(d.getHours())}:${fmt2(d.getMinutes())}:${fmt2(d.getSeconds())}`;
+      }
+    }
     const unidades = (v.items || []).reduce((s, it) => s + (Number(it.quantity)||1), 0) || 1;
-    // Receita por produtos: revProduct (XLSX) → soma itens → totalLiquido/total
     const receita = Number(v.revProduct)
       || ((v.items||[]).reduce((s, it) => s + (Number(it.unit_price)||0) * (Number(it.quantity)||1), 0))
       || Number(v.totalLiquido) || Number(v.total) || 0;
-    const titulo = v.firstItem?.title || v.items?.[0]?.item?.title || '';
+    const titulo = String(v.firstItem?.title || v.items?.[0]?.item?.title || '');
     const variacao = v.color ? `Cor : ${v.color}` : '';
     const buyer = v.buyer || {};
     const comprador = [(buyer.firstName||''), (buyer.lastName||'')].join(' ').trim()
                    || buyer.nickname || '';
-    const cpf = buyer.docNumber || '';
+    // CPF/CEP precisam vir como STRING (não número), senão Excel perde zero à
+    // esquerda e quebra a formatação. Limpamos pontuação que pode confundir.
+    const cpf = String(buyer.docNumber || '').replace(/\D/g, '');
     const recv = v.receiver || {};
     const endereco = recv.address
       ? (recv.comment ? `${recv.address} / ${recv.comment}` : recv.address)
       : '';
+    const cep = String(recv.zip || '').replace(/\D/g, '');
     rows.push([
-      dataStr,
-      unidades,
-      Number(receita) || 0,
-      titulo,
-      variacao,
-      comprador,
-      cpf,
-      endereco,
-      recv.city || '',
-      recv.state || '',
-      recv.zip || '',
-      '',           // Observação vazia (decisão do usuário)
-      nomeConta,    // Conta = nome da conta ativa
+      dataStr,                                        // string DD/MM/AAAA HH:MM:SS
+      Number(unidades) || 1,                          // número simples
+      Number((Number(receita) || 0).toFixed(2)),      // número com 2 casas
+      titulo,                                         // string
+      String(variacao || ''),                         // string
+      String(comprador || ''),                        // string
+      cpf,                                            // string (preserva zero à esq.)
+      String(endereco || ''),                         // string
+      String(recv.city || ''),                        // string
+      String(recv.state || ''),                       // string
+      cep,                                            // string
+      '',                                             // Observação vazia
+      String(nomeConta || ''),                        // string
     ]);
   }
 
