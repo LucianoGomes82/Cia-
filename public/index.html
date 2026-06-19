@@ -583,6 +583,106 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
       </div>
     </div>
 
+    <!-- ── Legenda dos ícones/cores dos 3 cards de Oportunidades ─────────── -->
+    <details style="margin-bottom:12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px">
+      <summary style="cursor:pointer;padding:10px 14px;font-size:12px;font-weight:600;color:var(--text);user-select:none;list-style:none;display:flex;justify-content:space-between;align-items:center">
+        <span>ℹ️ Legenda — o que cada ícone, cor e badge significa</span>
+        <span style="color:var(--text3);font-size:11px;font-weight:400">clique para expandir ▾</span>
+      </summary>
+      <div style="padding:12px 16px 16px;border-top:1px solid var(--border);font-size:11px;color:var(--text2);line-height:1.6">
+
+        <!-- Cards -->
+        <div style="margin-bottom:14px">
+          <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px">📑 Os 3 cards</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px 16px">
+            <div><strong style="color:var(--green)">🏆 Top</strong> — mesma lista CIA, ordenada por <strong>mais listas</strong> primeiro (multi-lista no topo)</div>
+            <div><strong style="color:var(--amber)">💎 Raras</strong> — mesma lista CIA, ordenada por <strong>menos listas</strong> primeiro (raros no topo)</div>
+            <div><strong style="color:var(--blue)">📚 Lista Completa</strong> — todos os produtos, paginada (20/página), com filtro e ordenação</div>
+          </div>
+        </div>
+
+        <!-- Resumos -->
+        <div style="margin-bottom:14px">
+          <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px">📊 Contadores do topo de cada card</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:4px 16px">
+            <div><strong>📦 N na lista CIA</strong> — total de produtos importados</div>
+            <div><strong>🏆 N em ≥ X listas</strong> — quantos atendem ao critério "multi-lista"</div>
+            <div><strong>💎 N em ≤ X lista(s)</strong> — quantos atendem ao critério "raro"</div>
+            <div><strong>🌐 N analisados</strong> — quantos já foram pesquisados no ML</div>
+            <div><strong>✅ N com margem ML</strong> — quantos cabem na margem mínima usando o preço médio do ML</div>
+            <div><strong>🔥 N raros + quentes</strong> — raros com muita procura (alvo principal)</div>
+          </div>
+        </div>
+
+        <!-- Badges em produtos -->
+        <div style="margin-bottom:14px">
+          <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px">🏷️ Badges em cada produto</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:6px 16px">
+            <div><span style="background:rgba(96,165,250,.2);color:var(--blue);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">📋 Já anuncio</span> — produto já tem anúncio seu no ML (linha aparece apagada)</div>
+            <div><span style="background:rgba(245,158,11,.2);color:var(--amber);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">🔥 Quente</span> — alta procura no ML (≥ mínimo de anúncios c/ vendas)</div>
+          </div>
+        </div>
+
+        <!-- Cores das linhas -->
+        <div style="margin-bottom:14px">
+          <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px">🎨 Cor de fundo da linha</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:6px 16px">
+            <div><span style="display:inline-block;width:14px;height:14px;background:rgba(62,207,142,.15);border:1px solid var(--green);vertical-align:middle;margin-right:6px"></span><strong>Verde claro</strong> — produto multi-lista no card Top</div>
+            <div><span style="display:inline-block;width:14px;height:14px;background:rgba(245,158,11,.2);border:1px solid var(--amber);vertical-align:middle;margin-right:6px"></span><strong>Dourado</strong> — produto raro e quente no card Raras</div>
+            <div><span style="display:inline-block;width:14px;height:14px;background:rgba(245,158,11,.1);border:1px solid var(--amber);vertical-align:middle;margin-right:6px"></span><strong>Laranja claro</strong> — margem CIA não cabe (alerta)</div>
+            <div><span style="display:inline-block;width:14px;height:14px;background:rgba(239,68,68,.1);border:1px solid var(--red);vertical-align:middle;margin-right:6px"></span><strong>Vermelho claro</strong> — erro ao buscar no ML</div>
+            <div><span style="display:inline-block;width:14px;height:14px;background:transparent;border:1px solid var(--text3);vertical-align:middle;margin-right:6px;opacity:.55"></span><strong>Apagada (opacity)</strong> — você já anuncia este produto</div>
+          </div>
+        </div>
+
+        <!-- Coluna ML público -->
+        <div style="margin-bottom:14px">
+          <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px">💰 Coluna "ML público"</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:6px 16px">
+            <div><strong>R$ X.XX</strong> — preço <strong>mediano</strong> dos anúncios ativos no ML (mais robusto que média)</div>
+            <div><strong>N vendedor(es) · M anún.</strong> — quantos vendedores diferentes e total de anúncios</div>
+            <div><button class="btn btn-sm" style="font-size:10px;padding:3px 8px;pointer-events:none">🔍</button> Botão pra analisar este produto no ML (busca pública)</div>
+            <div><span style="color:var(--amber);font-size:11px">Sem anúncios</span> — busca pública não encontrou nada</div>
+          </div>
+        </div>
+
+        <!-- Coluna Procura -->
+        <div style="margin-bottom:14px">
+          <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px">🔥 Coluna "Procura"</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:6px 16px">
+            <div><strong>N ativos c/ vendas</strong> — quantos anúncios ativos têm <strong>pelo menos 1 venda</strong> (medida de procura)</div>
+            <div><strong style="color:var(--amber)">🔥 N</strong> — alta procura: passou do mínimo configurado</div>
+            <div><strong>X vendas</strong> — soma histórica de vendas dos anúncios encontrados</div>
+          </div>
+        </div>
+
+        <!-- Coluna Cabe? -->
+        <div style="margin-bottom:14px">
+          <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px">✓ Coluna "Cabe?"</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:6px 16px">
+            <div><span style="color:var(--green);font-weight:600">✓</span> — preço médio do ML cobre sua margem mínima</div>
+            <div><span style="color:var(--amber);font-weight:600">⚠</span> — preço médio do ML <strong>não</strong> cobre sua margem mínima</div>
+            <div><span style="color:var(--text3)">—</span> — ainda não analisado no ML (clique no 🔍 da linha)</div>
+          </div>
+        </div>
+
+        <!-- Coluna Margem -->
+        <div style="margin-bottom:14px">
+          <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px">📈 Coluna "Margem"</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:6px 16px">
+            <div><span style="color:var(--green);font-weight:600">+X%</span> — lucro percentual baseado no preço sugerido (cabe na margem mínima)</div>
+            <div><span style="color:var(--amber);font-weight:600">+X%</span> ou <span style="color:var(--amber);font-weight:600">X%</span> — abaixo da margem mínima configurada</div>
+          </div>
+        </div>
+
+        <!-- Coluna Link -->
+        <div>
+          <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px">🔗 Coluna "Link"</div>
+          <div><strong>🔗</strong> — abre o produto na busca do Mercado Livre em nova aba (pra você confirmar visualmente)</div>
+        </div>
+      </div>
+    </details>
+
     <!-- ── NOVA: Oportunidades Top — Multi-lista + Não anuncio + Margem + ML ── -->
     <div class="card" style="background:linear-gradient(135deg,rgba(62,207,142,.05),rgba(96,165,250,.05));border:1px solid rgba(62,207,142,.25)">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
