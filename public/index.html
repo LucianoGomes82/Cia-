@@ -657,6 +657,43 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
       <!-- Tabela de resultados -->
       <div id="oport-rare-list-wrap" style="overflow-x:auto;margin-top:6px"></div>
     </div>
+
+    <!-- ── NOVA: Lista CIA Completa — paginada ──────────────────────────────── -->
+    <div class="card" style="background:linear-gradient(135deg,rgba(96,165,250,.04),rgba(62,207,142,.03));border:1px solid rgba(96,165,250,.2)">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+        <div>
+          <div class="sec" style="margin:0">📚 Lista CIA Completa <span style="font-weight:400;color:var(--text2);font-size:12px">(todos os produtos)</span></div>
+          <div style="font-size:11px;color:var(--text2);margin-top:3px">
+            Lista completa dos seus fornecedores. Filtre pra encontrar produtos específicos e analise individualmente no ML.
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="text" id="oport-all-filter" placeholder="🔍 Filtrar..."
+            oninput="renderOportAll()"
+            style="padding:5px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;width:160px">
+          <select id="oport-all-sort" onchange="renderOportAll()"
+            style="padding:5px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px">
+            <option value="alpha">A-Z</option>
+            <option value="lists_desc">Mais listas</option>
+            <option value="lists_asc">Menos listas</option>
+            <option value="price_asc">Menor preço</option>
+            <option value="price_desc">Maior preço</option>
+            <option value="margin_desc">Maior margem</option>
+            <option value="sold_desc">Mais procura ML</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Resumo + paginação -->
+      <div id="oport-all-summary" style="display:flex;gap:12px;font-size:11px;color:var(--text3);margin-bottom:8px;flex-wrap:wrap;align-items:center"></div>
+
+      <!-- Tabela -->
+      <div id="oport-all-list-wrap" style="overflow-x:auto;margin-top:6px"></div>
+
+      <!-- Controles de paginação (rodapé) -->
+      <div id="oport-all-pagination" style="display:flex;justify-content:center;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center"></div>
+    </div>
+
     <div class="card" style="background:linear-gradient(135deg,rgba(167,139,250,.04),rgba(96,165,250,.04));border:1px solid rgba(167,139,250,.2)">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
         <div>
@@ -2305,7 +2342,7 @@ function switchTab(id){
   if(id==='perguntas') syncPerguntas();
   if(id==='tendencias') initTendencias();
   if(id==='financeiro') initFinanceiro();
-  if(id==='oport'){ renderOportTop(); renderOportRare(); }  // top + raras
+  if(id==='oport'){ renderOportTop(); renderOportRare(); renderOportAll(); }  // 3 cards
   if(id==='config'){ renderAccountsList(); renderBlockedStates(); renderFornecedoresWA(); }
 }
 function showUpload(){ document.getElementById('upload-area').style.display='block'; document.getElementById('import-result').style.display='none'; switchTab('import'); }
@@ -7512,19 +7549,27 @@ function processOportItems(items, catLabel, q, type){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// OPORTUNIDADES TOP — multi-lista (≥N) + não anuncio + cabe na margem
-// Opcionalmente cruza com busca pública /sites/MLB/search pra mostrar preço
-// médio do ML e quantidade de vendedores.
+// OPORTUNIDADES — Lista CIA inteira como BASE, com 3 cards visualizando-a
+// de ângulos diferentes:
+//   • TOP: ordena por storeCount DESC (multi-lista no topo)
+//   • RARAS: ordena por storeCount ASC (poucas listas no topo)
+//   • COMPLETA: todos os produtos, paginada, com filtros
+// Nenhum card EXCLUI produtos — apenas destaca/apaga conforme estado:
+//   • Já anuncio no ML → opacity reduzida (cinza)
+//   • Não cabe na margem → fundo laranja (alerta)
+// Busca pública compartilha um único cache.
 // ═══════════════════════════════════════════════════════════════════════════
 
-let _oportTopData = [];       // produtos filtrados (sem análise ML ainda)
-let _oportTopMLCache = new Map();  // key produto → {priceMed, sellerCount, listingsCount, sampleListings, fitsMargin}
+let _oportBaseData = [];                // todos os produtos com métricas
+let _oportTopMLCache = new Map();       // key produto → dados de busca pública
+let _oportAllPage = 1;                  // página atual da Lista Completa
+const _oportAllPerPage = 20;            // 20 itens/página (mobile-friendly)
 
-// Filtra produtos da lista CIA pelos critérios "multi-lista + não anuncio + cabe na margem"
-function computeOportTop(){
-  if(!state.products?.length){ _oportTopData = []; return; }
+// Calcula a base UMA vez — usada pelos 3 cards.
+// Inclui TODOS os produtos com minPrice > 0, sem exclusão.
+function computeOportBase(){
+  if(!state.products?.length){ _oportBaseData = []; return; }
 
-  const minLists = parseInt(document.getElementById('oport-top-min-input')?.value) || 4;
   const comissao = parseFloat(cfg.commissionClassico) || 0.11;
   const taxaFixa = parseFloat(cfg.fixedFee) || 0;
   const frete    = parseFloat(cfg.shippingCost) || 25;
@@ -7539,277 +7584,7 @@ function computeOportTop(){
     }
   }
 
-  _oportTopData = state.products
-    .filter(p => p.storeCount >= minLists)            // multi-lista
-    .filter(p => !jaAnunciados.has(p.key))            // NÃO anuncio
-    .filter(p => p.minPrice && p.minPrice > 0)       // tem preço
-    .map(prod => {
-      const custoCIA   = prod.minPrice;
-      const custoTaxas = custoCIA * comissao + taxaFixa;
-      const custoTotal = custoCIA + custoTaxas + frete;
-      const precoSuger = Math.ceil(custoTotal * (1 + minMarg/100) / 5) * 5;
-      const lucroRS    = precoSuger - custoTotal;
-      const lucroPct   = (lucroRS / custoTotal) * 100;
-      return {
-        product: prod,
-        custoCIA, custoTaxas, custoTotal,
-        precoSuger,
-        lucroRS: Math.round(lucroRS),
-        lucroPct: Math.round(lucroPct * 10) / 10,
-        aprovado: lucroPct >= minMarg,
-        ml: _oportTopMLCache.get(prod.key) || null,  // pode já ter sido analisado
-      };
-    })
-    .filter(r => r.aprovado)                         // cabe na margem
-    .sort((a, b) => {
-      // Mais listas primeiro, depois maior margem
-      const lsDiff = b.product.storeCount - a.product.storeCount;
-      if(lsDiff !== 0) return lsDiff;
-      return b.lucroPct - a.lucroPct;
-    });
-}
-
-// Renderiza o estado atual (sem buscar no ML)
-function renderOportTop(){
-  computeOportTop();
-  const wrap = document.getElementById('oport-top-list-wrap');
-  const summary = document.getElementById('oport-top-summary');
-  if(!wrap) return;
-
-  const total = _oportTopData.length;
-  const analisados = _oportTopData.filter(r => r.ml).length;
-  const cabem = _oportTopData.filter(r => r.ml?.fitsMargin).length;
-  const onlyFits = document.getElementById('oport-top-only-fits')?.checked || false;
-
-  summary.innerHTML = `
-    <span>📦 <strong style="color:var(--text)">${total}</strong> oportunidades</span>
-    <span>🌐 <strong style="color:var(--text)">${analisados}</strong> analisados no ML</span>
-    <span>✅ <strong style="color:var(--green)">${cabem}</strong> com margem confirmada no ML</span>
-    <label style="cursor:pointer;display:flex;gap:5px;align-items:center;margin-left:auto">
-      <input type="checkbox" id="oport-top-only-fits" ${onlyFits?'checked':''}
-        onchange="renderOportTop()" style="cursor:pointer">
-      Mostrar só os que cabem no ML
-    </label>
-  `;
-
-  if(total === 0){
-    wrap.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">
-      Nenhum produto atende aos critérios.<br>
-      ${!state.products?.length ? 'Importe suas listas CIA primeiro.' : 'Tente diminuir o "Mín. listas" ou conferir se você não está anunciando todos eles.'}
-    </div>`;
-    return;
-  }
-
-  // Aplica filtro "só os que cabem"
-  const items = onlyFits
-    ? _oportTopData.filter(r => r.ml?.fitsMargin)
-    : _oportTopData;
-
-  if(items.length === 0){
-    wrap.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">
-      Nenhum produto analisado cabe na margem do ML. Tente analisar os restantes ou desmarcar o filtro.
-    </div>`;
-    return;
-  }
-
-  const rows = items.map((r, idx) => {
-    const p = r.product;
-    const ml = r.ml;
-    // Cor de fundo conforme análise ML
-    let rowBg = '';
-    if(ml?.error)       rowBg = 'background:rgba(239,68,68,.04)';
-    else if(ml?.empty)  rowBg = 'background:rgba(245,158,11,.04)';
-    else if(ml?.fitsMargin) rowBg = 'background:rgba(62,207,142,.05)';
-    else if(ml)         rowBg = 'background:rgba(245,158,11,.03)';
-
-    const mlCell = ml
-      ? (ml.error
-          ? `<span style="color:var(--red);font-size:11px">❌ Erro</span>`
-          : ml.empty
-          ? `<span style="color:var(--amber);font-size:11px">Sem anúncios</span>`
-          : `<div style="font-size:11px">
-              <div>💰 <strong>R$ ${ml.priceMed.toFixed(2)}</strong> <span style="color:var(--text3)">(mediano)</span></div>
-              <div style="color:var(--text2)">${ml.sellerCount} vendedor(es) · ${ml.listingsCount} anúncio(s)</div>
-              <div style="color:${ml.margemPotencial >= (parseFloat(cfg.minMargin)||10) ? 'var(--green)' : 'var(--amber)'};font-weight:600;font-size:10px">Margem ML potencial: ${ml.margemPotencial}%</div>
-            </div>`)
-      : `<button class="btn btn-sm" onclick="analyzeOportTopOne('${escapeHTML(p.key)}')"
-           style="font-size:10px;padding:3px 8px">🔍 Analisar</button>`;
-    const fitBadge = ml && !ml.error && !ml.empty
-      ? (ml.fitsMargin
-          ? `<span style="color:var(--green);font-weight:600;font-size:11px">✓ Cabe</span>`
-          : `<span style="color:var(--amber);font-weight:600;font-size:11px">⚠ Aperta</span>`)
-      : `<span style="color:var(--text3);font-size:11px">—</span>`;
-    const mlLink = `https://lista.mercadolivre.com.br/${encodeURIComponent(p.name).replace(/%20/g,'-')}`;
-    return `<tr style="border-bottom:1px solid var(--border);${rowBg}">
-      <td style="padding:8px;font-size:11px;text-align:center;color:var(--text3)">${idx + 1}</td>
-      <td style="padding:8px;font-size:12px">
-        <div style="font-weight:600">${escapeHTML(p.name)}</div>
-        <div style="font-size:10px;color:var(--text3);margin-top:2px">
-          ${p.storeCount} listas · spec: ${escapeHTML(p.dominantSpec || '—')}
-        </div>
-      </td>
-      <td style="padding:8px;font-size:11px;font-family:'DM Mono',monospace;white-space:nowrap">R$ ${r.custoCIA.toFixed(2)}</td>
-      <td style="padding:8px;font-size:11px;font-family:'DM Mono',monospace;white-space:nowrap">R$ ${r.precoSuger.toFixed(2)}</td>
-      <td style="padding:8px;font-size:11px;color:var(--green);font-weight:600;white-space:nowrap">+${r.lucroPct}%</td>
-      <td style="padding:8px;white-space:nowrap">${mlCell}</td>
-      <td style="padding:8px;text-align:center">${fitBadge}</td>
-      <td style="padding:8px;text-align:center">
-        <a href="${mlLink}" target="_blank" rel="noopener" class="btn btn-sm" style="font-size:10px;padding:3px 8px" title="Abrir busca no ML">🔗</a>
-      </td>
-    </tr>`;
-  }).join('');
-
-  wrap.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">
-    <thead>
-      <tr style="background:var(--bg3);border-bottom:2px solid var(--border)">
-        <th style="padding:8px;text-align:center;font-size:10px;color:var(--text2);font-weight:700">#</th>
-        <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Produto</th>
-        <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Custo CIA</th>
-        <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Sugerido</th>
-        <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Margem CIA</th>
-        <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">ML público</th>
-        <th style="padding:8px;text-align:center;font-size:10px;color:var(--text2);font-weight:700">Cabe?</th>
-        <th style="padding:8px;text-align:center;font-size:10px;color:var(--text2);font-weight:700">Link</th>
-      </tr>
-    </thead>
-    <tbody>${rows}</tbody>
-  </table>`;
-}
-
-// Busca pública no ML pra UM produto e atualiza cache + render
-async function analyzeOportTopOne(productKey){
-  computeOportTop();
-  const r = _oportTopData.find(x => x.product.key === productKey);
-  if(!r){ alert('Produto não encontrado.'); return; }
-  await _fetchOportTopML(r);
-  renderOportTop();
-}
-
-// Busca pública dos top 20 (em paralelo, batches anti-503)
-async function analyzeOportTop(){
-  computeOportTop();
-  if(_oportTopData.length === 0){
-    alert('Nenhuma oportunidade para analisar. Diminua o "Mín. listas" ou importe mais listas.');
-    return;
-  }
-  const status = document.getElementById('oport-top-status');
-  const statusMsg = document.getElementById('oport-top-status-msg');
-  const btn = document.getElementById('oport-top-btn');
-  btn.disabled = true;
-  status.style.display = 'block';
-
-  // Top 20 dos não-analisados ainda
-  const aAnalisar = _oportTopData.filter(r => !r.ml).slice(0, 20);
-  if(aAnalisar.length === 0){
-    statusMsg.textContent = 'Todos os top 20 já foram analisados.';
-    setTimeout(() => { status.style.display = 'none'; btn.disabled = false; }, 1500);
-    return;
-  }
-
-  const batchSize = 5;  // 5 buscas paralelas é seguro pra API pública
-  let done = 0;
-  try {
-    for(let i = 0; i < aAnalisar.length; i += batchSize){
-      const batch = aAnalisar.slice(i, i + batchSize);
-      statusMsg.textContent = `Buscando no ML... ${done}/${aAnalisar.length}`;
-      renderOportTop();  // re-render com progresso parcial
-      await Promise.all(batch.map(r => _fetchOportTopML(r).catch(() => {})));
-      done += batch.length;
-      if(i + batchSize < aAnalisar.length){
-        await new Promise(r => setTimeout(r, 300));  // anti rate-limit
-      }
-    }
-    statusMsg.textContent = `✓ ${done} produto(s) analisados.`;
-    setTimeout(() => { status.style.display = 'none'; }, 2000);
-  } catch(e){
-    statusMsg.textContent = '❌ Erro: ' + e.message;
-  } finally {
-    btn.disabled = false;
-    renderOportTop();
-  }
-}
-
-// Faz a busca pública e calcula métricas. Atualiza cache.
-async function _fetchOportTopML(rec){
-  const p = rec.product;
-  // Query: usa o nome do produto, sanitiza
-  const q = p.name.replace(/[^\w\sÀ-ÿ]/g, ' ').replace(/\s+/g, ' ').trim();
-  if(!q) return;
-  try {
-    // status=active só ativos (decisão do usuário)
-    // limit=30 amostra suficiente pra mediana
-    const url = `/sites/MLB/search?q=${encodeURIComponent(q)}&status=active&limit=30`;
-    const r = await proxyFetch(url);
-    if(!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
-    const items = (data?.results || []).filter(x => x.price > 0);
-    if(items.length === 0){
-      _oportTopMLCache.set(p.key, {
-        priceMed: 0, sellerCount: 0, listingsCount: 0, sampleListings: [],
-        fitsMargin: false, empty: true,
-      });
-      return;
-    }
-    // Mediana é mais robusta que média (não sofre com outliers)
-    const prices = items.map(x => x.price).sort((a, b) => a - b);
-    const mid = Math.floor(prices.length / 2);
-    const priceMed = prices.length % 2 === 1
-      ? prices[mid]
-      : (prices[mid - 1] + prices[mid]) / 2;
-    const sellerCount = new Set(items.map(x => x.seller?.id).filter(Boolean)).size;
-    // Métricas de PROCURA — anúncios ativos com vendas (critério do usuário)
-    const itemsWithSales = items.filter(x => (x.sold_quantity || 0) > 0);
-    const activeWithSales = itemsWithSales.length;
-    const totalSold = itemsWithSales.reduce((s, x) => s + (x.sold_quantity || 0), 0);
-    // Cabe na margem? Preço médio do ML - custo total >= margem mínima do CIA
-    const minMarg = parseFloat(cfg.minMargin) || 10;
-    const margemPotencial = ((priceMed - rec.custoTotal) / rec.custoTotal) * 100;
-    const fitsMargin = margemPotencial >= minMarg;
-    _oportTopMLCache.set(p.key, {
-      priceMed,
-      sellerCount,
-      listingsCount: items.length,
-      activeWithSales,         // anúncios ativos com vendas > 0
-      totalSold,               // soma de vendas históricas dos anúncios
-      sampleListings: items.slice(0, 5).map(x => ({
-        title: x.title, price: x.price, sold: x.sold_quantity,
-      })),
-      fitsMargin,
-      margemPotencial: Math.round(margemPotencial * 10) / 10,
-    });
-  } catch(e){
-    _oportTopMLCache.set(p.key, { error: e.message, fitsMargin: false });
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// OPORTUNIDADES RARAS — pouca oferta (≤N listas) + muita procura no ML
-// Reusa o cache _oportTopMLCache (mesma busca pública).
-// ═══════════════════════════════════════════════════════════════════════════
-
-let _oportRareData = [];  // produtos filtrados por "poucas listas"
-
-function computeOportRare(){
-  if(!state.products?.length){ _oportRareData = []; return; }
-
-  const maxLists = parseInt(document.getElementById('oport-rare-max-input')?.value) || 2;
-  const comissao = parseFloat(cfg.commissionClassico) || 0.11;
-  const taxaFixa = parseFloat(cfg.fixedFee) || 0;
-  const frete    = parseFloat(cfg.shippingCost) || 25;
-  const minMarg  = parseFloat(cfg.minMargin) || 10;
-
-  // Quais produtos eu já anuncio (excluímos esses também — não é oportunidade)
-  const jaAnunciados = new Set();
-  if(mlItems?.length){
-    for(const ml of mlItems){
-      const m = matchMLtoCIA(ml.title);
-      if(m?.product?.key) jaAnunciados.add(m.product.key);
-    }
-  }
-
-  _oportRareData = state.products
-    .filter(p => p.storeCount <= maxLists && p.storeCount >= 1)
-    .filter(p => !jaAnunciados.has(p.key))
+  _oportBaseData = state.products
     .filter(p => p.minPrice && p.minPrice > 0)
     .map(prod => {
       const custoCIA   = prod.minPrice;
@@ -7824,144 +7599,335 @@ function computeOportRare(){
         precoSuger,
         lucroRS: Math.round(lucroRS),
         lucroPct: Math.round(lucroPct * 10) / 10,
+        aprovado: lucroPct >= minMarg,
+        jaVende: jaAnunciados.has(prod.key),
         ml: _oportTopMLCache.get(prod.key) || null,
       };
-    })
-    // Ordena: já analisados com mais procura primeiro; não-analisados depois
-    .sort((a, b) => {
-      const aSales = a.ml?.activeWithSales || 0;
-      const bSales = b.ml?.activeWithSales || 0;
-      if(aSales !== bSales) return bSales - aSales;
-      // Sem dados ML: ordena por menor storeCount (mais raro)
-      return a.product.storeCount - b.product.storeCount;
     });
 }
 
-function renderOportRare(){
-  computeOportRare();
-  const wrap = document.getElementById('oport-rare-list-wrap');
-  const summary = document.getElementById('oport-rare-summary');
+// Renderiza UMA linha de produto pra qualquer um dos 3 cards.
+// Recebe o "rec" + posição + flags visuais (ex.: destacar como hot/multi)
+function _renderOportRow(rec, idx, opts = {}){
+  const p = rec.product;
+  const ml = rec.ml;
+  const minMarg = parseFloat(cfg.minMargin) || 10;
+  const isHot = (ml?.activeWithSales || 0) >= (opts.minSalesForHot || 5);
+  const inhibitRow = rec.jaVende;   // produto que já anuncio → apagar
+  const noFit = !rec.aprovado;       // margem CIA não cabe → alerta laranja
+
+  // Cor de fundo:
+  let rowBg = '';
+  if(noFit)                rowBg = 'background:rgba(245,158,11,.06)';
+  else if(opts.highlightHot && isHot) rowBg = 'background:rgba(245,158,11,.07)';
+  else if(opts.highlightMulti && p.storeCount >= (opts.multiMin || 4))
+                           rowBg = 'background:rgba(62,207,142,.05)';
+  else if(ml?.error)       rowBg = 'background:rgba(239,68,68,.04)';
+  else if(ml?.empty)       rowBg = 'background:rgba(245,158,11,.04)';
+
+  const rowOp = inhibitRow ? 'opacity:.55' : '';
+
+  // Célula ML
+  const mlCell = ml
+    ? (ml.error
+        ? `<span style="color:var(--red);font-size:11px">❌ Erro</span>`
+        : ml.empty
+        ? `<span style="color:var(--amber);font-size:11px">Sem anúncios</span>`
+        : `<div style="font-size:11px">
+            <div>💰 R$ ${ml.priceMed.toFixed(2)}</div>
+            <div style="color:var(--text2);font-size:10px">${ml.sellerCount} vendedor(es) · ${ml.listingsCount} anún.</div>
+          </div>`)
+    : `<button class="btn btn-sm" onclick="analyzeOportRow('${escapeHTML(p.key)}')"
+         style="font-size:10px;padding:3px 8px">🔍</button>`;
+
+  // Célula procura (só se houver dados ML)
+  const procuraCell = ml && !ml.error && !ml.empty
+    ? `<div style="font-size:11px">
+        <div style="color:${isHot ? 'var(--amber)' : 'var(--text2)'};font-weight:${isHot?'700':'400'}">
+          ${isHot ? '🔥 ' : ''}<strong>${ml.activeWithSales}</strong>
+        </div>
+        <div style="color:var(--text3);font-size:10px">${ml.totalSold} vendas</div>
+       </div>`
+    : `<span style="color:var(--text3);font-size:11px">—</span>`;
+
+  // Cabe na margem (CIA + ML)
+  const fitBadge = ml && !ml.error && !ml.empty
+    ? (ml.fitsMargin
+        ? `<span style="color:var(--green);font-weight:600;font-size:11px">✓</span>`
+        : `<span style="color:var(--amber);font-weight:600;font-size:11px">⚠</span>`)
+    : noFit
+    ? `<span style="color:var(--amber);font-weight:600;font-size:11px" title="Margem CIA não cabe">⚠</span>`
+    : `<span style="color:var(--text3);font-size:11px">—</span>`;
+
+  // Badges (já anuncio / hot / multi)
+  let badges = '';
+  if(rec.jaVende) badges += `<span style="background:rgba(96,165,250,.2);color:var(--blue);padding:1px 5px;border-radius:3px;font-size:9px;margin-right:3px" title="Você já anuncia este produto">📋 Já anuncio</span>`;
+  if(isHot && opts.highlightHot)  badges += `<span style="background:rgba(245,158,11,.2);color:var(--amber);padding:1px 5px;border-radius:3px;font-size:9px;margin-right:3px">🔥 Quente</span>`;
+
+  const mlLink = `https://lista.mercadolivre.com.br/${encodeURIComponent(p.name).replace(/%20/g,'-')}`;
+
+  return `<tr style="border-bottom:1px solid var(--border);${rowBg};${rowOp}">
+    <td style="padding:8px;font-size:11px;text-align:center;color:var(--text3)">${idx + 1}</td>
+    <td style="padding:8px;font-size:12px">
+      <div style="font-weight:600">${escapeHTML(p.name)}</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:2px">
+        ${p.storeCount} lista(s) · ${escapeHTML(p.dominantSpec || '—')} ${badges}
+      </div>
+    </td>
+    <td style="padding:8px;font-size:11px;font-family:'DM Mono',monospace;white-space:nowrap">R$ ${rec.custoCIA.toFixed(2)}</td>
+    <td style="padding:8px;font-size:11px;font-family:'DM Mono',monospace;white-space:nowrap">R$ ${rec.precoSuger.toFixed(2)}</td>
+    <td style="padding:8px;font-size:11px;color:${rec.aprovado?'var(--green)':'var(--amber)'};font-weight:600;white-space:nowrap">${rec.aprovado?'+':''}${rec.lucroPct}%</td>
+    <td style="padding:8px;white-space:nowrap">${mlCell}</td>
+    <td style="padding:8px;white-space:nowrap">${procuraCell}</td>
+    <td style="padding:8px;text-align:center">${fitBadge}</td>
+    <td style="padding:8px;text-align:center">
+      <a href="${mlLink}" target="_blank" rel="noopener" class="btn btn-sm" style="font-size:10px;padding:3px 6px" title="Abrir busca no ML">🔗</a>
+    </td>
+  </tr>`;
+}
+
+// Cabeçalho compartilhado pelos 3 cards
+function _renderOportThead(){
+  return `<thead>
+    <tr style="background:var(--bg3);border-bottom:2px solid var(--border)">
+      <th style="padding:8px;text-align:center;font-size:10px;color:var(--text2);font-weight:700">#</th>
+      <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Produto</th>
+      <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Custo</th>
+      <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Sugerido</th>
+      <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Margem</th>
+      <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">ML público</th>
+      <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Procura 🔥</th>
+      <th style="padding:8px;text-align:center;font-size:10px;color:var(--text2);font-weight:700">Cabe?</th>
+      <th style="padding:8px;text-align:center;font-size:10px;color:var(--text2);font-weight:700">🔗</th>
+    </tr>
+  </thead>`;
+}
+
+// ═══ CARD 1: TOP (multi-lista) — ordena por storeCount DESC ═══
+function renderOportTop(){
+  computeOportBase();
+  const wrap = document.getElementById('oport-top-list-wrap');
+  const summary = document.getElementById('oport-top-summary');
   if(!wrap) return;
 
-  const minSales = parseInt(document.getElementById('oport-rare-min-sales')?.value) || 5;
-  const total = _oportRareData.length;
-  const analisados = _oportRareData.filter(r => r.ml).length;
-  const hot = _oportRareData.filter(r => (r.ml?.activeWithSales || 0) >= minSales).length;
+  const minLists = parseInt(document.getElementById('oport-top-min-input')?.value) || 4;
+  const onlyFits = document.getElementById('oport-top-only-fits')?.checked || false;
+
+  // Ordena por storeCount desc, depois margem
+  let items = [..._oportBaseData].sort((a, b) => {
+    const ls = b.product.storeCount - a.product.storeCount;
+    if(ls !== 0) return ls;
+    return b.lucroPct - a.lucroPct;
+  });
+
+  // Aplicar filtro "só os que cabem no ML" se ativo
+  if(onlyFits){
+    items = items.filter(r => r.ml?.fitsMargin);
+  }
+
+  // Mostra só os top 50 pra não estourar página
+  const visible = items.slice(0, 50);
+
+  const total = _oportBaseData.length;
+  const multiCount = _oportBaseData.filter(r => r.product.storeCount >= minLists).length;
+  const analisados = _oportBaseData.filter(r => r.ml).length;
+  const cabem = _oportBaseData.filter(r => r.ml?.fitsMargin).length;
 
   summary.innerHTML = `
-    <span>📦 <strong style="color:var(--text)">${total}</strong> em poucas listas</span>
-    <span>🌐 <strong style="color:var(--text)">${analisados}</strong> analisados no ML</span>
-    <span>🔥 <strong style="color:var(--amber)">${hot}</strong> com alta procura</span>
+    <span>📦 <strong style="color:var(--text)">${total}</strong> na lista CIA</span>
+    <span>🏆 <strong style="color:var(--text)">${multiCount}</strong> em ≥ ${minLists} listas</span>
+    <span>🌐 <strong style="color:var(--text)">${analisados}</strong> analisados</span>
+    <span>✅ <strong style="color:var(--green)">${cabem}</strong> com margem ML</span>
+    <label style="cursor:pointer;display:flex;gap:5px;align-items:center;margin-left:auto">
+      <input type="checkbox" id="oport-top-only-fits" ${onlyFits?'checked':''}
+        onchange="renderOportTop()" style="cursor:pointer">
+      Só com margem confirmada no ML
+    </label>
   `;
 
-  if(total === 0){
+  if(visible.length === 0){
     wrap.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">
-      Nenhum produto em ≤ ${document.getElementById('oport-rare-max-input')?.value || 2} listas que você não anuncia.<br>
-      ${!state.products?.length ? 'Importe suas listas CIA primeiro.' : 'Aumente o "Máx. listas" pra ver mais opções.'}
+      ${!state.products?.length ? 'Importe suas listas CIA primeiro.' : 'Nenhum produto após o filtro.'}
     </div>`;
     return;
   }
 
-  const rows = _oportRareData.map((r, idx) => {
-    const p = r.product;
-    const ml = r.ml;
-    const isHot = (ml?.activeWithSales || 0) >= minSales;
-
-    let rowBg = '';
-    if(ml?.error)       rowBg = 'background:rgba(239,68,68,.04)';
-    else if(ml?.empty)  rowBg = 'background:rgba(245,158,11,.04)';
-    else if(isHot)      rowBg = 'background:rgba(245,158,11,.07)';  // destaque ouro pros hot
-    else if(ml)         rowBg = 'background:rgba(96,165,250,.03)';
-
-    const mlCell = ml
-      ? (ml.error
-          ? `<span style="color:var(--red);font-size:11px">❌ Erro</span>`
-          : ml.empty
-          ? `<span style="color:var(--amber);font-size:11px">Sem anúncios</span>`
-          : `<div style="font-size:11px">
-              <div>💰 R$ ${ml.priceMed.toFixed(2)}</div>
-              <div style="color:var(--text2)">${ml.sellerCount} vendedor(es)</div>
-            </div>`)
-      : `<button class="btn btn-sm" onclick="analyzeOportRareOne('${escapeHTML(p.key)}')"
-           style="font-size:10px;padding:3px 8px">🔍 Analisar</button>`;
-
-    const procuraCell = ml && !ml.error && !ml.empty
-      ? `<div style="font-size:11px">
-          <div style="color:${isHot ? 'var(--amber)' : 'var(--text2)'};font-weight:${isHot?'700':'400'}">
-            ${isHot ? '🔥 ' : ''}<strong>${ml.activeWithSales}</strong> ativos c/ vendas
-          </div>
-          <div style="color:var(--text3);font-size:10px">${ml.totalSold} vendas totais</div>
-         </div>`
-      : `<span style="color:var(--text3);font-size:11px">—</span>`;
-
-    const fitBadge = ml && !ml.error && !ml.empty
-      ? (ml.fitsMargin
-          ? `<span style="color:var(--green);font-weight:600;font-size:11px">✓ Cabe</span>`
-          : `<span style="color:var(--amber);font-weight:600;font-size:11px">⚠ Aperta</span>`)
-      : `<span style="color:var(--text3);font-size:11px">—</span>`;
-
-    const mlLink = `https://lista.mercadolivre.com.br/${encodeURIComponent(p.name).replace(/%20/g,'-')}`;
-    return `<tr style="border-bottom:1px solid var(--border);${rowBg}">
-      <td style="padding:8px;font-size:11px;text-align:center;color:var(--text3)">${idx + 1}</td>
-      <td style="padding:8px;font-size:12px">
-        <div style="font-weight:600">${escapeHTML(p.name)}</div>
-        <div style="font-size:10px;color:var(--text3);margin-top:2px">
-          ${p.storeCount} lista(s) · spec: ${escapeHTML(p.dominantSpec || '—')}
-        </div>
-      </td>
-      <td style="padding:8px;font-size:11px;font-family:'DM Mono',monospace;white-space:nowrap">R$ ${r.custoCIA.toFixed(2)}</td>
-      <td style="padding:8px;font-size:11px;font-family:'DM Mono',monospace;white-space:nowrap">R$ ${r.precoSuger.toFixed(2)}</td>
-      <td style="padding:8px;white-space:nowrap">${mlCell}</td>
-      <td style="padding:8px;white-space:nowrap">${procuraCell}</td>
-      <td style="padding:8px;text-align:center">${fitBadge}</td>
-      <td style="padding:8px;text-align:center">
-        <a href="${mlLink}" target="_blank" rel="noopener" class="btn btn-sm" style="font-size:10px;padding:3px 8px" title="Abrir busca no ML">🔗</a>
-      </td>
-    </tr>`;
-  }).join('');
+  const rows = visible.map((r, idx) => _renderOportRow(r, idx, {
+    highlightMulti: true, multiMin: minLists, minSalesForHot: 5,
+  })).join('');
 
   wrap.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">
-    <thead>
-      <tr style="background:var(--bg3);border-bottom:2px solid var(--border)">
-        <th style="padding:8px;text-align:center;font-size:10px;color:var(--text2);font-weight:700">#</th>
-        <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Produto</th>
-        <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Custo CIA</th>
-        <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Sugerido</th>
-        <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">ML público</th>
-        <th style="padding:8px;text-align:left;font-size:10px;color:var(--text2);font-weight:700">Procura 🔥</th>
-        <th style="padding:8px;text-align:center;font-size:10px;color:var(--text2);font-weight:700">Cabe?</th>
-        <th style="padding:8px;text-align:center;font-size:10px;color:var(--text2);font-weight:700">Link</th>
-      </tr>
-    </thead>
+    ${_renderOportThead()}
     <tbody>${rows}</tbody>
-  </table>`;
+  </table>
+  <div style="font-size:10px;color:var(--text3);text-align:center;margin-top:6px">
+    Mostrando ${visible.length} de ${items.length} • Use a "Lista Completa" abaixo pra ver todos
+  </div>`;
 }
 
-async function analyzeOportRareOne(productKey){
-  computeOportRare();
-  const r = _oportRareData.find(x => x.product.key === productKey);
-  if(!r){ alert('Produto não encontrado.'); return; }
-  await _fetchOportTopML(r);  // reusa mesma função/cache
-  renderOportRare();
-  renderOportTop();  // sincroniza também o card de cima
-}
+// ═══ CARD 2: RARAS (poucas listas) — ordena por storeCount ASC ═══
+function renderOportRare(){
+  computeOportBase();
+  const wrap = document.getElementById('oport-rare-list-wrap');
+  const summary = document.getElementById('oport-rare-summary');
+  if(!wrap) return;
 
-async function analyzeOportRare(){
-  computeOportRare();
-  if(_oportRareData.length === 0){
-    alert('Nenhum produto em poucas listas para analisar.');
+  const maxLists = parseInt(document.getElementById('oport-rare-max-input')?.value) || 2;
+  const minSales = parseInt(document.getElementById('oport-rare-min-sales')?.value) || 5;
+
+  // Ordena: já analisados com mais procura primeiro, depois por menos listas
+  let items = [..._oportBaseData].sort((a, b) => {
+    const aSales = a.ml?.activeWithSales || 0;
+    const bSales = b.ml?.activeWithSales || 0;
+    if(aSales !== bSales) return bSales - aSales;
+    return a.product.storeCount - b.product.storeCount;
+  });
+
+  const visible = items.slice(0, 50);
+
+  const total = _oportBaseData.length;
+  const rareCount = _oportBaseData.filter(r => r.product.storeCount <= maxLists).length;
+  const analisados = _oportBaseData.filter(r => r.ml).length;
+  const hot = _oportBaseData.filter(r =>
+    r.product.storeCount <= maxLists && (r.ml?.activeWithSales || 0) >= minSales
+  ).length;
+
+  summary.innerHTML = `
+    <span>📦 <strong style="color:var(--text)">${total}</strong> na lista CIA</span>
+    <span>💎 <strong style="color:var(--text)">${rareCount}</strong> em ≤ ${maxLists} lista(s)</span>
+    <span>🌐 <strong style="color:var(--text)">${analisados}</strong> analisados</span>
+    <span>🔥 <strong style="color:var(--amber)">${hot}</strong> raros + quentes</span>
+  `;
+
+  if(visible.length === 0){
+    wrap.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">
+      ${!state.products?.length ? 'Importe suas listas CIA primeiro.' : 'Nenhum produto na base.'}
+    </div>`;
     return;
   }
-  const status = document.getElementById('oport-rare-status');
-  const statusMsg = document.getElementById('oport-rare-status-msg');
-  const btn = document.getElementById('oport-rare-btn');
-  btn.disabled = true;
-  status.style.display = 'block';
 
-  const aAnalisar = _oportRareData.filter(r => !r.ml).slice(0, 20);
+  const rows = visible.map((r, idx) => _renderOportRow(r, idx, {
+    highlightHot: true, minSalesForHot: minSales,
+  })).join('');
+
+  wrap.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">
+    ${_renderOportThead()}
+    <tbody>${rows}</tbody>
+  </table>
+  <div style="font-size:10px;color:var(--text3);text-align:center;margin-top:6px">
+    Mostrando ${visible.length} de ${items.length} • Use a "Lista Completa" abaixo pra ver todos
+  </div>`;
+}
+
+// ═══ CARD 3: LISTA COMPLETA — paginada, filtrada, ordenável ═══
+function renderOportAll(){
+  computeOportBase();
+  const wrap = document.getElementById('oport-all-list-wrap');
+  const summary = document.getElementById('oport-all-summary');
+  const pag = document.getElementById('oport-all-pagination');
+  if(!wrap) return;
+
+  const filterText = (document.getElementById('oport-all-filter')?.value || '').trim().toLowerCase();
+  const sortBy = document.getElementById('oport-all-sort')?.value || 'alpha';
+
+  // Filtra
+  let items = _oportBaseData;
+  if(filterText){
+    items = items.filter(r => r.product.name.toLowerCase().includes(filterText));
+  }
+
+  // Ordena
+  switch(sortBy){
+    case 'lists_desc':  items.sort((a,b) => b.product.storeCount - a.product.storeCount); break;
+    case 'lists_asc':   items.sort((a,b) => a.product.storeCount - b.product.storeCount); break;
+    case 'price_asc':   items.sort((a,b) => a.custoCIA - b.custoCIA); break;
+    case 'price_desc':  items.sort((a,b) => b.custoCIA - a.custoCIA); break;
+    case 'margin_desc': items.sort((a,b) => b.lucroPct - a.lucroPct); break;
+    case 'sold_desc':   items.sort((a,b) => (b.ml?.activeWithSales||0) - (a.ml?.activeWithSales||0)); break;
+    default:            items.sort((a,b) => a.product.name.localeCompare(b.product.name, 'pt-BR'));
+  }
+
+  // Paginação
+  const total = items.length;
+  const totalPages = Math.max(1, Math.ceil(total / _oportAllPerPage));
+  if(_oportAllPage > totalPages) _oportAllPage = totalPages;
+  if(_oportAllPage < 1) _oportAllPage = 1;
+  const startIdx = (_oportAllPage - 1) * _oportAllPerPage;
+  const visible = items.slice(startIdx, startIdx + _oportAllPerPage);
+
+  summary.innerHTML = `
+    <span>📦 <strong style="color:var(--text)">${total}</strong> produto(s)${filterText ? ` (filtrado de ${_oportBaseData.length})` : ''}</span>
+    <span>Página <strong style="color:var(--text)">${_oportAllPage}</strong> de ${totalPages}</span>
+  `;
+
+  if(visible.length === 0){
+    wrap.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">
+      ${!state.products?.length ? 'Importe suas listas CIA primeiro.' : 'Nenhum produto encontrado com esse filtro.'}
+    </div>`;
+    pag.innerHTML = '';
+    return;
+  }
+
+  const rows = visible.map((r, idx) => _renderOportRow(r, startIdx + idx, {
+    minSalesForHot: 5,
+  })).join('');
+
+  wrap.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">
+    ${_renderOportThead()}
+    <tbody>${rows}</tbody>
+  </table>`;
+
+  // Paginação inferior — mobile-friendly
+  if(totalPages > 1){
+    const pageBtn = (n, label, disabled, current) => {
+      const bg = current ? 'background:var(--accent);color:white;border-color:var(--accent)' : '';
+      const op = disabled ? 'opacity:.4;pointer-events:none' : '';
+      return `<button class="btn btn-sm" onclick="_oportAllPage=${n};renderOportAll()"
+        style="font-size:11px;padding:4px 9px;${bg};${op}">${label}</button>`;
+    };
+    const prev = pageBtn(Math.max(1, _oportAllPage-1), '‹', _oportAllPage<=1);
+    const next = pageBtn(Math.min(totalPages, _oportAllPage+1), '›', _oportAllPage>=totalPages);
+    // Mostrar janela de 5 páginas em volta da atual
+    let from = Math.max(1, _oportAllPage - 2);
+    let to   = Math.min(totalPages, from + 4);
+    from = Math.max(1, to - 4);
+    let mid = '';
+    for(let i = from; i <= to; i++){
+      mid += pageBtn(i, String(i), false, i === _oportAllPage);
+    }
+    pag.innerHTML = `${prev}${mid}${next}`;
+  } else {
+    pag.innerHTML = '';
+  }
+}
+
+// ═══ Análise individual: 1 produto (qualquer card) ═══
+async function analyzeOportRow(productKey){
+  computeOportBase();
+  const r = _oportBaseData.find(x => x.product.key === productKey);
+  if(!r){ alert('Produto não encontrado.'); return; }
+  await _fetchOportTopML(r);
+  renderOportTop();
+  renderOportRare();
+  renderOportAll();
+}
+
+// Mantém compatibilidade com botões antigos
+async function analyzeOportTopOne(key){ return analyzeOportRow(key); }
+async function analyzeOportRareOne(key){ return analyzeOportRow(key); }
+
+// ═══ Análise em lote — top N de cada card ═══
+async function _analyzeBatch(items, statusElId, statusMsgElId, btnElId){
+  const status = document.getElementById(statusElId);
+  const statusMsg = document.getElementById(statusMsgElId);
+  const btn = document.getElementById(btnElId);
+  if(btn) btn.disabled = true;
+  if(status) status.style.display = 'block';
+
+  const aAnalisar = items.filter(r => !r.ml).slice(0, 20);
   if(aAnalisar.length === 0){
-    statusMsg.textContent = 'Todos os top 20 já foram analisados.';
-    setTimeout(() => { status.style.display = 'none'; btn.disabled = false; }, 1500);
+    if(statusMsg) statusMsg.textContent = 'Todos os top 20 já analisados.';
+    setTimeout(() => { if(status) status.style.display = 'none'; if(btn) btn.disabled = false; }, 1500);
     return;
   }
 
@@ -7970,24 +7936,92 @@ async function analyzeOportRare(){
   try {
     for(let i = 0; i < aAnalisar.length; i += batchSize){
       const batch = aAnalisar.slice(i, i + batchSize);
-      statusMsg.textContent = `Buscando no ML... ${done}/${aAnalisar.length}`;
-      renderOportRare();
+      if(statusMsg) statusMsg.textContent = `Buscando no ML... ${done}/${aAnalisar.length}`;
+      renderOportTop(); renderOportRare(); renderOportAll();
       await Promise.all(batch.map(r => _fetchOportTopML(r).catch(() => {})));
       done += batch.length;
       if(i + batchSize < aAnalisar.length){
         await new Promise(r => setTimeout(r, 300));
       }
     }
-    statusMsg.textContent = `✓ ${done} produto(s) analisados.`;
-    setTimeout(() => { status.style.display = 'none'; }, 2000);
+    if(statusMsg) statusMsg.textContent = `✓ ${done} produto(s) analisados.`;
+    setTimeout(() => { if(status) status.style.display = 'none'; }, 2000);
   } catch(e){
-    statusMsg.textContent = '❌ Erro: ' + e.message;
+    if(statusMsg) statusMsg.textContent = '❌ Erro: ' + e.message;
   } finally {
-    btn.disabled = false;
-    renderOportRare();
-    renderOportTop();  // sincroniza
+    if(btn) btn.disabled = false;
+    renderOportTop(); renderOportRare(); renderOportAll();
   }
 }
+
+async function analyzeOportTop(){
+  computeOportBase();
+  if(_oportBaseData.length === 0){ alert('Importe suas listas CIA primeiro.'); return; }
+  // Top 20 por storeCount (mais listas) que ainda não foram analisados
+  const candidates = [..._oportBaseData].sort((a, b) =>
+    b.product.storeCount - a.product.storeCount || b.lucroPct - a.lucroPct
+  );
+  await _analyzeBatch(candidates, 'oport-top-status', 'oport-top-status-msg', 'oport-top-btn');
+}
+
+async function analyzeOportRare(){
+  computeOportBase();
+  if(_oportBaseData.length === 0){ alert('Importe suas listas CIA primeiro.'); return; }
+  const maxLists = parseInt(document.getElementById('oport-rare-max-input')?.value) || 2;
+  // Top 20 dos que estão em poucas listas (foco do card)
+  const candidates = _oportBaseData
+    .filter(r => r.product.storeCount <= maxLists)
+    .sort((a, b) => a.product.storeCount - b.product.storeCount);
+  if(candidates.length === 0){ alert('Nenhum produto em poucas listas.'); return; }
+  await _analyzeBatch(candidates, 'oport-rare-status', 'oport-rare-status-msg', 'oport-rare-btn');
+}
+
+// Busca pública no ML pra UM produto e atualiza cache
+async function _fetchOportTopML(rec){
+  const p = rec.product;
+  const q = p.name.replace(/[^\w\sÀ-ÿ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if(!q) return;
+  try {
+    const url = `/sites/MLB/search?q=${encodeURIComponent(q)}&status=active&limit=30`;
+    const r = await proxyFetch(url);
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const items = (data?.results || []).filter(x => x.price > 0);
+    if(items.length === 0){
+      _oportTopMLCache.set(p.key, {
+        priceMed: 0, sellerCount: 0, listingsCount: 0,
+        activeWithSales: 0, totalSold: 0,
+        sampleListings: [], fitsMargin: false, empty: true,
+      });
+      return;
+    }
+    const prices = items.map(x => x.price).sort((a, b) => a - b);
+    const mid = Math.floor(prices.length / 2);
+    const priceMed = prices.length % 2 === 1
+      ? prices[mid]
+      : (prices[mid - 1] + prices[mid]) / 2;
+    const sellerCount = new Set(items.map(x => x.seller?.id).filter(Boolean)).size;
+    const itemsWithSales = items.filter(x => (x.sold_quantity || 0) > 0);
+    const activeWithSales = itemsWithSales.length;
+    const totalSold = itemsWithSales.reduce((s, x) => s + (x.sold_quantity || 0), 0);
+    const minMarg = parseFloat(cfg.minMargin) || 10;
+    const margemPotencial = ((priceMed - rec.custoTotal) / rec.custoTotal) * 100;
+    const fitsMargin = margemPotencial >= minMarg;
+    _oportTopMLCache.set(p.key, {
+      priceMed, sellerCount, listingsCount: items.length,
+      activeWithSales, totalSold,
+      sampleListings: items.slice(0, 5).map(x => ({
+        title: x.title, price: x.price, sold: x.sold_quantity,
+      })),
+      fitsMargin,
+      margemPotencial: Math.round(margemPotencial * 10) / 10,
+    });
+  } catch(e){
+    _oportTopMLCache.set(p.key, { error: e.message, fitsMargin: false });
+  }
+}
+
+
 
 function renderOport(){
   const filter      = document.getElementById('oport-filter')?.value || 'approved';
