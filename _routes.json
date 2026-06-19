@@ -5,7 +5,7 @@ export async function onRequest(context) {
   const { request } = context;
   const cors = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, x-version",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
   };
 
@@ -31,6 +31,9 @@ export async function onRequest(context) {
   };
   const auth = request.headers.get("authorization") || request.headers.get("Authorization");
   if (auth) mlHeaders["Authorization"] = auth;
+  // Repassa headers extras que o ML reconhece (x-version, x-locale etc.)
+  const xVersion = request.headers.get("x-version");
+  if (xVersion) mlHeaders["x-version"] = xVersion;
 
   const init = {
     method: request.method,
