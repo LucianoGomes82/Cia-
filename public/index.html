@@ -455,6 +455,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
       <div class="metric"><div class="mlabel">Em várias lojas</div><div class="mval p" id="m-m">0</div></div>
       <div class="metric"><div class="mlabel">Loja + barata</div><div class="mval g" style="font-size:14px;padding-top:6px" id="m-b">—</div></div>
       <div class="metric"><div class="mlabel">Mensagens lidas</div><div class="mval" style="font-size:18px;padding-top:4px" id="m-msg">—</div></div>
+      <div class="metric"><div class="mlabel">Última importação</div><div class="mval" style="font-size:13px;padding-top:6px;line-height:1.3" id="m-imp">—</div></div>
     </div>
 
     <div id="no-data-cmp" class="alert al-info">
@@ -643,6 +644,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <div><strong>N vendedor(es) · M anún.</strong> — quantos vendedores diferentes e total de anúncios</div>
             <div><button class="btn btn-sm" style="font-size:10px;padding:3px 8px;pointer-events:none">🔍</button> Botão pra analisar este produto no ML (busca pública)</div>
             <div><span style="color:var(--amber);font-size:11px">Sem anúncios</span> — busca pública não encontrou nada</div>
+            <div><span style="color:var(--red);font-size:11px">❌ Erro</span> — falha na busca (passe o mouse pra ver detalhes; tipos: <strong>Limite de buscas</strong>, <strong>Sem permissão</strong>, <strong>ML fora do ar</strong>, <strong>Sem internet</strong>). Use ↻ Tentar pra refazer.</div>
           </div>
         </div>
 
@@ -4186,8 +4188,15 @@ function applyState(s){
   const dl = document.getElementById('data-lbl');
   const nb = document.getElementById('new-upload-btn');
   if(dd) dd.className='dot ok';
-  const d = state.lastSync ? new Date(state.lastSync).toLocaleDateString('pt-BR') : '';
-  if(dl) dl.textContent = `${state.stores.length} lojas · ${d}`;
+  // Data + hora (HH:MM) no header global — antes só mostrava data
+  let dataHora = '';
+  if(state.lastSync){
+    const dt = new Date(state.lastSync);
+    const data = dt.toLocaleDateString('pt-BR');
+    const hora = dt.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
+    dataHora = `${data} ${hora}`;
+  }
+  if(dl) dl.textContent = `${state.stores.length} lojas · ${dataHora}`;
   if(nb) nb.style.display='inline-flex';
 
   // Renderiza tabela — usa setTimeout para garantir que o DOM está pronto
@@ -4207,6 +4216,31 @@ function updateMetrics(){
   document.getElementById('m-m').textContent   = multi;
   document.getElementById('m-b').textContent   = top ? top[0].split(' ')[0] : '—';
   document.getElementById('m-msg').textContent = state.totalMsgs||'—';
+  // Última importação — data e hora
+  const impEl = document.getElementById('m-imp');
+  if(impEl){
+    if(state.lastSync){
+      const d = new Date(state.lastSync);
+      const data = d.toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit' });
+      const hora = d.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
+      // Calcula "há quanto tempo"
+      const diffMs = Date.now() - d.getTime();
+      const diffMin = Math.floor(diffMs / 60000);
+      const diffH = Math.floor(diffMin / 60);
+      const diffD = Math.floor(diffH / 24);
+      let rel = '';
+      if(diffMin < 1)       rel = 'agora há pouco';
+      else if(diffMin < 60) rel = `há ${diffMin} min`;
+      else if(diffH < 24)   rel = `há ${diffH} h`;
+      else if(diffD < 30)   rel = `há ${diffD} dia${diffD>1?'s':''}`;
+      else                  rel = `há ${Math.floor(diffD/30)} mês(es)`;
+      // Cor do "há quanto tempo": verde se < 24h, âmbar se < 7 dias, cinza acima
+      const cor = diffH < 24 ? 'var(--green)' : diffD < 7 ? 'var(--amber)' : 'var(--text3)';
+      impEl.innerHTML = `<div>${data} ${hora}</div><div style="font-size:10px;color:${cor};margin-top:2px">${rel}</div>`;
+    } else {
+      impEl.textContent = '—';
+    }
+  }
 }
 
 // ── Pills ────────────────────────────────────────────────────────────────────
@@ -7708,6 +7742,20 @@ function computeOportBase(){
 
 // Renderiza UMA linha de produto pra qualquer um dos 3 cards.
 // Recebe o "rec" + posição + flags visuais (ex.: destacar como hot/multi)
+// Traduz erros técnicos em mensagens curtas e acionáveis pro usuário
+function _interpretMLError(errMsg){
+  if(!errMsg) return 'Erro';
+  const m = String(errMsg);
+  if(m.includes('429')) return 'Limite de buscas';
+  if(m.includes('401') || m.includes('403')) return 'Sem permissão';
+  if(m.includes('404')) return 'Não encontrado';
+  if(m.includes('500') || m.includes('502') || m.includes('503') || m.includes('504')) return 'ML fora do ar';
+  if(m.toLowerCase().includes('fetch') || m.toLowerCase().includes('network')) return 'Sem internet';
+  if(m.toLowerCase().includes('timeout')) return 'Tempo esgotado';
+  // Pra outros, mostra o início da mensagem
+  return m.length > 25 ? m.slice(0, 22) + '...' : m;
+}
+
 function _renderOportRow(rec, idx, opts = {}){
   const p = rec.product;
   const ml = rec.ml;
@@ -7730,7 +7778,11 @@ function _renderOportRow(rec, idx, opts = {}){
   // Célula ML
   const mlCell = ml
     ? (ml.error
-        ? `<span style="color:var(--red);font-size:11px">❌ Erro</span>`
+        ? `<div style="font-size:11px">
+            <div style="color:var(--red)" title="${escapeHTML(ml.error)}">❌ ${escapeHTML(_interpretMLError(ml.error))}</div>
+            <button class="btn btn-sm" onclick="analyzeOportRow('${escapeHTML(p.key)}')"
+              style="font-size:10px;padding:2px 6px;margin-top:3px" title="Buscar de novo">↻ Tentar</button>
+           </div>`
         : ml.empty
         ? `<span style="color:var(--amber);font-size:11px">Sem anúncios</span>`
         : `<div style="font-size:11px">
