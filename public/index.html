@@ -3159,7 +3159,7 @@ async function handleFile(file){
       setProgress(true, 'Processando mensagens...', `${lojas} lojas · ${prods} produtos encontrados`, 30 + pct*0.65);
       document.getElementById('ps-lojas').textContent = lojas;
       document.getElementById('ps-prods').textContent = prods;
-    });
+    }, file.name);
   }catch(e){
     setProgress(false);
     showAlert('al-err', `✕ Erro ao processar arquivo: ${e.message}<br><small style="opacity:.7">Verifique se é um arquivo exportado pelo WhatsApp (.txt ou .zip)</small>`);
@@ -3464,9 +3464,30 @@ function extractColors(text){
 
 // ── Verifica se uma linha é APENAS uma cor (sem produto) ─────────────────────
 function isColorOnlyLine(line){
-  // Linha de variação: começa com emoji-marcador (🚦➡♠) seguido de cor+preço ou só cor
-  const hasMarker = /^[🚦➡♠♦〽💠⬜⬛🟩🔷🔸▪▫◼◻✅]/u.test(line.trim());
-  if(hasMarker) return true;
+  const tLine = line.trim();
+  // Todos os emoji-marcadores são ambíguos: 🚦➡♠♦〽💠💥⬜⬛🟩🔷🔸▪▫◼◻✅
+  // Eles tanto podem indicar variação (cor) quanto produto novo, dependendo do
+  // contexto. Critério: marcador + texto CURTO sem palavras de produto = cor.
+  // Marcador + texto longo OU com palavra de produto = linha de produto.
+  const startsWithMarker = /^[🚦➡♠♦〽💠💥⬜⬛🟩🔷🔸▪▫◼◻✅⚫⚪🔴🟠🟡🟢🔵🟣🟤❤🧡💛💚💙💜🤎🖤🤍🩷🩶🩵]/u.test(tLine);
+  if(startsWithMarker){
+    // Remove emoji decorativo, bold (*), preço — sobra só o conteúdo textual.
+    const rest = stripEmoji(normalizeBold(tLine))
+      .replace(/(?:💰\s*|R\$\s?|RS\s?)\d[\d.,{}]*/gi,'')      // preço com {} ou sem
+      .replace(/[-—–]\s*\d{2,5}(?:[.,]\d{2,3})?\s*\$?\s*[*✅❌]?\s*$/,'')  // -2030$✅ no fim
+      .replace(/[*_{}]/g,'')                                    // remove bold/{}
+      .trim();
+    // Tem palavra de produto? → é PRODUTO, não cor.
+    const PRODUCT_WORDS = /\b(iphone|ipad|macbook|airpods|airtag|smart|tv|note|redmi|samsung|galaxy|xiaomi|poco|moto|motorola|tablet|ps5|ps4|xbox|nintendo|switch|quest|portal|console|cabo|carregador|bateria|fone|relógio|watch|pencil|smartwatch|drone|caixa\s*som|tws|earbuds|mouse|teclado|headset|microfone|adptador|adaptador|kindle|ebook|pendrive|hub|carregador|estojo|capa|case|amazfit|garmin|forerunner|ultra|pro|max|plus|mini|magsafe|mate|huawei|honor|realme|infinix|nokia|tcl|lg|hyper|kaidi|kd|jbl|sony|playstation)\b/i;
+    if(PRODUCT_WORDS.test(rest)) return false;
+    // Texto longo (>30 chars) com hífen-preço típico de produto inteiro → é PRODUTO.
+    // Ex: "♦️Suporte veicular automático com carregamento indutivo kd-206-42"
+    if(rest.length > 30 && /[-—–]\s*\d{2,5}\s*\$?\s*[*✅❌]?\s*$/.test(tLine)) return false;
+    // Tem código modelo (letras+números no meio do nome)?
+    if(/\b[A-Z]+\d+[A-Z]*\b/.test(rest) && rest.length > 12) return false;
+    // Caso contrário: curto, sem palavras de produto = cor.
+    return true;
+  }
 
   // Remove emojis, preço e marcadores — o que sobrar deve ser só cor
   const t = stripEmoji(normalizeBold(line))
@@ -3492,6 +3513,24 @@ function isJunkLine(line){
   if(!t || t.length < 2) return true;
   if(/^[-=*_•~◆◇○●■□▪▫]{3,}$/.test(t)) return true;
   if(/^loja\s*:/i.test(t)) return true;
+
+  // Cabeçalho de lista com data: "28.05.2026 📆〽️📍LOJA 255", "12.06.2026 Loja",
+  // "DATA 28/05/26" — linha começa com data (DD.MM.AAAA ou DD/MM/AA) e o restante
+  // é texto curto contendo "loja" ou só emojis/spec. Sem preço.
+  if(/^\d{1,2}[\.\/]\d{1,2}[\.\/]\d{2,4}\b/.test(stripEmoji(t).trim())
+     && !/💰|R\$|-\s*\d{3,5}\s*\$?\s*[✅❌]?\s*$|\d{2,5}\s*\$/i.test(t)){
+    return true;
+  }
+  if(/^data\s+\d{1,2}[\.\/]\d{1,2}/i.test(stripEmoji(t))) return true;
+
+  // Itens numerados de instruções: "1-OBS:", "3-RETIRADA SOMENTE...", "6-NÃO EMITIMOS NOTA FISCAL"
+  // Padrão: número (1-99) + hífen + TEXTO LONGO (>15 chars) sem preço explícito
+  if(/^\d{1,2}\s*[-–]\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ]/.test(t)
+     && t.length > 15
+     && !/💰|R\$/.test(t)
+     && !/\$\s*\d|\d+\s*\$/.test(t)){  // sem "1200$" também
+    return true;
+  }
 
   // Linha de especificação técnica pura (ex: "128GB 5G")
   if(/^mod\b/i.test(stripEmoji(t)) && !/💰|R\$/i.test(t)) return true;
@@ -3963,7 +4002,7 @@ function parseWhatsAppMessages(raw){
   return messages;
 }
 
-function parseWhatsAppExport(raw, onProgress){
+function parseWhatsAppExport(raw, onProgress, fileName){
   const text = raw.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
   const lines = text.split('\n');
 
@@ -4006,6 +4045,27 @@ function parseWhatsAppExport(raw, onProgress){
   const senderStore = {};
   let parsed = 0;
 
+  // Fallback do nome da loja quando o body não tem "Loja: XXX" escrito.
+  // Muitos fornecedores mandam apenas "📱 LISTA ATUALIZADA..." sem o rótulo,
+  // então usamos o nome extraído do arquivo (ex: "Conversa com Hakim📲" → "Hakim📲")
+  // como nome inicial. O usuário pode renomear depois pelo pill.
+  let fallbackStoreName = null;
+  if(fileName && typeof extrairNomeFornecedorDoArquivo === 'function'){
+    const ext = extrairNomeFornecedorDoArquivo(fileName);
+    if(ext?.nome) fallbackStoreName = ext.nome;
+  }
+  // Heurística pra identificar mensagens que SÃO listas de produtos (vs. mensagens
+  // casuais). Critério: corpo com ≥ 8 ocorrências de preço (R$/💰/💰NN ou NN$/NN-).
+  // Cobre formatos comuns: "R$1200", "💰1200", "1200$", "produto-1200".
+  const isListMessage = (body) => {
+    const matches = [
+      ...(body.match(/(?:R\$|💰)\s*\d{2,5}/g) || []),
+      ...(body.match(/\b\d{2,5}\s*\$/g) || []),                 // "1200$"
+      ...(body.match(/[-—–]\s*\d{2,5}(?:[.,]\d{2})?\s*[*✅❌]?\s*$/mg) || []),  // "produto-1200" no fim de linha
+    ];
+    return matches.length >= 4;
+  };
+
   for(let i=0; i<messages.length; i++){
     const { sender, body } = messages[i];
     const senderNorm = normKey(sender);
@@ -4025,6 +4085,15 @@ function parseWhatsAppExport(raw, onProgress){
       parsed++;
     } else if(senderStore[senderNorm]){
       mergeProducts(storeMap[senderStore[senderNorm]], bodyLines);
+      parsed++;
+    } else if(fallbackStoreName && isListMessage(body)){
+      // Mensagem parece lista (muitos preços) e não tem "Loja:" — usa o nome do
+      // arquivo como nome da loja. Vincula o sender pra que mensagens futuras do
+      // mesmo remetente sejam atribuídas à mesma loja.
+      const storeKey = normKey(fallbackStoreName);
+      senderStore[senderNorm] = storeKey;
+      if(!storeMap[storeKey]) storeMap[storeKey] = { name: fallbackStoreName, products: [] };
+      mergeProducts(storeMap[storeKey], bodyLines);
       parsed++;
     }
 
@@ -4073,15 +4142,106 @@ function mergeProducts(storeObj, lines){
   // "-1250 cinza roxo" ou "-890" — preço negativo como continuação do produto anterior
   const DASH_PRICE   = /^-\s*\d{3,5}(?:[.,]\d{2})?(?:\s|$)/;
 
+  // Detecta linha de SEÇÃO/MARCA (ex: "♦️Nokia", "*Lista de iPads*", "♦️Cabos").
+  // Retorna o texto limpo, ou null se NÃO é seção.
+  // Critérios bem RESTRITIVOS pra evitar falsos positivos:
+  //   1. Começa com emoji marcador específico (♦️🔶🟦) OU bold (*texto*) puro
+  //   2. Texto curto (≤ 30 chars), 1-4 palavras
+  //   3. NÃO é cor conhecida (Preto, Branco, etc.)
+  //   4. NÃO começa com palavras de continuação (SEM, COM, GARANTIA, CONFIRA...)
+  //   5. NÃO tem preço, hífen-preço, nem palavra de produto comum
+  const detectSection = (lineRaw) => {
+    const t = lineRaw.trim();
+    if(!t) return null;
+
+    // Tem preço? Não é seção.
+    if(/💰|R\$|RS|\b\d{2,5}\s*\$/i.test(t)) return null;
+    if(/[-—–]\s*\d{2,5}(?:[.,]\d{2,3})?\s*[*✅❌]?\s*$/.test(t)) return null;
+
+    // Estratégia A: começa com bold puro (*texto*) — formato Estrela ("*Lista de iPads*")
+    const boldMatch = t.match(/^\*([^*]+)\*\s*[📲📱]?\s*$/);
+    let clean;
+    let strategy = null;
+    if(boldMatch){
+      clean = boldMatch[1].trim();
+      strategy = 'bold';
+    } else {
+      // Estratégia B: começa com marcador SECTION-friendly (♦🔶🟦🚀🔥📌)
+      // Não inclui emojis ambíguos como 📱⌚🖤 que aparecem em produtos também.
+      const sectionMarker = /^[♦🔶🟦🚀🔥📌🌟]/u;
+      if(!sectionMarker.test(t)) return null;
+      clean = stripLeadingDecoEmoji(stripBold(t))
+        .replace(/[*_]/g,'').replace(/^[-•·→]+\s*/,'').trim();
+      strategy = 'marker';
+    }
+
+    if(clean.length < 3 || clean.length > 30) return null;
+    if(clean.split(/\s+/).length > 4) return null;
+    if(/\d{2,}/.test(clean)) return null;   // sem números longos (modelos)
+
+    // Tira "Lista de", "Lista" prefixo
+    const listaMatch = clean.match(/^(?:Lista\s+(?:de\s+)?|Lista\s*:?\s*)(.+)$/i);
+    if(listaMatch) clean = listaMatch[1].trim();
+    if(clean.length < 2) return null;
+
+    // É nome de cor conhecida? Não é seção.
+    const cleanNorm = normKey(clean);
+    if(COLOR_WORDS.some(cw => cleanNorm === normKey(cw))) return null;
+
+    // Começa com palavra de continuação (observação, não categoria)?
+    if(/^(sem|com|para|de|do|da|na|no|em|garantia|confira|veja|atenção|importante|aviso|obs|preço|valor|chip|esim|leia)\b/i.test(clean)) return null;
+
+    // Cabeçalho da Hakim/MB SHOP: "LISTA APPLE LACRADO", "APARELHOS SWAP" etc.
+    // Esses são cabeçalhos GERAIS, não cabeçalhos de seção que vão prefixar produtos.
+    if(/\b(lista|aparelhos|atualizada|lacrad|importado|swap|original|semi novo)\b/i.test(cleanNorm)) return null;
+
+    return clean;
+  };
+
+  // Heurística: o nome do produto é "curto" e precisa de prefixo de seção?
+  // Vale quando começa com número/modelo curto (ex: "106 4g preto", "1 pack", "B311")
+  // ou só uma palavra curta sem palavra de produto clara.
+  const PRODUCT_KEYWORDS = /\b(iphone|ipad|macbook|airpods|airtag|samsung|galaxy|xiaomi|redmi|poco|moto|motorola|tablet|ps5|xbox|nintendo|switch|quest|portal|cabo|carregador|bateria|fone|relógio|watch|pencil|amazfit|garmin|huawei|honor|realme|infinix|nokia|tcl|lg|jbl|sony|playstation|kindle|smart|mouse|teclado|drone|caixa\s*som|hub|estojo|capa|case|microfone|adptador|adaptador)\b/i;
+  const isShortName = (name) => {
+    if(!name) return true;
+    if(PRODUCT_KEYWORDS.test(name)) return false;
+    // Começa com número ou modelo curto (≤4 chars antes do espaço)
+    if(/^\d/.test(name)) return true;
+    if(/^[A-Z]\d/.test(name)) return true;
+    // Total de chars baixo
+    if(name.length <= 12) return true;
+    return false;
+  };
+
   // Agrupa linhas em blocos considerando variantes (🚦/➡/💠) como extensão do bloco anterior
   const blocks = [];
   let current = [];
+  let currentSection = null;  // ex: "Nokia", "Apple Tag", "iPads" — vira prefixo
 
-  const flush = () => { if(current.length){ blocks.push([...current]); current = []; } };
+  // Cada bloco tem a seção que estava ativa quando foi criado, anexada como
+  // metadado pra ser usado depois no parse.
+  const flush = () => {
+    if(current.length){
+      blocks.push({ lines: [...current], section: currentSection });
+      current = [];
+    }
+  };
 
   for(const rawLine of lines){
     const t = normalizeBold(rawLine).trim();
     if(!t) continue;
+
+    // ── Detecta linha de SEÇÃO ANTES do isJunkLine ──
+    // Linhas como "♦️Nokia", "♦️Cabos" são marcadas como junk (palavra curta toda
+    // maiúscula sem dígito), mas elas são CABEÇALHOS DE SEÇÃO importantes — usadas
+    // pra prefixar nomes curtos dos produtos seguintes ("106 4G" → "Nokia 106 4G").
+    const section = detectSection(t);
+    if(section){
+      flush();
+      currentSection = section;
+      continue;
+    }
+
     if(isJunkLine(t)) continue;
 
     const isVariant    = VARIANT_LEAD.test(t);
@@ -4151,10 +4311,21 @@ function mergeProducts(storeObj, lines){
   }
   flush();
 
-  // Parseia cada bloco
-  for(const block of blocks){
-    const p = parseProductBlock(block);
+  // Parseia cada bloco; aplica prefixo de seção quando o nome do produto
+  // é curto/ambíguo (típico de listas que separam por marca no topo)
+  for(const blk of blocks){
+    const p = parseProductBlock(blk.lines);
     if(!p || p.name.length < 2) continue;
+
+    // Prefixa com a seção se o nome é curto e a seção não está já contida nele
+    if(blk.section && isShortName(p.name)){
+      const sectionNorm = normKey(blk.section);
+      const nameNorm = normKey(p.name);
+      if(!nameNorm.includes(sectionNorm)){
+        p.name = `${blk.section} ${p.name}`;
+      }
+    }
+
     const pk = normKey(p.name);
     const ex = storeObj.products.find(x => normKey(x.name) === pk);
     if(ex){
