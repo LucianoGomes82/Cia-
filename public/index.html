@@ -148,6 +148,27 @@ td.sc{text-align:center;border-left:1px solid rgba(255,255,255,.04)}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:rgba(255,255,255,.02)}
 
+/* ── Sticky: primeira coluna do Comparativo (Produto) fixa à esquerda ──
+   Permite rolar horizontalmente as colunas de loja sem perder o nome do produto.
+   Aplicado só na tabela do tab-comparar (escopo restrito pra não afetar outras tabelas). */
+#tab-comparar table th:first-child,
+#tab-comparar table td:first-child{
+  position:sticky;
+  left:0;
+  z-index:2;
+  background:var(--bg2);
+  box-shadow:2px 0 4px rgba(0,0,0,.15);
+}
+#tab-comparar table thead th:first-child{
+  background:var(--bg3);
+  z-index:3;
+}
+#tab-comparar table tr:hover td:first-child{
+  background:rgba(255,255,255,.02);
+  /* Sobrescreve o hover normal pra manter o efeito visual no sticky */
+  background-color:var(--bg2);
+}
+
 /* ── Price cells ──────────────────────────────────────── */
 .pcell{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:76px}
 .pval{font-family:'DM Mono',monospace;font-size:14px;font-weight:600}
@@ -313,6 +334,8 @@ input:focus,select:focus{border-color:var(--green)}
     <div class="top-stat"><span class="dot" id="data-dot"></span> <span id="data-lbl">Sem dados</span></div>
     <div class="top-stat"><span class="dot" id="ml-dot"></span> <span id="ml-lbl">ML: —</span></div>
     <button class="btn btn-sm" id="new-upload-btn" onclick="showUpload()" style="display:none">+ Nova importação</button>
+    <button class="btn btn-sm btn-p" id="add-list-btn" onclick="document.getElementById('add-list-input').click()" style="display:none" title="Adicionar uma lista nova SEM apagar o que já está importado. A nova lista precisa ser do mesmo dia das atuais.">+ Adicionar lista</button>
+    <input type="file" id="add-list-input" accept=".txt,.zip" style="display:none" onchange="handleFileAdd(this.files[0]); this.value=''">
   </div>
 </div>
 
@@ -2411,7 +2434,7 @@ function loadState(){
     console.error('[loadState] Erro:', e);
   }
 }
-function clearData(){ if(!confirm('Apagar todos os dados?')) return; localStorage.removeItem('cia_state'); state={stores:[],products:[],lastSync:null,totalMsgs:0,parsed:0}; updateMetrics(); document.getElementById('cmp-area').style.display='none'; document.getElementById('no-data-cmp').style.display='flex'; document.getElementById('data-dot').className='dot'; document.getElementById('data-lbl').textContent='Sem dados'; document.getElementById('new-upload-btn').style.display='none'; alert('Dados apagados.'); }
+function clearData(){ if(!confirm('Apagar todos os dados?')) return; localStorage.removeItem('cia_state'); state={stores:[],products:[],lastSync:null,totalMsgs:0,parsed:0}; updateMetrics(); document.getElementById('cmp-area').style.display='none'; document.getElementById('no-data-cmp').style.display='flex'; document.getElementById('data-dot').className='dot'; document.getElementById('data-lbl').textContent='Sem dados'; document.getElementById('new-upload-btn').style.display='none'; const ab=document.getElementById('add-list-btn'); if(ab) ab.style.display='none'; alert('Dados apagados.'); }
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
 function switchTab(id){
@@ -3183,6 +3206,10 @@ async function handleFile(file){
   }
 
   applyState(result);
+  // Salva também a data REAL da mensagem mais recente da lista (do .txt),
+  // pra permitir o "+ Adicionar lista" validar se a nova é do mesmo dia
+  const maxDate = _extrairDataUltimaListaWhatsApp(text);
+  if(maxDate) state._maxListDate = maxDate.toISOString();
   saveState();
 
   document.getElementById('upload-area').style.display = 'none';
@@ -3192,6 +3219,213 @@ async function handleFile(file){
 }
 
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HANDLEFILEADD — adiciona uma lista nova ao state existente, sem substituir.
+// Regras:
+//   1. Lê e parseia o arquivo igual ao handleFile
+//   2. Detecta a data REAL da mensagem-lista mais recente (não a data da importação)
+//   3. Compara com a data mais recente das mensagens das lojas atuais — se for
+//      de outro dia, REJEITA e avisa
+//   4. Pra cada loja nova: substitui se já existe, adiciona se nova
+//   5. Atualiza state.products (índice global) e re-renderiza
+// ═══════════════════════════════════════════════════════════════════════════
+async function handleFileAdd(file){
+  if(!file) return;
+
+  // Se o state está vazio, redireciona pro fluxo normal de importação
+  if(!state.stores?.length){
+    alert('Nenhuma lista importada ainda — use o botão "Importar" primeiro.');
+    return;
+  }
+
+  setProgress(true, 'Lendo arquivo...', 'Aguarde', 5);
+  let text = '';
+  try {
+    if(file.name.endsWith('.zip')){
+      const zip = await JSZip.loadAsync(file);
+      const chatFile = Object.values(zip.files).find(f => f.name.endsWith('.txt') && !f.dir);
+      if(!chatFile) throw new Error('Arquivo .txt não encontrado dentro do .zip');
+      text = await chatFile.async('string');
+    } else {
+      text = await file.text();
+    }
+  } catch(e){
+    setProgress(false);
+    alert('✕ Erro ao ler arquivo: ' + e.message);
+    return;
+  }
+
+  setProgress(true, 'Processando mensagens...', 'Identificando lojas e produtos', 30);
+  await sleep(50);
+
+  let result;
+  try {
+    result = parseWhatsAppExport(text, (pct, lojas, prods) => {
+      setProgress(true, 'Processando mensagens...', `${lojas} lojas · ${prods} produtos`, 30 + pct*0.5);
+    }, file.name);
+  } catch(e){
+    setProgress(false);
+    alert(`✕ Erro ao processar arquivo: ${e.message}`);
+    return;
+  }
+
+  if(!result.stores.length){
+    setProgress(false);
+    alert(`⚠ Nenhuma loja encontrada no arquivo. Verifique se é um export do WhatsApp.`);
+    return;
+  }
+
+  // Detecta a data da mensagem-lista mais recente no arquivo NOVO
+  const newDate = _extrairDataUltimaListaWhatsApp(text);
+  // Detecta a data mais recente das listas ATUAIS no state
+  // Usa state.lastSync ou data extraída por loja se disponível (futuro)
+  const currentMaxDate = state._maxListDate
+    ? new Date(state._maxListDate)
+    : (state.lastSync ? new Date(state.lastSync) : null);
+
+  if(currentMaxDate && newDate){
+    const newDay = newDate.toISOString().slice(0, 10);     // "YYYY-MM-DD"
+    const curDay = currentMaxDate.toISOString().slice(0, 10);
+    if(newDay !== curDay){
+      setProgress(false);
+      const newFmt = newDate.toLocaleDateString('pt-BR');
+      const curFmt = currentMaxDate.toLocaleDateString('pt-BR');
+      alert(
+        `✕ Lista de outro dia detectada.\n\n`+
+        `Lista nova é de ${newFmt}, mas suas listas atuais são de ${curFmt}.\n\n`+
+        `Pra adicionar listas, todas precisam ser do mesmo dia. Use "+ Nova importação" pra começar do zero.`);
+      return;
+    }
+  }
+
+  // Mescla — pra cada loja nova:
+  //   • Se já existe no state: remove suas offers das listagens atuais
+  //   • Adiciona as offers novas
+  setProgress(true, 'Mesclando dados...', 'Atualizando estado', 80);
+  await sleep(50);
+
+  const lojasNovas = result.stores.map(s => s.name);
+  const lojasSubstituidas = lojasNovas.filter(n =>
+    state.stores.some(s => s.name === n)
+  );
+  const lojasAdicionadas = lojasNovas.filter(n =>
+    !state.stores.some(s => s.name === n)
+  );
+
+  // 1. Tira as offers das lojas que serão substituídas
+  if(lojasSubstituidas.length){
+    const setSubst = new Set(lojasSubstituidas);
+    state.products = state.products.map(p => ({
+      ...p,
+      offers: p.offers.filter(o => !setSubst.has(o.store)),
+    }));
+    // Remove produtos que ficaram sem offers
+    state.products = state.products.filter(p => p.offers.length > 0);
+    // Remove as entradas dessas lojas em state.stores
+    state.stores = state.stores.filter(s => !setSubst.has(s.name));
+  }
+
+  // 2. Mescla as offers novas
+  // Cria índice por nome normalizado dos produtos atuais
+  const idx = {};
+  for(const p of state.products) idx[p.key] = p;
+
+  for(const newProd of result.products){
+    // newProd já vem com offers das novas lojas
+    const ex = idx[newProd.key];
+    if(ex){
+      // Mesma chave — junta offers
+      for(const o of newProd.offers) ex.offers.push(o);
+      // Atualiza colors (união) e specs
+      // (rebuild de minPrice/maxPrice/storeCount/dominantSpec abaixo)
+    } else {
+      state.products.push(newProd);
+      idx[newProd.key] = newProd;
+    }
+  }
+
+  // 3. Recalcula minPrice/maxPrice/storeCount/dominantSpec pra todos os produtos
+  for(const p of state.products){
+    const prices = p.offers.filter(o => o.price).map(o => o.price);
+    const specCounts = {};
+    p.offers.forEach(o => { if(o.spec) specCounts[o.spec] = (specCounts[o.spec]||0)+1; });
+    p.minPrice = prices.length ? Math.min(...prices) : null;
+    p.maxPrice = prices.length ? Math.max(...prices) : null;
+    p.storeCount = p.offers.length;
+    p.dominantSpec = Object.entries(specCounts).sort((a,b)=>b[1]-a[1])[0]?.[0] || null;
+  }
+  state.products.sort((a,b) => b.storeCount - a.storeCount || a.name.localeCompare(b.name,'pt-BR'));
+
+  // 4. Mescla state.stores
+  for(const s of result.stores) state.stores.push(s);
+  // Reatribui cores
+  state.stores.forEach((s, i) => { s.color = COLORS[i % COLORS.length]; });
+
+  // 5. Atualiza metadados
+  state.lastSync = new Date().toISOString();
+  if(newDate) state._maxListDate = newDate.toISOString();
+  state.totalMsgs = (state.totalMsgs || 0) + (result.totalMsgs || 0);
+
+  saveState();
+  applyState();
+
+  setProgress(false);
+
+  // Mensagem de sucesso
+  const partes = [];
+  if(lojasAdicionadas.length) partes.push(`${lojasAdicionadas.length} nova(s): ${lojasAdicionadas.join(', ')}`);
+  if(lojasSubstituidas.length) partes.push(`${lojasSubstituidas.length} atualizada(s): ${lojasSubstituidas.join(', ')}`);
+  showToast(`✓ Lista adicionada! ${partes.join(' · ')}`);
+}
+
+// Extrai a data da mensagem mais recente que parece ser uma lista de produtos.
+// Retorna um Date ou null. Usado pra validar "mesmo dia" no incremento de listas.
+function _extrairDataUltimaListaWhatsApp(text){
+  if(!text) return null;
+  const lines = text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n');
+  // Regex que reconhece data + hora no formato WhatsApp (várias variações)
+  // Ex: "28/05/2026 10:23 - +55 11 ...:" ou "[28/05/2026, 10:23:00] +55 ..."
+  const DATE_RXS = [
+    /^\[(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})[,\s]+(\d{1,2}:\d{2}(?::\d{2})?)\]/,
+    /^(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})[,\s]+(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?)\s*[-–]/,
+  ];
+
+  // Itera de trás pra frente buscando a última mensagem com 4+ preços (critério de lista)
+  let currentMsg = { date: null, body: '' };
+  const messages = [];
+  for(const line of lines){
+    let matched = null;
+    for(const rx of DATE_RXS){
+      const m = rx.exec(line);
+      if(m){ matched = m; break; }
+    }
+    if(matched){
+      if(currentMsg.date) messages.push(currentMsg);
+      currentMsg = { date: matched[1], body: line };
+    } else {
+      currentMsg.body += '\n' + line;
+    }
+  }
+  if(currentMsg.date) messages.push(currentMsg);
+
+  // Procura a última que tem cara de lista (4+ preços)
+  const priceRx = /(?:R\$|💰)\s*\d{2,5}|\b\d{2,5}\s*\$|[-—–]\s*\d{2,5}(?:[.,]\d{2})?\s*[*✅❌]?\s*$/mg;
+  for(let i = messages.length - 1; i >= 0; i--){
+    const matches = messages[i].body.match(priceRx) || [];
+    if(matches.length >= 4){
+      // Converte "DD/MM/AAAA" pra Date — usa formato BR
+      const parts = messages[i].date.split(/[\/\-.]/);
+      if(parts.length === 3){
+        let [d, mm, yy] = parts;
+        if(yy.length === 2) yy = '20' + yy;
+        const dt = new Date(`${yy}-${mm.padStart(2,'0')}-${d.padStart(2,'0')}T12:00:00`);
+        if(!isNaN(dt.getTime())) return dt;
+      }
+    }
+  }
+  return null;
+}
 
 function setProgress(show, title='', sub='', pct=0){
   const w = document.getElementById('progress-wrap');
@@ -4369,6 +4603,8 @@ function applyState(s){
   }
   if(dl) dl.textContent = `${state.stores.length} lojas · ${dataHora}`;
   if(nb) nb.style.display='inline-flex';
+  const ab = document.getElementById('add-list-btn');
+  if(ab) ab.style.display='inline-flex';
 
   // Renderiza tabela — usa setTimeout para garantir que o DOM está pronto
   // (necessário quando chamado via loadState() no carregamento da página)
@@ -4515,16 +4751,8 @@ function _doRenderTable(){
     return;
   }
 
-  tblHead.innerHTML = `<tr>
-    <th style="min-width:220px">Produto</th>
-    ${activeArr.map(s=>`<th class="sc" style="color:${storeClr[s.name]};min-width:130px">
-      <div style="display:flex;align-items:center;justify-content:center;gap:5px">
-        <div style="width:7px;height:7px;border-radius:50%;background:${storeClr[s.name]}"></div>${s.name}
-      </div></th>`).join('')}
-    <th style="min-width:90px">Menor</th>
-    <th style="min-width:70px">Lojas</th>
-  </tr>`;
-
+  // Filtra produtos PRIMEIRO (busca, multi/single/noprice) pra depois saber quais
+  // lojas têm ofertas-com-preço nos produtos visíveis
   let prods = state.products.filter(p=>{
     const vis = p.offers.filter(o=>active.has(o.store));
     if(!vis.length) return false;
@@ -4538,8 +4766,35 @@ function _doRenderTable(){
   if(sortMode==='alpha')  prods.sort((a,b)=>a.name.localeCompare(b.name,'pt-BR'));
   else if(sortMode==='price') prods.sort((a,b)=>(a.minPrice||999999)-(b.minPrice||999999));
 
+  // ── Esconde colunas de lojas sem oferta-com-preço entre os produtos visíveis ──
+  // A pílula da loja continua ativa (só esconde visualmente da tabela).
+  // Critério: a loja só aparece se ALGUM produto visível tem oferta com preço dela.
+  // Combina os 2 casos: loja sem oferta nenhuma + loja com ofertas mas todas sem preço.
+  let visibleStores = activeArr;
+  let hiddenStoresCount = 0;
+  if(prods.length > 0){
+    const storesWithPricedOffer = new Set();
+    for(const p of prods){
+      for(const o of p.offers){
+        if(active.has(o.store) && o.price) storesWithPricedOffer.add(o.store);
+      }
+    }
+    visibleStores = activeArr.filter(s => storesWithPricedOffer.has(s.name));
+    hiddenStoresCount = activeArr.length - visibleStores.length;
+  }
+
+  tblHead.innerHTML = `<tr>
+    <th style="min-width:220px">Produto${hiddenStoresCount > 0 ? ` <span style="font-size:10px;font-weight:400;color:var(--text3);text-transform:none;letter-spacing:0;margin-left:6px" title="Lojas ativas sem ofertas-com-preço entre os produtos visíveis foram ocultadas. Elas continuam ativas nas pílulas.">· ${hiddenStoresCount} loja(s) oculta(s)</span>` : ''}</th>
+    ${visibleStores.map(s=>`<th class="sc" style="color:${storeClr[s.name]};min-width:130px">
+      <div style="display:flex;align-items:center;justify-content:center;gap:5px">
+        <div style="width:7px;height:7px;border-radius:50%;background:${storeClr[s.name]}"></div>${s.name}
+      </div></th>`).join('')}
+    <th style="min-width:90px">Menor</th>
+    <th style="min-width:70px">Lojas</th>
+  </tr>`;
+
   if(!prods.length){
-    tblBody.innerHTML = `<tr><td colspan="${activeArr.length+3}" class="empty">Nenhum produto encontrado</td></tr>`;
+    tblBody.innerHTML = `<tr><td colspan="${visibleStores.length+3}" class="empty">Nenhum produto encontrado</td></tr>`;
     return;
   }
 
@@ -4550,7 +4805,7 @@ function _doRenderTable(){
 
   // Indicador de carregamento se lista for grande
   if(prods.length > CHUNK){
-    tblBody.innerHTML = `<tr><td colspan="${activeArr.length+3}" class="empty" id="tbl-loading">
+    tblBody.innerHTML = `<tr><td colspan="${visibleStores.length+3}" class="empty" id="tbl-loading">
       <span class="spinner"></span> Carregando ${prods.length} produtos...
     </td></tr>`;
   }
@@ -4567,7 +4822,7 @@ function _doRenderTable(){
     // Usa fragment para DOM insertion eficiente
     const frag = document.createDocumentFragment();
     const tmp  = document.createElement('tbody');
-    tmp.innerHTML = chunk.map(p => _buildRowHTML(p, activeArr)).join('');
+    tmp.innerHTML = chunk.map(p => _buildRowHTML(p, visibleStores)).join('');
     while(tmp.firstChild) frag.appendChild(tmp.firstChild);
     tblBody.appendChild(frag);
 
