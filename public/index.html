@@ -598,12 +598,12 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         <span style="font-size:11px;color:var(--text3)">Filtros:</span>
-        <button class="btn btn-sm" onclick="document.getElementById('oport-search').value='';searchOport()">Todos</button>
-        <button class="btn btn-sm" onclick="document.getElementById('oport-search').value='xiaomi';searchOport()">Xiaomi</button>
-        <button class="btn btn-sm" onclick="document.getElementById('oport-search').value='samsung';searchOport()">Samsung</button>
-        <button class="btn btn-sm" onclick="document.getElementById('oport-search').value='tablet';searchOport()">Tablets</button>
-        <button class="btn btn-sm" onclick="document.getElementById('oport-search').value='apple';searchOport()">Apple</button>
-        <button class="btn btn-sm" onclick="document.getElementById('oport-search').value='motorola';searchOport()">Motorola</button>
+        <button class="btn btn-sm oport-brand-chip" data-brand="all" onclick="setOportBrand('all')">Todos</button>
+        <button class="btn btn-sm oport-brand-chip" data-brand="Xiaomi" onclick="setOportBrand('Xiaomi')">Xiaomi</button>
+        <button class="btn btn-sm oport-brand-chip" data-brand="Samsung" onclick="setOportBrand('Samsung')">Samsung</button>
+        <button class="btn btn-sm oport-brand-chip" data-brand="Tablets" onclick="setOportBrand('Tablets')">Tablets</button>
+        <button class="btn btn-sm oport-brand-chip" data-brand="Apple" onclick="setOportBrand('Apple')">Apple</button>
+        <button class="btn btn-sm oport-brand-chip" data-brand="Motorola" onclick="setOportBrand('Motorola')">Motorola</button>
       </div>
     </div>
 
@@ -2467,7 +2467,11 @@ function switchTab(id){
   if(id==='perguntas') syncPerguntas();
   if(id==='tendencias') initTendencias();
   if(id==='financeiro') initFinanceiro();
-  if(id==='oport'){ renderOportTop(); renderOportRare(); renderOportAll(); }  // 3 cards
+  if(id==='oport'){
+    // Inicializa destaque visual dos chips de marca (Todos sai sublinhado por padrão)
+    if(typeof setOportBrand === 'function') setOportBrand(_oportSelectedBrand || 'all');
+    renderOportTop(); renderOportRare(); renderOportAll();
+  }  // 3 cards
   if(id==='config'){ renderAccountsList(); renderBlockedStates(); renderFornecedoresWA(); }
 }
 function showUpload(){ document.getElementById('upload-area').style.display='block'; document.getElementById('import-result').style.display='none'; switchTab('import'); }
@@ -8124,9 +8128,45 @@ let _oportBaseData = [];                // todos os produtos com métricas
 let _oportTopMLCache = new Map();       // key produto → dados de busca pública
 let _oportAllPage = 1;                  // página atual da Lista Completa
 const _oportAllPerPage = 20;            // 20 itens/página (mobile-friendly)
+let _oportSelectedBrand = 'all';        // marca selecionada nos chips (afeta 3 cards)
+
+// Define a marca selecionada e atualiza TODA a aba Oportunidades:
+//   1. Marca visual do chip ativo
+//   2. Campo de busca (atalho pra busca ML pública)
+//   3. Re-render dos 3 cards (Top, Raras, Lista Completa)
+//   4. Re-roda a busca CIA: "marca" no card de cima
+function setOportBrand(brand){
+  _oportSelectedBrand = brand || 'all';
+  // Atualiza destaque visual dos chips
+  document.querySelectorAll('.oport-brand-chip').forEach(chip => {
+    const isActive = chip.dataset.brand === _oportSelectedBrand;
+    chip.style.background = isActive ? 'var(--accent)' : '';
+    chip.style.color = isActive ? 'white' : '';
+    chip.style.borderColor = isActive ? 'var(--accent)' : '';
+    chip.style.fontWeight = isActive ? '700' : '';
+  });
+  // Atualiza o campo de busca pra usar o mesmo termo (compatibilidade com searchOport)
+  const searchEl = document.getElementById('oport-search');
+  if(searchEl){
+    if(_oportSelectedBrand === 'all'){
+      searchEl.value = '';
+    } else if(_oportSelectedBrand === 'Tablets'){
+      searchEl.value = 'tablet';
+    } else {
+      searchEl.value = _oportSelectedBrand.toLowerCase();
+    }
+  }
+  // Re-roda searchOport pro card de cima (CIA: marca) e re-renderiza os 3 cards
+  if(typeof searchOport === 'function') searchOport();
+  _oportAllPage = 1;  // volta pra primeira página da Lista Completa
+  if(typeof renderOportTop === 'function')  renderOportTop();
+  if(typeof renderOportRare === 'function') renderOportRare();
+  if(typeof renderOportAll === 'function')  renderOportAll();
+}
 
 // Calcula a base UMA vez — usada pelos 3 cards.
 // Inclui TODOS os produtos com minPrice > 0, sem exclusão.
+// Aplica filtro de marca selecionada (chips do topo) quando ativo.
 function computeOportBase(){
   if(!state.products?.length){ _oportBaseData = []; return; }
 
@@ -8144,8 +8184,24 @@ function computeOportBase(){
     }
   }
 
+  // Filtro de marca via chips do topo. Reusa detectBrand do filtro de marca antigo.
+  // Caso especial: "Tablets" não é marca — filtra produtos com palavras
+  // "tablet", "ipad", "pad" no nome.
+  const brandSel = _oportSelectedBrand;
+  const filterByBrand = (prod) => {
+    if(brandSel === 'all') return true;
+    if(brandSel === 'Tablets'){
+      return /\b(tablet|ipad|\bpad\s)\b/i.test(prod.name);
+    }
+    if(typeof detectBrand === 'function'){
+      return detectBrand(prod.name) === brandSel;
+    }
+    return true;
+  };
+
   _oportBaseData = state.products
     .filter(p => p.minPrice && p.minPrice > 0)
+    .filter(filterByBrand)
     .map(prod => {
       const custoCIA   = prod.minPrice;
       const custoTaxas = custoCIA * comissao + taxaFixa;
