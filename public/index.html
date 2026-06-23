@@ -8601,6 +8601,70 @@ async function _fetchOportTopML(rec){
 
 
 
+// ═══════════════════════════════════════════════════════════════════════════
+// detectBrand — identifica a MARCA canônica de um produto pelo nome.
+// Procura palavras-chave em qualquer posição do nome (não só a 1ª palavra)
+// e mapeia variações para um nome único. Suporta também sinônimos: "iPhone"
+// vira "Apple", "Redmi" vira "Xiaomi", "Galaxy" vira "Samsung", etc.
+// Retorna a marca como string ou 'Outros' se nada reconhecido.
+// ═══════════════════════════════════════════════════════════════════════════
+const _BRAND_PATTERNS = [
+  // Apple
+  { brand: 'Apple', re: /\b(iphone|ipad|ipod|macbook|imac|airpods?|airtag|apple\s*watch|magsafe|pencil|homepod)\b/i },
+  { brand: 'Apple', re: /\bapple\b/i },
+  // Samsung
+  { brand: 'Samsung', re: /\b(samsung|galaxy)\b/i },
+  // Xiaomi
+  { brand: 'Xiaomi', re: /\b(xiaomi|redmi|poco|mi\s*band|mi\s*note)\b/i },
+  // Motorola
+  { brand: 'Motorola', re: /\b(motorola|moto\s+[gez]|moto\s+edge|moto\s+\d)\b/i },
+  // Huawei / Honor
+  { brand: 'Huawei',  re: /\bhuawei\b/i },
+  { brand: 'Honor',   re: /\bhonor\b/i },
+  // Realme / Oppo / Vivo
+  { brand: 'Realme',  re: /\brealme\b/i },
+  { brand: 'Oppo',    re: /\boppo\b/i },
+  { brand: 'Vivo',    re: /\bvivo\b/i },
+  // Infinix, Tecno, ZTE
+  { brand: 'Infinix', re: /\binfinix\b/i },
+  { brand: 'Tecno',   re: /\btecno\b/i },
+  { brand: 'ZTE',     re: /\bzte\b/i },
+  // Nokia, TCL, LG, Sony
+  { brand: 'Nokia',   re: /\bnokia\b/i },
+  { brand: 'TCL',     re: /\btcl\b/i },
+  { brand: 'LG',      re: /\b(lg\s|^lg$)\b/i },
+  { brand: 'Sony',    re: /\b(sony|playstation|ps[345]|psp|psvita)\b/i },
+  // Microsoft / Xbox
+  { brand: 'Microsoft', re: /\b(xbox|microsoft|surface)\b/i },
+  // Nintendo
+  { brand: 'Nintendo',  re: /\b(nintendo|switch\s+(oled|lite)|3ds|wii)\b/i },
+  // JBL, Beats
+  { brand: 'JBL',     re: /\bjbl\b/i },
+  { brand: 'Beats',   re: /\bbeats\b/i },
+  // Amazfit, Garmin, Mi (smartwatches)
+  { brand: 'Amazfit', re: /\bamazfit\b/i },
+  { brand: 'Garmin',  re: /\bgarmin\b/i },
+  // Hyper / Kaidi / Outras
+  { brand: 'Hyper',   re: /\bhyper\b/i },
+  { brand: 'Kaidi',   re: /\bkaidi\b/i },
+  // Amazon
+  { brand: 'Amazon',  re: /\b(kindle|alexa|echo\s+(dot|pop|show))\b/i },
+];
+
+function detectBrand(name){
+  if(!name) return 'Outros';
+  // Tira emojis e caracteres invisíveis pra match mais robusto
+  const clean = name
+    .replace(/[\u200B-\u200D\uFE0F\u2060\u2061-\u2064\u206A-\u206F]/g, '')  // zero-width, joiner
+    .replace(/[\uD83C-\uDBFF\uDC00-\uDFFF]/g, ' ')                            // emojis surrogate
+    .replace(/[\u2600-\u27BF]/g, ' ')                                          // pictographs
+    .trim();
+  for(const { brand, re } of _BRAND_PATTERNS){
+    if(re.test(clean)) return brand;
+  }
+  return 'Outros';
+}
+
 function renderOport(){
   const filter      = document.getElementById('oport-filter')?.value || 'approved';
   const sortBy      = document.getElementById('oport-sort')?.value || 'margin_desc';
@@ -8609,19 +8673,24 @@ function renderOport(){
   const empty       = document.getElementById('oport-empty');
   if(!tbody) return;
 
-  // Popula opções de marca dinamicamente (primeira palavra do produto/título)
+  // Popula opções de marca dinamicamente usando detectBrand (marcas canônicas)
   const brandSelect = document.getElementById('oport-brand-filter');
   if(brandSelect && oportunidades.length > 0){
     const brandsSet = new Set();
     for(const o of oportunidades){
-      // Tenta pegar do match.product.name primeiro (mais confiável)
       const name = o._match?.product?.name || o.title || '';
-      const firstWord = name.trim().split(/\s+/)[0];
-      if(firstWord && firstWord.length > 1) brandsSet.add(firstWord);
+      const brand = detectBrand(name);
+      if(brand) brandsSet.add(brand);
     }
     const currentValue = brandSelect.value;
+    // "Outros" vai pro fim (não-marcas-reconhecidas)
+    const ordered = Array.from(brandsSet).sort((a, b) => {
+      if(a === 'Outros') return 1;
+      if(b === 'Outros') return -1;
+      return a.localeCompare(b, 'pt-BR');
+    });
     const opts = ['<option value="all">🏷 Todas as marcas</option>'];
-    for(const b of Array.from(brandsSet).sort()){
+    for(const b of ordered){
       opts.push(`<option value="${escapeHTML(b)}">🏷 ${escapeHTML(b)}</option>`);
     }
     brandSelect.innerHTML = opts.join('');
@@ -8630,11 +8699,11 @@ function renderOport(){
 
   let items = [...oportunidades];
 
-  // Filtro de marca
+  // Filtro de marca — usa MESMA lógica que populou o dropdown (detectBrand)
   if(brandFilter !== 'all'){
     items = items.filter(o => {
       const name = o._match?.product?.name || o.title || '';
-      return name.trim().split(/\s+/)[0] === brandFilter;
+      return detectBrand(name) === brandFilter;
     });
   }
 
