@@ -644,6 +644,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:6px 16px">
             <div><span style="background:rgba(96,165,250,.2);color:var(--blue);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">📋 Já anuncio</span> — produto já tem anúncio seu no ML (linha aparece apagada)</div>
             <div><span style="background:rgba(245,158,11,.2);color:var(--amber);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">🔥 Quente</span> — alta procura no ML (≥ mínimo de anúncios c/ vendas)</div>
+            <div><span style="background:rgba(62,207,142,.18);color:var(--green);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">💰 [Fornecedor]</span> — fornecedor com o MENOR preço entre suas listas pra este produto (passe o mouse pra ver o valor)</div>
           </div>
         </div>
 
@@ -8209,6 +8210,15 @@ function computeOportBase(){
       const precoSuger = Math.ceil(custoTotal * (1 + minMarg/100) / 5) * 5;
       const lucroRS    = precoSuger - custoTotal;
       const lucroPct   = (lucroRS / custoTotal) * 100;
+      // Fornecedor com o MENOR preço (igual ao minPrice). Se houver empate,
+      // pega o primeiro. offers vem do parser CIA, cada um com {store, price}.
+      let bestStore = null;
+      if(prod.offers?.length){
+        const winner = prod.offers
+          .filter(o => o.price && o.price === prod.minPrice)
+          .sort((a, b) => (a.store||'').localeCompare(b.store||'', 'pt-BR'))[0];
+        if(winner) bestStore = winner.store;
+      }
       return {
         product: prod,
         custoCIA, custoTaxas, custoTotal,
@@ -8217,6 +8227,7 @@ function computeOportBase(){
         lucroPct: Math.round(lucroPct * 10) / 10,
         aprovado: lucroPct >= minMarg,
         jaVende: jaAnunciados.has(prod.key),
+        bestStore,
         ml: _oportTopMLCache.get(prod.key) || null,
       };
     });
@@ -8293,10 +8304,11 @@ function _renderOportRow(rec, idx, opts = {}){
     ? `<span style="color:var(--amber);font-weight:600;font-size:11px" title="Margem CIA não cabe">⚠</span>`
     : `<span style="color:var(--text3);font-size:11px">—</span>`;
 
-  // Badges (já anuncio / hot / multi)
+  // Badges (já anuncio / hot / multi / melhor fornecedor)
   let badges = '';
   if(rec.jaVende) badges += `<span style="background:rgba(96,165,250,.2);color:var(--blue);padding:1px 5px;border-radius:3px;font-size:9px;margin-right:3px" title="Você já anuncia este produto">📋 Já anuncio</span>`;
   if(isHot && opts.highlightHot)  badges += `<span style="background:rgba(245,158,11,.2);color:var(--amber);padding:1px 5px;border-radius:3px;font-size:9px;margin-right:3px">🔥 Quente</span>`;
+  if(rec.bestStore) badges += `<span style="background:rgba(62,207,142,.18);color:var(--green);padding:1px 5px;border-radius:3px;font-size:9px;margin-right:3px;font-weight:600" title="Fornecedor com o menor preço para este produto: ${escapeHTML(rec.bestStore)} (R$ ${rec.custoCIA.toFixed(2)})">💰 ${escapeHTML(rec.bestStore)}</span>`;
 
   const mlLink = `https://lista.mercadolivre.com.br/${encodeURIComponent(p.name).replace(/%20/g,'-')}`;
 
