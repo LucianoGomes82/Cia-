@@ -1261,6 +1261,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <button class="btn btn-sm" onclick="diagnosticarVenda()" title="Investigar dados de uma venda específica (debug)" style="font-size:11px">🔍 Debug</button>
             <button class="btn btn-sm" onclick="document.getElementById('vendas-import-file').click()" title="Importa XLSX de 2 formatos:&#10;• Planilha de vendas exportada do Mercado Livre (importa todas as vendas)&#10;• Planilha exportada por este app (atualiza apenas investimentos)" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📥 Importar XLSX</button>
             <input type="file" id="vendas-import-file" accept=".xlsx,.xls" style="display:none" onchange="importVendasFromXLSX(event)">
+            <button class="btn btn-sm" onclick="limparHistoricoXLSX()" title="Apaga TODAS as vendas que foram importadas via XLSX (planilhas do Mercado Livre). NÃO afeta vendas sincronizadas via API." style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🗑 Limpar histórico XLSX</button>
             <button class="btn btn-sm" onclick="openListaBloqueio()" title="Lista de compradores de estados bloqueados para você bloquear no Mercado Livre" style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🚫 Bloquear compradores</button>
             <button class="btn btn-sm" onclick="exportVendasXLSX()" title="Exportar planilha Excel com todas as vendas e investimentos">📤 Exportar XLSX</button>
             <button class="btn btn-sm" onclick="exportNFXLSX()" title="Gerar planilha no formato de NF emitidas para as vendas marcadas com checkbox" style="background:rgba(168,85,247,.15);color:var(--purple);border:1px solid var(--purple)">📋 Gerar XLSX para NF</button>
@@ -3451,8 +3452,16 @@ function setProgress(show, title='', sub='', pct=0){
 function normKey(s){
   let str = String(s).toLowerCase().normalize('NFD')
     .replace(/[\u0300-\u036f]/g,'')
-    .replace(/[^a-z0-9\s]/g,'')
+    // Substitui caracteres especiais por ESPAÇO (não remove). Isso preserva a
+    // separação de palavras quando há hífen/símbolo (ex: "Pencil Pro-690$" não
+    // vira "pencilpro690", e sim "pencil pro 690"). Crucial pro matchMLtoCIA.
+    .replace(/[^a-z0-9\s]/g,' ')
     .replace(/\s+/g,' ').trim();
+  // Junta "usb c" / "type c" / "tipo c" em token único: "usbc" / "typec" / "tipoc"
+  // pra cobrir variações comuns (USB-C, USB C, USB-c, USBc).
+  str = str.replace(/\busb\s+c\b/g, 'usbc');
+  str = str.replace(/\btype\s+c\b/g, 'typec');
+  str = str.replace(/\btipo\s+c\b/g, 'tipoc');
   // Separa rede (4g/5g/3g) de números colados: "5g1500" → "5g 1500", "4g128gb" → "4g 128gb"
   str = str.replace(/\b([2-6]g)(\d)/g, '$1 $2');
   // Separa número+gb/tb quando colado a outra palavra: "256gbpreto" → "256gb preto"
@@ -4913,7 +4922,14 @@ function matchMLtoCIA(mlTitle, debugMode = false){
   const NETWORK  = new Set(['4g','5g','3g','2g','6g']);
 
   const mlKey    = normKey(mlTitle);
-  const mlTokens = mlKey.split(' ').filter(w => !STOP.has(w) && !/^\d+[gt]b$/i.test(w) && (w.length >= 2 || /^\d+$/.test(w)));
+  // Números soltos de 3+ dígitos no nome geralmente são PREÇO contaminando o nome
+  // (vem do parser quando "Pencil Pro-690$" virou "pencil pro 690"). Filtramos.
+  // Exceção: códigos modelo curtos (≤ 2 dígitos: "13", "84") e storage com 'gb' (já tratados).
+  const isPriceNumber = (w) => /^\d{3,5}$/.test(w);
+  const mlTokens = mlKey.split(' ').filter(w =>
+    !STOP.has(w) && !/^\d+[gt]b$/i.test(w) && !isPriceNumber(w) &&
+    (w.length >= 2 || /^\d+$/.test(w))
+  );
   const mlNums   = mlKey.match(/\b\d+[a-z]?\b/g) || [];
   const mlGB     = (mlKey.match(/(\d+)gb/gi)||[]).map(s=>parseInt(s)).filter(n=>n>32);
 
@@ -4952,6 +4968,7 @@ function matchMLtoCIA(mlTitle, debugMode = false){
     const ciaTokens = ciaKey.split(' ').filter(w =>
       !STOP.has(w) &&
       !/^\d+[gt]b$/i.test(w) &&
+      !isPriceNumber(w) &&            // filtra preço solto contaminando nome
       (w.length >= 2 || /^\d+$/.test(w)) &&
       !(/^\d$/.test(w))
     );
@@ -12778,6 +12795,62 @@ async function forceReloadVendasViaAPI(){
     alert('Erro ao limpar cache: ' + e.message);
   }
 }
+
+async function limparHistoricoXLSX(){
+  // Confere quantos registros existem antes pra mostrar no diálogo
+  let count = 0;
+  try {
+    const meta = await getLastImportInfo();
+    if(meta?.count) count = meta.count;
+    if(!count){
+      // Fallback: conta diretamente no IndexedDB
+      const db = await openVendasDB();
+      count = await new Promise((resolve) => {
+        const tx = db.transaction(VENDAS_STORE, 'readonly');
+        const req = tx.objectStore(VENDAS_STORE).count();
+        req.onsuccess = () => resolve(req.result || 0);
+        req.onerror = () => resolve(0);
+      });
+    }
+  } catch {}
+
+  if(count === 0){
+    alert('Nenhuma venda importada via XLSX foi encontrada.');
+    return;
+  }
+
+  const msg =
+    `Você quer mesmo limpar as informações das vendas importadas via planilha?\n\n` +
+    `Vão ser apagadas ${count} venda(s) do histórico local.\n\n` +
+    `⚠ Atenção:\n` +
+    `• Vendas sincronizadas direto da API do ML NÃO serão afetadas\n` +
+    `• Vendas do XLSX serão re-importadas se você importar a planilha de novo\n` +
+    `• A ação não pode ser desfeita\n\n` +
+    `Continuar?`;
+  if(!confirm(msg)) return;
+
+  try {
+    // Limpa IndexedDB (vendas importadas via XLSX)
+    const db = await openVendasDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(VENDAS_STORE, 'readwrite');
+      tx.objectStore(VENDAS_STORE).clear();
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(new Error('Falha ao limpar IndexedDB'));
+    });
+    // Limpa caches em memória + metadata
+    vendasDataFull = null;
+    _vendasFullCacheTime = 0;
+    localStorage.removeItem('cia_vendas_import_meta');
+    // Re-renderiza a tela atual de Vendas pra refletir
+    if(typeof renderVendas === 'function') renderVendas();
+    if(typeof syncVendas === 'function') await syncVendas(false);  // refaz só dos cards (via API)
+    showToast(`✓ Histórico XLSX limpo (${count} venda(s) removida(s) do cache local)`);
+  } catch(e){
+    alert('❌ Erro ao limpar histórico: ' + e.message);
+  }
+}
+
 
 async function getLastImportInfo(){
   try {
