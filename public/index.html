@@ -11035,11 +11035,46 @@ function setRetirada(orderId, socio, value){
 // "valor em risco de reclamação".
 function renderVendasResumo(items, filterTipo){
   const reais = items.filter(v => !v._isManual && !v._excludeFromFinancials);
+  const manuaisFiltrados = items.filter(v => v._isManual);
+
   const totalML   = reais.reduce((s, v) => s + (typeof v.totalLiquido === 'number' ? v.totalLiquido : (v.total || 0)), 0);
-  const invLuciano= reais.reduce((s, v) => s + (getInvestimento(v.id, 'luciano') || 0), 0);
-  const invJohnny = reais.reduce((s, v) => s + (getInvestimento(v.id, 'johnny')  || 0), 0);
-  const lucro     = reais.reduce((s, v) => s + calcLucroVenda(v), 0);
+  // Investido em vendas reais
+  const invVendasLuciano = reais.reduce((s, v) => s + (getInvestimento(v.id, 'luciano') || 0), 0);
+  const invVendasJohnny  = reais.reduce((s, v) => s + (getInvestimento(v.id, 'johnny')  || 0), 0);
+
+  // Inclui aportes/retiradas manuais por sócio (mesma lógica dos cards de cima)
+  // pra consistência visual: invLiqLuciano = invVendas + aportes - retiradas
+  let aportesLuciano = 0, aportesJohnny = 0;
+  let retiradasLuciano = 0, retiradasJohnny = 0;
+  let totalReceitasManual = 0, totalDespesasManual = 0;
+  for(const m of manuaisFiltrados){
+    if(m.tipo === 'aporte'){
+      aportesLuciano  += (m.valorLuciano || 0);
+      aportesJohnny   += (m.valorJohnny  || 0);
+    } else if(m.tipo === 'retirada'){
+      retiradasLuciano += (m.valorLuciano || 0);
+      retiradasJohnny  += (m.valorJohnny  || 0);
+    } else if(m.tipo === 'receita'){
+      totalReceitasManual += (m.valorLuciano || 0) + (m.valorJohnny || 0);
+    } else if(m.tipo === 'despesa'){
+      totalDespesasManual += (m.valorLuciano || 0) + (m.valorJohnny || 0);
+    }
+  }
+
+  const invLuciano = invVendasLuciano + aportesLuciano - retiradasLuciano;
+  const invJohnny  = invVendasJohnny  + aportesJohnny  - retiradasJohnny;
+
+  // Lucro = (Total ML + Receitas avulsas) - investimento em vendas - Despesas
+  // OBS: aportes/retiradas NÃO afetam lucro (são fluxos de capital)
+  const lucroVendas = reais.reduce((s, v) => s + calcLucroVenda(v), 0);
+  const lucro       = lucroVendas + totalReceitasManual - totalDespesasManual;
   const ehCG = filterTipo === 'compra_garantida';
+
+  // Hint dinâmico: mostra se inclui lançamentos manuais
+  const temManuais = manuaisFiltrados.length > 0;
+  const hintInv = temManuais
+    ? `Em vendas + aportes − retiradas`
+    : `Capital aplicado em vendas`;
 
   const cards = [
     {
@@ -11048,9 +11083,14 @@ function renderVendasResumo(items, filterTipo){
       color: ehCG ? 'var(--amber)' : 'var(--blue)',
       hint: ehCG ? `${reais.length} vendas na janela de 30 dias` : `${reais.length} vendas`,
     },
-    { label: 'Investido (Luciano)', val: invLuciano, color: 'var(--purple)', hint: 'Capital aplicado' },
-    { label: 'Investido (Johnny)',  val: invJohnny,  color: 'var(--purple)', hint: 'Capital aplicado' },
-    { label: 'Lucro',               val: lucro,      color: lucro >= 0 ? 'var(--green)' : 'var(--red)', hint: 'Total ML − investimentos' },
+    { label: 'Investido (Luciano)', val: invLuciano, color: 'var(--purple)', hint: hintInv },
+    { label: 'Investido (Johnny)',  val: invJohnny,  color: 'var(--purple)', hint: hintInv },
+    {
+      label: 'Lucro',
+      val: lucro,
+      color: lucro >= 0 ? 'var(--green)' : 'var(--red)',
+      hint: temManuais ? 'Total ML + receitas − vendas − despesas' : 'Total ML − investimentos'
+    },
   ];
 
   return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px">
@@ -14255,8 +14295,11 @@ function renderVendas(){
   // Escolhe dataset: cards usa vendasData (200 mais recentes), planilha usa vendasDataFull (histórico completo)
   let rawData = (_vendasView === 'planilha' && vendasDataFull) ? vendasDataFull : vendasData;
 
-  // Na visão Planilha, mescla com lançamentos manuais (aportes, retiradas, despesas)
-  if(_vendasView === 'planilha' && lancamentosManuais.length > 0){
+  // Mescla com lançamentos manuais (aportes, retiradas, despesas, receitas) — em AMBAS as visões.
+  // Antes (v72-): só na Planilha. Isso causava INCONSISTÊNCIA entre cards superior (que usam
+  // outra função e SEMPRE incluem manuais) e cards inferior (que usam estes items filtrados).
+  // Agora cards de baixo refletem o mesmo "universo" dos de cima.
+  if(lancamentosManuais.length > 0){
     rawData = [...rawData, ...lancamentosManuais];
   }
 
@@ -14471,6 +14514,48 @@ function renderVendas(){
   setEl('vendas-total',       String(total));
   setEl('vendas-ticket',      fmtBRL(ticket));
 
+  // ── Alerta de SUSPEITA: lançamentos manuais com valores muito grandes ──
+  // Se aportes ou retiradas individuais ultrapassam 10x o investimento em vendas, ou
+  // se o invLiquido fica negativo em mais de R$ 100k, provavelmente tem "sujeira"
+  // (lançamento importado/duplicado, sinal trocado, valor errado).
+  // Mostra banner clicável que abre o gerenciador de lançamentos pra investigar.
+  const suspeitaLuciano = (Math.abs(retiradasLuciano) > Math.max(100000, totalInvLuciano * 10))
+                       || (Math.abs(aportesLuciano)   > Math.max(100000, totalInvLuciano * 10))
+                       || (invLiqLuciano < -100000);
+  const suspeitaJohnny  = (Math.abs(retiradasJohnny) > Math.max(100000, totalInvJohnny * 10))
+                       || (Math.abs(aportesJohnny)   > Math.max(100000, totalInvJohnny * 10))
+                       || (invLiqJohnny < -100000);
+  let suspeitaBanner = document.getElementById('vendas-suspeita-banner');
+  if(suspeitaLuciano || suspeitaJohnny){
+    if(!suspeitaBanner){
+      // Cria o banner se não existe ainda — depois dos cards superiores
+      const metricsRow2 = document.querySelector('#vendas-content .metrics:nth-of-type(2)');
+      if(metricsRow2){
+        suspeitaBanner = document.createElement('div');
+        suspeitaBanner.id = 'vendas-suspeita-banner';
+        suspeitaBanner.style.cssText = 'margin:8px 0;padding:10px 14px;background:rgba(245,158,11,.1);border:1px solid var(--amber);border-left:4px solid var(--amber);border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap';
+        suspeitaBanner.onclick = () => openGerenciarLancamentos();
+        metricsRow2.insertAdjacentElement('afterend', suspeitaBanner);
+      }
+    }
+    if(suspeitaBanner){
+      const detalhes = [];
+      if(suspeitaLuciano) detalhes.push(`Luciano: retiradas ${fmtBRL(retiradasLuciano)} · aportes ${fmtBRL(aportesLuciano)}`);
+      if(suspeitaJohnny)  detalhes.push(`Johnny: retiradas ${fmtBRL(retiradasJohnny)} · aportes ${fmtBRL(aportesJohnny)}`);
+      suspeitaBanner.innerHTML = `
+        <div style="flex:1;min-width:240px">
+          <div style="font-size:12px;font-weight:700;color:var(--amber)">⚠ Valores suspeitos detectados nos lançamentos manuais</div>
+          <div style="font-size:10px;color:var(--text2);margin-top:3px">${detalhes.join(' · ')}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:3px">Os cards principais (cima) podem mostrar números muito diferentes dos cards de filtro (baixo). Clique pra investigar.</div>
+        </div>
+        <button class="btn btn-sm" style="background:var(--amber);color:#fff;font-size:11px;padding:6px 12px;border:0">🔍 Abrir lançamentos</button>
+      `;
+      suspeitaBanner.style.display = 'flex';
+    }
+  } else if(suspeitaBanner){
+    suspeitaBanner.style.display = 'none';
+  }
+
   // Tooltip explicativo nas métricas (atualizado dinamicamente)
   const setTitle = (id, title) => { const el = document.getElementById(id)?.parentElement; if(el) el.title = title; };
   setTitle('vendas-inv-luciano',
@@ -14556,7 +14641,7 @@ function renderVendas(){
       <button class="btn btn-p btn-sm" onclick="printLabelsBulk()" style="font-size:11px;padding:5px 10px">🖨 Imprimir etiquetas</button>
     </div>`;
 
-  const cards = items.map(v => {
+  const cards = items.filter(v => !v._isManual).map(v => {
     const dt = v.date_created ? new Date(v.date_created).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
     const buyerName = (v.buyer.firstName + ' ' + v.buyer.lastName).trim() || v.buyer.nickname || '—';
     const thumb = v.firstItem.thumbnail || v.firstItem.thumb || '';
