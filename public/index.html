@@ -1262,6 +1262,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <button class="btn btn-sm" onclick="document.getElementById('vendas-import-file').click()" title="Importa XLSX de 2 formatos:&#10;• Planilha de vendas exportada do Mercado Livre (importa todas as vendas)&#10;• Planilha exportada por este app (atualiza apenas investimentos)" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📥 Importar XLSX</button>
             <input type="file" id="vendas-import-file" accept=".xlsx,.xls" style="display:none" onchange="importVendasFromXLSX(event)">
             <button class="btn btn-sm" onclick="limparHistoricoXLSX()" title="Apaga TODAS as vendas que foram importadas via XLSX (planilhas do Mercado Livre). NÃO afeta vendas sincronizadas via API." style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🗑 Limpar histórico XLSX</button>
+            <button class="btn btn-sm" onclick="limparInvestimentosVendas()" title="Apaga o valor INVESTIDO de cada venda (coluna Investido Luciano/Johnny da Planilha). Não apaga as vendas em si, apenas zera os valores. NÃO afeta lançamentos manuais (aportes/retiradas) — esses ficam no botão 'Lançamentos'." style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">💸 Limpar investimentos</button>
             <button class="btn btn-sm" onclick="openListaBloqueio()" title="Lista de compradores de estados bloqueados para você bloquear no Mercado Livre" style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🚫 Bloquear compradores</button>
             <button class="btn btn-sm" onclick="exportVendasXLSX()" title="Exportar planilha Excel com todas as vendas e investimentos">📤 Exportar XLSX</button>
             <button class="btn btn-sm" onclick="exportNFXLSX()" title="Gerar planilha no formato de NF emitidas para as vendas marcadas com checkbox" style="background:rgba(168,85,247,.15);color:var(--purple);border:1px solid var(--purple)">📋 Gerar XLSX para NF</button>
@@ -12891,6 +12892,59 @@ async function limparHistoricoXLSX(){
   }
 }
 
+
+// Apaga todos os investimentos por venda (coluna Investido Luciano/Johnny da Planilha).
+// Localização: localStorage.cia_investimentos (estrutura: {orderId: {luciano: X, johnny: Y}})
+// Importante: NÃO mexe em lançamentos manuais (IndexedDB MANUAL_STORE) — esses são outro caminho.
+async function limparInvestimentosVendas(){
+  // Conta quantas vendas têm investimento cadastrado
+  loadInvestimentos();
+  const orderIds = Object.keys(investimentosVendas);
+  let countComValor = 0;
+  let totalLuciano = 0, totalJohnny = 0;
+  for(const oid of orderIds){
+    const inv = investimentosVendas[oid];
+    const l = parseFloat(inv?.luciano) || 0;
+    const j = parseFloat(inv?.johnny)  || 0;
+    if(l > 0 || j > 0) countComValor++;
+    totalLuciano += l;
+    totalJohnny  += j;
+  }
+
+  if(countComValor === 0){
+    alert('Nenhum investimento por venda foi encontrado.');
+    return;
+  }
+
+  const msg =
+    `Apagar TODOS os valores de "Investido (Luciano)" e "Investido (Johnny)" das vendas?\n\n` +
+    `Vão ser zerados ${countComValor} valor(es) de investimento:\n` +
+    `• Total Luciano: ${fmtBRL(totalLuciano)}\n` +
+    `• Total Johnny:  ${fmtBRL(totalJohnny)}\n\n` +
+    `⚠ Atenção:\n` +
+    `• As vendas em si NÃO serão apagadas — apenas o valor da coluna "Investido"\n` +
+    `• Lançamentos manuais (aportes/retiradas) NÃO são afetados — use o botão "📋 Lançamentos"\n` +
+    `• Você poderá lançar novos valores manualmente na coluna Investido da Planilha\n` +
+    `• A ação não pode ser desfeita\n\n` +
+    `Continuar?`;
+  if(!confirm(msg)) return;
+
+  // Confirmação dupla pra valor alto
+  if(totalLuciano + totalJohnny > 10000){
+    if(!confirm(`⚠ Tem certeza? Vai apagar ${fmtBRL(totalLuciano + totalJohnny)} em investimentos.`)) return;
+  }
+
+  try {
+    // Limpa localStorage
+    investimentosVendas = {};
+    saveInvestimentos();
+    // Re-renderiza
+    if(typeof renderVendas === 'function') renderVendas();
+    showToast(`✓ ${countComValor} investimento(s) zerado(s)`);
+  } catch(e){
+    alert('❌ Erro ao limpar investimentos: ' + e.message);
+  }
+}
 
 async function getLastImportInfo(){
   try {
