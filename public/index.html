@@ -598,12 +598,12 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         <span style="font-size:11px;color:var(--text3)">Filtros:</span>
-        <button class="btn btn-sm oport-brand-chip" data-brand="all" onclick="setOportBrand('all')">Todos</button>
-        <button class="btn btn-sm oport-brand-chip" data-brand="Xiaomi" onclick="setOportBrand('Xiaomi')">Xiaomi</button>
-        <button class="btn btn-sm oport-brand-chip" data-brand="Samsung" onclick="setOportBrand('Samsung')">Samsung</button>
-        <button class="btn btn-sm oport-brand-chip" data-brand="Tablets" onclick="setOportBrand('Tablets')">Tablets</button>
-        <button class="btn btn-sm oport-brand-chip" data-brand="Apple" onclick="setOportBrand('Apple')">Apple</button>
-        <button class="btn btn-sm oport-brand-chip" data-brand="Motorola" onclick="setOportBrand('Motorola')">Motorola</button>
+        <button class="btn btn-sm" onclick="document.getElementById('oport-search').value='';searchOport()">Todos</button>
+        <button class="btn btn-sm" onclick="document.getElementById('oport-search').value='xiaomi';searchOport()">Xiaomi</button>
+        <button class="btn btn-sm" onclick="document.getElementById('oport-search').value='samsung';searchOport()">Samsung</button>
+        <button class="btn btn-sm" onclick="document.getElementById('oport-search').value='tablet';searchOport()">Tablets</button>
+        <button class="btn btn-sm" onclick="document.getElementById('oport-search').value='apple';searchOport()">Apple</button>
+        <button class="btn btn-sm" onclick="document.getElementById('oport-search').value='motorola';searchOport()">Motorola</button>
       </div>
     </div>
 
@@ -644,7 +644,6 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:6px 16px">
             <div><span style="background:rgba(96,165,250,.2);color:var(--blue);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">📋 Já anuncio</span> — produto já tem anúncio seu no ML (linha aparece apagada)</div>
             <div><span style="background:rgba(245,158,11,.2);color:var(--amber);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">🔥 Quente</span> — alta procura no ML (≥ mínimo de anúncios c/ vendas)</div>
-            <div><span style="background:rgba(62,207,142,.18);color:var(--green);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">💰 [Fornecedor]</span> — fornecedor com o MENOR preço entre suas listas pra este produto (passe o mouse pra ver o valor)</div>
           </div>
         </div>
 
@@ -1261,8 +1260,6 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <button class="btn btn-sm" onclick="diagnosticarVenda()" title="Investigar dados de uma venda específica (debug)" style="font-size:11px">🔍 Debug</button>
             <button class="btn btn-sm" onclick="document.getElementById('vendas-import-file').click()" title="Importa XLSX de 2 formatos:&#10;• Planilha de vendas exportada do Mercado Livre (importa todas as vendas)&#10;• Planilha exportada por este app (atualiza apenas investimentos)" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📥 Importar XLSX</button>
             <input type="file" id="vendas-import-file" accept=".xlsx,.xls" style="display:none" onchange="importVendasFromXLSX(event)">
-            <button class="btn btn-sm" onclick="limparHistoricoXLSX()" title="Apaga TODAS as vendas que foram importadas via XLSX (planilhas do Mercado Livre). NÃO afeta vendas sincronizadas via API." style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🗑 Limpar histórico XLSX</button>
-            <button class="btn btn-sm" onclick="limparInvestimentosVendas()" title="Apaga o valor INVESTIDO de cada venda (coluna Investido Luciano/Johnny da Planilha). Não apaga as vendas em si, apenas zera os valores. NÃO afeta lançamentos manuais (aportes/retiradas) — esses ficam no botão 'Lançamentos'." style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">💸 Limpar investimentos</button>
             <button class="btn btn-sm" onclick="openListaBloqueio()" title="Lista de compradores de estados bloqueados para você bloquear no Mercado Livre" style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🚫 Bloquear compradores</button>
             <button class="btn btn-sm" onclick="exportVendasXLSX()" title="Exportar planilha Excel com todas as vendas e investimentos">📤 Exportar XLSX</button>
             <button class="btn btn-sm" onclick="exportNFXLSX()" title="Gerar planilha no formato de NF emitidas para as vendas marcadas com checkbox" style="background:rgba(168,85,247,.15);color:var(--purple);border:1px solid var(--purple)">📋 Gerar XLSX para NF</button>
@@ -2470,11 +2467,7 @@ function switchTab(id){
   if(id==='perguntas') syncPerguntas();
   if(id==='tendencias') initTendencias();
   if(id==='financeiro') initFinanceiro();
-  if(id==='oport'){
-    // Inicializa destaque visual dos chips de marca (Todos sai sublinhado por padrão)
-    if(typeof setOportBrand === 'function') setOportBrand(_oportSelectedBrand || 'all');
-    renderOportTop(); renderOportRare(); renderOportAll();
-  }  // 3 cards
+  if(id==='oport'){ renderOportTop(); renderOportRare(); renderOportAll(); }  // 3 cards
   if(id==='config'){ renderAccountsList(); renderBlockedStates(); renderFornecedoresWA(); }
 }
 function showUpload(){ document.getElementById('upload-area').style.display='block'; document.getElementById('import-result').style.display='none'; switchTab('import'); }
@@ -3453,16 +3446,8 @@ function setProgress(show, title='', sub='', pct=0){
 function normKey(s){
   let str = String(s).toLowerCase().normalize('NFD')
     .replace(/[\u0300-\u036f]/g,'')
-    // Substitui caracteres especiais por ESPAÇO (não remove). Isso preserva a
-    // separação de palavras quando há hífen/símbolo (ex: "Pencil Pro-690$" não
-    // vira "pencilpro690", e sim "pencil pro 690"). Crucial pro matchMLtoCIA.
-    .replace(/[^a-z0-9\s]/g,' ')
+    .replace(/[^a-z0-9\s]/g,'')
     .replace(/\s+/g,' ').trim();
-  // Junta "usb c" / "type c" / "tipo c" em token único: "usbc" / "typec" / "tipoc"
-  // pra cobrir variações comuns (USB-C, USB C, USB-c, USBc).
-  str = str.replace(/\busb\s+c\b/g, 'usbc');
-  str = str.replace(/\btype\s+c\b/g, 'typec');
-  str = str.replace(/\btipo\s+c\b/g, 'tipoc');
   // Separa rede (4g/5g/3g) de números colados: "5g1500" → "5g 1500", "4g128gb" → "4g 128gb"
   str = str.replace(/\b([2-6]g)(\d)/g, '$1 $2');
   // Separa número+gb/tb quando colado a outra palavra: "256gbpreto" → "256gb preto"
@@ -4923,14 +4908,7 @@ function matchMLtoCIA(mlTitle, debugMode = false){
   const NETWORK  = new Set(['4g','5g','3g','2g','6g']);
 
   const mlKey    = normKey(mlTitle);
-  // Números soltos de 3+ dígitos no nome geralmente são PREÇO contaminando o nome
-  // (vem do parser quando "Pencil Pro-690$" virou "pencil pro 690"). Filtramos.
-  // Exceção: códigos modelo curtos (≤ 2 dígitos: "13", "84") e storage com 'gb' (já tratados).
-  const isPriceNumber = (w) => /^\d{3,5}$/.test(w);
-  const mlTokens = mlKey.split(' ').filter(w =>
-    !STOP.has(w) && !/^\d+[gt]b$/i.test(w) && !isPriceNumber(w) &&
-    (w.length >= 2 || /^\d+$/.test(w))
-  );
+  const mlTokens = mlKey.split(' ').filter(w => !STOP.has(w) && !/^\d+[gt]b$/i.test(w) && (w.length >= 2 || /^\d+$/.test(w)));
   const mlNums   = mlKey.match(/\b\d+[a-z]?\b/g) || [];
   const mlGB     = (mlKey.match(/(\d+)gb/gi)||[]).map(s=>parseInt(s)).filter(n=>n>32);
 
@@ -4969,7 +4947,6 @@ function matchMLtoCIA(mlTitle, debugMode = false){
     const ciaTokens = ciaKey.split(' ').filter(w =>
       !STOP.has(w) &&
       !/^\d+[gt]b$/i.test(w) &&
-      !isPriceNumber(w) &&            // filtra preço solto contaminando nome
       (w.length >= 2 || /^\d+$/.test(w)) &&
       !(/^\d$/.test(w))
     );
@@ -8147,45 +8124,9 @@ let _oportBaseData = [];                // todos os produtos com métricas
 let _oportTopMLCache = new Map();       // key produto → dados de busca pública
 let _oportAllPage = 1;                  // página atual da Lista Completa
 const _oportAllPerPage = 20;            // 20 itens/página (mobile-friendly)
-let _oportSelectedBrand = 'all';        // marca selecionada nos chips (afeta 3 cards)
-
-// Define a marca selecionada e atualiza TODA a aba Oportunidades:
-//   1. Marca visual do chip ativo
-//   2. Campo de busca (atalho pra busca ML pública)
-//   3. Re-render dos 3 cards (Top, Raras, Lista Completa)
-//   4. Re-roda a busca CIA: "marca" no card de cima
-function setOportBrand(brand){
-  _oportSelectedBrand = brand || 'all';
-  // Atualiza destaque visual dos chips
-  document.querySelectorAll('.oport-brand-chip').forEach(chip => {
-    const isActive = chip.dataset.brand === _oportSelectedBrand;
-    chip.style.background = isActive ? 'var(--accent)' : '';
-    chip.style.color = isActive ? 'white' : '';
-    chip.style.borderColor = isActive ? 'var(--accent)' : '';
-    chip.style.fontWeight = isActive ? '700' : '';
-  });
-  // Atualiza o campo de busca pra usar o mesmo termo (compatibilidade com searchOport)
-  const searchEl = document.getElementById('oport-search');
-  if(searchEl){
-    if(_oportSelectedBrand === 'all'){
-      searchEl.value = '';
-    } else if(_oportSelectedBrand === 'Tablets'){
-      searchEl.value = 'tablet';
-    } else {
-      searchEl.value = _oportSelectedBrand.toLowerCase();
-    }
-  }
-  // Re-roda searchOport pro card de cima (CIA: marca) e re-renderiza os 3 cards
-  if(typeof searchOport === 'function') searchOport();
-  _oportAllPage = 1;  // volta pra primeira página da Lista Completa
-  if(typeof renderOportTop === 'function')  renderOportTop();
-  if(typeof renderOportRare === 'function') renderOportRare();
-  if(typeof renderOportAll === 'function')  renderOportAll();
-}
 
 // Calcula a base UMA vez — usada pelos 3 cards.
 // Inclui TODOS os produtos com minPrice > 0, sem exclusão.
-// Aplica filtro de marca selecionada (chips do topo) quando ativo.
 function computeOportBase(){
   if(!state.products?.length){ _oportBaseData = []; return; }
 
@@ -8203,24 +8144,8 @@ function computeOportBase(){
     }
   }
 
-  // Filtro de marca via chips do topo. Reusa detectBrand do filtro de marca antigo.
-  // Caso especial: "Tablets" não é marca — filtra produtos com palavras
-  // "tablet", "ipad", "pad" no nome.
-  const brandSel = _oportSelectedBrand;
-  const filterByBrand = (prod) => {
-    if(brandSel === 'all') return true;
-    if(brandSel === 'Tablets'){
-      return /\b(tablet|ipad|\bpad\s)\b/i.test(prod.name);
-    }
-    if(typeof detectBrand === 'function'){
-      return detectBrand(prod.name) === brandSel;
-    }
-    return true;
-  };
-
   _oportBaseData = state.products
     .filter(p => p.minPrice && p.minPrice > 0)
-    .filter(filterByBrand)
     .map(prod => {
       const custoCIA   = prod.minPrice;
       const custoTaxas = custoCIA * comissao + taxaFixa;
@@ -8228,15 +8153,6 @@ function computeOportBase(){
       const precoSuger = Math.ceil(custoTotal * (1 + minMarg/100) / 5) * 5;
       const lucroRS    = precoSuger - custoTotal;
       const lucroPct   = (lucroRS / custoTotal) * 100;
-      // Fornecedor com o MENOR preço (igual ao minPrice). Se houver empate,
-      // pega o primeiro. offers vem do parser CIA, cada um com {store, price}.
-      let bestStore = null;
-      if(prod.offers?.length){
-        const winner = prod.offers
-          .filter(o => o.price && o.price === prod.minPrice)
-          .sort((a, b) => (a.store||'').localeCompare(b.store||'', 'pt-BR'))[0];
-        if(winner) bestStore = winner.store;
-      }
       return {
         product: prod,
         custoCIA, custoTaxas, custoTotal,
@@ -8245,7 +8161,6 @@ function computeOportBase(){
         lucroPct: Math.round(lucroPct * 10) / 10,
         aprovado: lucroPct >= minMarg,
         jaVende: jaAnunciados.has(prod.key),
-        bestStore,
         ml: _oportTopMLCache.get(prod.key) || null,
       };
     });
@@ -8322,11 +8237,10 @@ function _renderOportRow(rec, idx, opts = {}){
     ? `<span style="color:var(--amber);font-weight:600;font-size:11px" title="Margem CIA não cabe">⚠</span>`
     : `<span style="color:var(--text3);font-size:11px">—</span>`;
 
-  // Badges (já anuncio / hot / multi / melhor fornecedor)
+  // Badges (já anuncio / hot / multi)
   let badges = '';
   if(rec.jaVende) badges += `<span style="background:rgba(96,165,250,.2);color:var(--blue);padding:1px 5px;border-radius:3px;font-size:9px;margin-right:3px" title="Você já anuncia este produto">📋 Já anuncio</span>`;
   if(isHot && opts.highlightHot)  badges += `<span style="background:rgba(245,158,11,.2);color:var(--amber);padding:1px 5px;border-radius:3px;font-size:9px;margin-right:3px">🔥 Quente</span>`;
-  if(rec.bestStore) badges += `<span style="background:rgba(62,207,142,.18);color:var(--green);padding:1px 5px;border-radius:3px;font-size:9px;margin-right:3px;font-weight:600" title="Fornecedor com o menor preço para este produto: ${escapeHTML(rec.bestStore)} (R$ ${rec.custoCIA.toFixed(2)})">💰 ${escapeHTML(rec.bestStore)}</span>`;
 
   const mlLink = `https://lista.mercadolivre.com.br/${encodeURIComponent(p.name).replace(/%20/g,'-')}`;
 
@@ -11036,46 +10950,11 @@ function setRetirada(orderId, socio, value){
 // "valor em risco de reclamação".
 function renderVendasResumo(items, filterTipo){
   const reais = items.filter(v => !v._isManual && !v._excludeFromFinancials);
-  const manuaisFiltrados = items.filter(v => v._isManual);
-
   const totalML   = reais.reduce((s, v) => s + (typeof v.totalLiquido === 'number' ? v.totalLiquido : (v.total || 0)), 0);
-  // Investido em vendas reais
-  const invVendasLuciano = reais.reduce((s, v) => s + (getInvestimento(v.id, 'luciano') || 0), 0);
-  const invVendasJohnny  = reais.reduce((s, v) => s + (getInvestimento(v.id, 'johnny')  || 0), 0);
-
-  // Inclui aportes/retiradas manuais por sócio (mesma lógica dos cards de cima)
-  // pra consistência visual: invLiqLuciano = invVendas + aportes - retiradas
-  let aportesLuciano = 0, aportesJohnny = 0;
-  let retiradasLuciano = 0, retiradasJohnny = 0;
-  let totalReceitasManual = 0, totalDespesasManual = 0;
-  for(const m of manuaisFiltrados){
-    if(m.tipo === 'aporte'){
-      aportesLuciano  += (m.valorLuciano || 0);
-      aportesJohnny   += (m.valorJohnny  || 0);
-    } else if(m.tipo === 'retirada'){
-      retiradasLuciano += (m.valorLuciano || 0);
-      retiradasJohnny  += (m.valorJohnny  || 0);
-    } else if(m.tipo === 'receita'){
-      totalReceitasManual += (m.valorLuciano || 0) + (m.valorJohnny || 0);
-    } else if(m.tipo === 'despesa'){
-      totalDespesasManual += (m.valorLuciano || 0) + (m.valorJohnny || 0);
-    }
-  }
-
-  const invLuciano = invVendasLuciano + aportesLuciano - retiradasLuciano;
-  const invJohnny  = invVendasJohnny  + aportesJohnny  - retiradasJohnny;
-
-  // Lucro = (Total ML + Receitas avulsas) - investimento em vendas - Despesas
-  // OBS: aportes/retiradas NÃO afetam lucro (são fluxos de capital)
-  const lucroVendas = reais.reduce((s, v) => s + calcLucroVenda(v), 0);
-  const lucro       = lucroVendas + totalReceitasManual - totalDespesasManual;
+  const invLuciano= reais.reduce((s, v) => s + (getInvestimento(v.id, 'luciano') || 0), 0);
+  const invJohnny = reais.reduce((s, v) => s + (getInvestimento(v.id, 'johnny')  || 0), 0);
+  const lucro     = reais.reduce((s, v) => s + calcLucroVenda(v), 0);
   const ehCG = filterTipo === 'compra_garantida';
-
-  // Hint dinâmico: mostra se inclui lançamentos manuais
-  const temManuais = manuaisFiltrados.length > 0;
-  const hintInv = temManuais
-    ? `Em vendas + aportes − retiradas`
-    : `Capital aplicado em vendas`;
 
   const cards = [
     {
@@ -11084,14 +10963,9 @@ function renderVendasResumo(items, filterTipo){
       color: ehCG ? 'var(--amber)' : 'var(--blue)',
       hint: ehCG ? `${reais.length} vendas na janela de 30 dias` : `${reais.length} vendas`,
     },
-    { label: 'Investido (Luciano)', val: invLuciano, color: 'var(--purple)', hint: hintInv },
-    { label: 'Investido (Johnny)',  val: invJohnny,  color: 'var(--purple)', hint: hintInv },
-    {
-      label: 'Lucro',
-      val: lucro,
-      color: lucro >= 0 ? 'var(--green)' : 'var(--red)',
-      hint: temManuais ? 'Total ML + receitas − vendas − despesas' : 'Total ML − investimentos'
-    },
+    { label: 'Investido (Luciano)', val: invLuciano, color: 'var(--purple)', hint: 'Capital aplicado' },
+    { label: 'Investido (Johnny)',  val: invJohnny,  color: 'var(--purple)', hint: 'Capital aplicado' },
+    { label: 'Lucro',               val: lucro,      color: lucro >= 0 ? 'var(--green)' : 'var(--red)', hint: 'Total ML − investimentos' },
   ];
 
   return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px">
@@ -12837,115 +12711,6 @@ async function forceReloadVendasViaAPI(){
   }
 }
 
-async function limparHistoricoXLSX(){
-  // Confere quantos registros existem antes pra mostrar no diálogo
-  let count = 0;
-  try {
-    const meta = await getLastImportInfo();
-    if(meta?.count) count = meta.count;
-    if(!count){
-      // Fallback: conta diretamente no IndexedDB
-      const db = await openVendasDB();
-      count = await new Promise((resolve) => {
-        const tx = db.transaction(VENDAS_STORE, 'readonly');
-        const req = tx.objectStore(VENDAS_STORE).count();
-        req.onsuccess = () => resolve(req.result || 0);
-        req.onerror = () => resolve(0);
-      });
-    }
-  } catch {}
-
-  if(count === 0){
-    alert('Nenhuma venda importada via XLSX foi encontrada.');
-    return;
-  }
-
-  const msg =
-    `Você quer mesmo limpar as informações das vendas importadas via planilha?\n\n` +
-    `Vão ser apagadas ${count} venda(s) do histórico local.\n\n` +
-    `⚠ Atenção:\n` +
-    `• Vendas sincronizadas direto da API do ML NÃO serão afetadas\n` +
-    `• Vendas do XLSX serão re-importadas se você importar a planilha de novo\n` +
-    `• A ação não pode ser desfeita\n\n` +
-    `Continuar?`;
-  if(!confirm(msg)) return;
-
-  try {
-    // Limpa IndexedDB (vendas importadas via XLSX)
-    const db = await openVendasDB();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(VENDAS_STORE, 'readwrite');
-      tx.objectStore(VENDAS_STORE).clear();
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(new Error('Falha ao limpar IndexedDB'));
-    });
-    // Limpa caches em memória + metadata
-    vendasDataFull = null;
-    _vendasFullCacheTime = 0;
-    localStorage.removeItem('cia_vendas_import_meta');
-    // Re-renderiza a tela atual de Vendas pra refletir
-    if(typeof renderVendas === 'function') renderVendas();
-    if(typeof syncVendas === 'function') await syncVendas(false);  // refaz só dos cards (via API)
-    showToast(`✓ Histórico XLSX limpo (${count} venda(s) removida(s) do cache local)`);
-  } catch(e){
-    alert('❌ Erro ao limpar histórico: ' + e.message);
-  }
-}
-
-
-// Apaga todos os investimentos por venda (coluna Investido Luciano/Johnny da Planilha).
-// Localização: localStorage.cia_investimentos (estrutura: {orderId: {luciano: X, johnny: Y}})
-// Importante: NÃO mexe em lançamentos manuais (IndexedDB MANUAL_STORE) — esses são outro caminho.
-async function limparInvestimentosVendas(){
-  // Conta quantas vendas têm investimento cadastrado
-  loadInvestimentos();
-  const orderIds = Object.keys(investimentosVendas);
-  let countComValor = 0;
-  let totalLuciano = 0, totalJohnny = 0;
-  for(const oid of orderIds){
-    const inv = investimentosVendas[oid];
-    const l = parseFloat(inv?.luciano) || 0;
-    const j = parseFloat(inv?.johnny)  || 0;
-    if(l > 0 || j > 0) countComValor++;
-    totalLuciano += l;
-    totalJohnny  += j;
-  }
-
-  if(countComValor === 0){
-    alert('Nenhum investimento por venda foi encontrado.');
-    return;
-  }
-
-  const msg =
-    `Apagar TODOS os valores de "Investido (Luciano)" e "Investido (Johnny)" das vendas?\n\n` +
-    `Vão ser zerados ${countComValor} valor(es) de investimento:\n` +
-    `• Total Luciano: ${fmtBRL(totalLuciano)}\n` +
-    `• Total Johnny:  ${fmtBRL(totalJohnny)}\n\n` +
-    `⚠ Atenção:\n` +
-    `• As vendas em si NÃO serão apagadas — apenas o valor da coluna "Investido"\n` +
-    `• Lançamentos manuais (aportes/retiradas) NÃO são afetados — use o botão "📋 Lançamentos"\n` +
-    `• Você poderá lançar novos valores manualmente na coluna Investido da Planilha\n` +
-    `• A ação não pode ser desfeita\n\n` +
-    `Continuar?`;
-  if(!confirm(msg)) return;
-
-  // Confirmação dupla pra valor alto
-  if(totalLuciano + totalJohnny > 10000){
-    if(!confirm(`⚠ Tem certeza? Vai apagar ${fmtBRL(totalLuciano + totalJohnny)} em investimentos.`)) return;
-  }
-
-  try {
-    // Limpa localStorage
-    investimentosVendas = {};
-    saveInvestimentos();
-    // Re-renderiza
-    if(typeof renderVendas === 'function') renderVendas();
-    showToast(`✓ ${countComValor} investimento(s) zerado(s)`);
-  } catch(e){
-    alert('❌ Erro ao limpar investimentos: ' + e.message);
-  }
-}
-
 async function getLastImportInfo(){
   try {
     const meta = JSON.parse(localStorage.getItem('cia_vendas_import_meta') || 'null');
@@ -14349,11 +14114,8 @@ function renderVendas(){
   // Escolhe dataset: cards usa vendasData (200 mais recentes), planilha usa vendasDataFull (histórico completo)
   let rawData = (_vendasView === 'planilha' && vendasDataFull) ? vendasDataFull : vendasData;
 
-  // Mescla com lançamentos manuais (aportes, retiradas, despesas, receitas) — em AMBAS as visões.
-  // Antes (v72-): só na Planilha. Isso causava INCONSISTÊNCIA entre cards superior (que usam
-  // outra função e SEMPRE incluem manuais) e cards inferior (que usam estes items filtrados).
-  // Agora cards de baixo refletem o mesmo "universo" dos de cima.
-  if(lancamentosManuais.length > 0){
+  // Na visão Planilha, mescla com lançamentos manuais (aportes, retiradas, despesas)
+  if(_vendasView === 'planilha' && lancamentosManuais.length > 0){
     rawData = [...rawData, ...lancamentosManuais];
   }
 
@@ -14568,48 +14330,6 @@ function renderVendas(){
   setEl('vendas-total',       String(total));
   setEl('vendas-ticket',      fmtBRL(ticket));
 
-  // ── Alerta de SUSPEITA: lançamentos manuais com valores muito grandes ──
-  // Se aportes ou retiradas individuais ultrapassam 10x o investimento em vendas, ou
-  // se o invLiquido fica negativo em mais de R$ 100k, provavelmente tem "sujeira"
-  // (lançamento importado/duplicado, sinal trocado, valor errado).
-  // Mostra banner clicável que abre o gerenciador de lançamentos pra investigar.
-  const suspeitaLuciano = (Math.abs(retiradasLuciano) > Math.max(100000, totalInvLuciano * 10))
-                       || (Math.abs(aportesLuciano)   > Math.max(100000, totalInvLuciano * 10))
-                       || (invLiqLuciano < -100000);
-  const suspeitaJohnny  = (Math.abs(retiradasJohnny) > Math.max(100000, totalInvJohnny * 10))
-                       || (Math.abs(aportesJohnny)   > Math.max(100000, totalInvJohnny * 10))
-                       || (invLiqJohnny < -100000);
-  let suspeitaBanner = document.getElementById('vendas-suspeita-banner');
-  if(suspeitaLuciano || suspeitaJohnny){
-    if(!suspeitaBanner){
-      // Cria o banner se não existe ainda — depois dos cards superiores
-      const metricsRow2 = document.querySelector('#vendas-content .metrics:nth-of-type(2)');
-      if(metricsRow2){
-        suspeitaBanner = document.createElement('div');
-        suspeitaBanner.id = 'vendas-suspeita-banner';
-        suspeitaBanner.style.cssText = 'margin:8px 0;padding:10px 14px;background:rgba(245,158,11,.1);border:1px solid var(--amber);border-left:4px solid var(--amber);border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap';
-        suspeitaBanner.onclick = () => openGerenciarLancamentos();
-        metricsRow2.insertAdjacentElement('afterend', suspeitaBanner);
-      }
-    }
-    if(suspeitaBanner){
-      const detalhes = [];
-      if(suspeitaLuciano) detalhes.push(`Luciano: retiradas ${fmtBRL(retiradasLuciano)} · aportes ${fmtBRL(aportesLuciano)}`);
-      if(suspeitaJohnny)  detalhes.push(`Johnny: retiradas ${fmtBRL(retiradasJohnny)} · aportes ${fmtBRL(aportesJohnny)}`);
-      suspeitaBanner.innerHTML = `
-        <div style="flex:1;min-width:240px">
-          <div style="font-size:12px;font-weight:700;color:var(--amber)">⚠ Valores suspeitos detectados nos lançamentos manuais</div>
-          <div style="font-size:10px;color:var(--text2);margin-top:3px">${detalhes.join(' · ')}</div>
-          <div style="font-size:10px;color:var(--text3);margin-top:3px">Os cards principais (cima) podem mostrar números muito diferentes dos cards de filtro (baixo). Clique pra investigar.</div>
-        </div>
-        <button class="btn btn-sm" style="background:var(--amber);color:#fff;font-size:11px;padding:6px 12px;border:0">🔍 Abrir lançamentos</button>
-      `;
-      suspeitaBanner.style.display = 'flex';
-    }
-  } else if(suspeitaBanner){
-    suspeitaBanner.style.display = 'none';
-  }
-
   // Tooltip explicativo nas métricas (atualizado dinamicamente)
   const setTitle = (id, title) => { const el = document.getElementById(id)?.parentElement; if(el) el.title = title; };
   setTitle('vendas-inv-luciano',
@@ -14695,7 +14415,7 @@ function renderVendas(){
       <button class="btn btn-p btn-sm" onclick="printLabelsBulk()" style="font-size:11px;padding:5px 10px">🖨 Imprimir etiquetas</button>
     </div>`;
 
-  const cards = items.filter(v => !v._isManual).map(v => {
+  const cards = items.map(v => {
     const dt = v.date_created ? new Date(v.date_created).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
     const buyerName = (v.buyer.firstName + ' ' + v.buyer.lastName).trim() || v.buyer.nickname || '—';
     const thumb = v.firstItem.thumbnail || v.firstItem.thumb || '';
