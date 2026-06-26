@@ -1160,6 +1160,9 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
           <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--purple);margin-right:4px"></span>Match CIA encontrado</span>
         </div>
 
+        <!-- Banner de descarte (transparência) — quantas vendas foram filtradas e por quê -->
+        <div id="compras-descarte-banner" style="display:none"></div>
+
         <div style="overflow-x:auto">
           <table style="width:100%;border-collapse:collapse;font-size:13px">
             <thead>
@@ -10403,6 +10406,14 @@ async function syncCompras(force = false){
     const pedidosFiltrados = [];
     const blockedSet   = new Set((cfg.blockedStates || []).map(s => s.toUpperCase()));
     const blockedByState = {};
+    // Contadores de motivos de descarte — útil pra exibir contador no header
+    const descartadosPorMotivo = {
+      shipmentNull: 0,           // /shipments retornou null/erro
+      substatusDescartado: {},   // {handling: N, shipped: M, ...} — substatus fora de ready/printed
+    };
+    // Vendas filtradas no PRIMEIRO passe (antes de chamar shipments)
+    const semShipping = allOrders.filter(o => !o.shipping?.id).length;
+    const canceladas  = allOrders.filter(o => o.status === 'cancelled').length;
     let processed      = 0;
 
     if(!validOrders.length){
@@ -10424,9 +10435,14 @@ async function syncCompras(force = false){
         proxyFetch(`/shipments/${order.shipping.id}`)
           .then(r => r.ok ? r.json() : null)
           .then(ship => {
-            if(!ship) return null;
-            const sub = ship.substatus || '';
-            if(!['ready_to_print','printed'].includes(sub)) return null;
+            if(!ship) return { discarded: true, reason: 'shipmentNull' };
+            const sub = ship.substatus || '(sem substatus)';
+            // Aceita só "pronta pra imprimir" ou "impressa" — etiquetas em ação imediata.
+            // Outras (handling, shipped, in_transit, delivered etc.) significam que a venda
+            // já saiu do estágio onde precisamos comprar pra postar.
+            if(!['ready_to_print','printed'].includes(sub)){
+              return { discarded: true, reason: 'substatusDescartado', substatus: sub };
+            }
             const stateRaw = ship.receiver_address?.state?.id
                           || ship.receiver_address?.state?.name
                           || ship.receiver_address?.state
@@ -10437,11 +10453,21 @@ async function syncCompras(force = false){
             }
             return { order, shipment: ship, substatus: sub, uf };
           })
-          .catch(() => null)
+          .catch(() => ({ discarded: true, reason: 'shipmentNull' }))
       );
       const results = await Promise.all(promises);
       for(const r of results){
         if(!r) continue;
+        if(r.discarded){
+          if(r.reason === 'shipmentNull'){
+            descartadosPorMotivo.shipmentNull++;
+          } else if(r.reason === 'substatusDescartado'){
+            const s = r.substatus || '(sem substatus)';
+            descartadosPorMotivo.substatusDescartado[s] =
+              (descartadosPorMotivo.substatusDescartado[s] || 0) + 1;
+          }
+          continue;
+        }
         if(r.blocked){
           if(!blockedByState[r.uf]) blockedByState[r.uf] = { total: 0, substatus: {} };
           blockedByState[r.uf].total += 1;
@@ -10572,6 +10598,13 @@ async function syncCompras(force = false){
       itens:            itensComprar,
       unidades:         totalComprar,
       custo:            totalCusto,
+      // Diagnóstico de filtragem (transparência): conta tudo que foi descartado
+      totalApiOrders:   allOrders.length,       // total bruto da API
+      semShipping:      semShipping,             // sem logística → invisível
+      canceladas:       canceladas,              // status=cancelled
+      shipmentNull:     descartadosPorMotivo.shipmentNull,   // /shipments falhou
+      substatusDescartado: descartadosPorMotivo.substatusDescartado,  // {handling: N, shipped: M, ...}
+      estadosBloqueados: Object.entries(blockedByState).reduce((sum,[_,v]) => sum + v.total, 0),
     };
     // Guarda o helper para ser usado no render
     window._getBestCIAPrice = getBestCIAPrice;
@@ -10661,7 +10694,7 @@ function applyComprasMetrics(){
   }
   document.getElementById('compras-sub').innerHTML = subText;
 
-  // Banner de bloqueados
+  // Banner de bloqueados — populado se há estados bloqueados nesse sync
   const blockBanner = document.getElementById('compras-blocked-banner');
   if(blockBanner){
     if(blockedTotalLocal > 0){
@@ -10682,6 +10715,65 @@ function applyComprasMetrics(){
       `;
     } else {
       blockBanner.style.display = 'none';
+    }
+  }
+
+  // Banner de descarte por substatus (transparência) — mostra QUANTAS vendas foram
+  // filtradas e POR QUE, pra você saber se sua "Lista de Compras" está completa.
+  // Critério: a aba só mostra etiquetas Pronta/Impressa. Vendas em manuseio, já enviadas,
+  // em trânsito etc. ficam fora — esse banner explica isso.
+  const SUBSTATUS_LABELS = {
+    'handling':           'Em manuseio',
+    'ready_to_ship':      'Pronta pra enviar',
+    'shipped':            'Já enviada',
+    'in_transit':         'Em trânsito',
+    'out_for_delivery':   'Saiu pra entrega',
+    'delivered':          'Entregue',
+    'returning_to_sender':'Retornando',
+    'returned':           'Devolvida',
+    'not_delivered':      'Não entregue',
+    'waiting_for_withdrawal':'Aguardando retirada',
+    'measures_ok':        'Pendente medidas',
+    'cancelled':          'Cancelada',
+    '(sem substatus)':    'Sem substatus',
+  };
+  const descBanner = document.getElementById('compras-descarte-banner');
+  if(descBanner){
+    const substatusEntries = Object.entries(m.substatusDescartado || {})
+      .sort((a,b) => b[1] - a[1]);
+    const totalDescartadoSub = substatusEntries.reduce((s,[,n]) => s + n, 0);
+    const outrosDescartes = (m.shipmentNull || 0) + (m.semShipping || 0);
+
+    if(totalDescartadoSub > 0 || outrosDescartes > 0){
+      const lista = substatusEntries
+        .map(([sub, n]) => `<strong>${SUBSTATUS_LABELS[sub] || sub}:</strong> ${n}`)
+        .join(' · ');
+      const extra = [];
+      if(m.semShipping)  extra.push(`<strong>Sem logística:</strong> ${m.semShipping}`);
+      if(m.shipmentNull) extra.push(`<strong>Erro na busca:</strong> ${m.shipmentNull}`);
+      const totalGeral = totalDescartadoSub + outrosDescartes;
+
+      descBanner.style.display = 'block';
+      descBanner.innerHTML = `
+        <div style="margin-bottom:12px;padding:10px 14px;background:rgba(96,165,250,.08);border:1px solid var(--blue);border-radius:8px">
+          <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
+            <span style="font-size:16px">ℹ️</span>
+            <div style="flex:1;min-width:240px">
+              <div style="font-size:13px;font-weight:600;color:var(--blue)">
+                ${totalGeral} venda${totalGeral>1?'s':''} de ${m.totalApiOrders || '?'} pagas não entregues não entraram na Lista de Compras
+              </div>
+              <div style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.6">
+                ${lista}${extra.length ? ' · ' + extra.join(' · ') : ''}
+              </div>
+              <div style="font-size:10px;color:var(--text3);margin-top:5px;font-style:italic">
+                A Lista de Compras mostra só etiquetas <strong>Pronta</strong> ou <strong>Impressa</strong> — as outras já foram enviadas ou ainda estão sendo processadas.
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else {
+      descBanner.style.display = 'none';
     }
   }
 }
