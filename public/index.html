@@ -539,6 +539,8 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
               <option value="warn">Atenção</option>
               <option value="matched">Cruzados CIA</option>
               <option value="margin">Com margem</option>
+              <option value="negative">📉 Margem negativa</option>
+              <option value="below_min">⚠ Abaixo do mínimo</option>
             </select>
             <button class="btn btn-sm" onclick="syncML()" title="Sincronizar">↻ Atualizar</button>
           </div>
@@ -5235,12 +5237,18 @@ function renderMLList(){
   if(!tbody) return;
 
   // Filtra
+  const minMarg = parseFloat(cfg.minMargin) || 10;
   let items = mlItems.filter(item => {
     if(q && !item.title.toLowerCase().includes(q)) return false;
     if(f === 'danger')  return item._risk === 'danger';
     if(f === 'warn')    return item._risk === 'warn';
     if(f === 'matched') return !!item._match;
     if(f === 'margin')  return item._margin !== null;
+    // Margem negativa: anúncios vendendo no PREJUÍZO
+    if(f === 'negative') return item._margin !== null && item._margin < 0;
+    // Abaixo do mínimo: margens positivas porém abaixo de minMargin
+    // (não inclui as negativas — pra essas há filtro próprio)
+    if(f === 'below_min') return item._margin !== null && item._marginPct < minMarg;
     return true;
   });
 
@@ -5433,8 +5441,44 @@ function renderMLList(){
         </div>
         ${stockBar}
       </td>
-      <td style="padding:10px;text-align:center;vertical-align:middle;font-family:'DM Mono',monospace;font-weight:700;font-size:14px">
-        R$${(item.price||0).toFixed(2).replace('.',',')}
+      <td style="padding:10px;text-align:center;vertical-align:middle">
+        ${(() => {
+          // Cores: verde quando margem >= mínimo, vermelho quando abaixo (inclui negativa)
+          // Sugestão: precoSugerido = custoTotal * (1 + minMargin/100), arredondado pra +5 reais
+          const minM = parseFloat(cfg.minMargin) || 10;
+          const precoAtual = item.price || 0;
+          let cor = 'var(--text)';
+          let abaixo = false;
+          let sugestao = null;
+          if(item._margin !== null && item._custoTotal){
+            if(item._marginPct >= minM){
+              cor = 'var(--green)';
+            } else {
+              cor = 'var(--red)';
+              abaixo = true;
+              // Arredonda preço sugerido pra cima, múltiplo de 5
+              const bruto = item._custoTotal * (1 + minM/100);
+              sugestao = Math.ceil(bruto / 5) * 5;
+            }
+          }
+          const deltaPct = (sugestao !== null && precoAtual > 0)
+            ? ((sugestao - precoAtual) / precoAtual * 100)
+            : null;
+          return `
+            <div style="font-family:'DM Mono',monospace;font-weight:700;font-size:14px;color:${cor}">
+              R$${precoAtual.toFixed(2).replace('.',',')}
+            </div>
+            ${abaixo && sugestao !== null ? `
+              <div style="margin-top:4px;padding:3px 6px;border-radius:4px;background:rgba(62,207,142,.12);border:1px solid rgba(62,207,142,.3)">
+                <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.3px">Sugerido (${minM}%)</div>
+                <div style="font-family:'DM Mono',monospace;font-weight:700;font-size:13px;color:var(--green)">
+                  R$${sugestao.toFixed(2).replace('.',',')}
+                </div>
+                ${deltaPct !== null ? `<div style="font-size:9px;color:var(--text3)">+${deltaPct.toFixed(1)}%</div>` : ''}
+              </div>
+            ` : ''}
+          `;
+        })()}
       </td>
       <td style="padding:10px;text-align:center;vertical-align:middle">
         <span style="font-size:18px;font-weight:700;color:${riskClr}">${item.available_quantity}</span>
