@@ -3606,9 +3606,28 @@ function extractPrice(s){
   const tailDash = s.match(/[-—–]\s*(\d{2,5}(?:[.,]\d{2,3})?)\s*[*✅❌\s]*$/);
   if(tailDash){
     const raw = tailDash[1];
-    let num = parseFloat(raw.replace(/\./g, c => '').replace(',','.'));
-    // se tem .NNN considera como milhar (1.200 = 1200), exceto se já foi tratado
-    if(/^\d{1,2}\.\d{3}$/.test(raw)) num = parseFloat(raw.replace('.',''));
+    // Distinguir milhar vs decimal:
+    //   • "1.200" ou "9.999" (1-2 díg + . + 3 díg) → MILHAR → 1200, 9999
+    //   • "560.00" ou "1230.00" (3-4 díg + . + 2 díg) → DECIMAL → 560, 1230
+    //   • "560,00" ou "1.500,00" → sempre BR (vírgula = decimal, . = milhar)
+    let num;
+    if(/^\d{1,2}\.\d{3}$/.test(raw)){
+      // Formato milhar sem centavos (ex: "1.200")
+      num = parseFloat(raw.replace('.', ''));
+    } else if(/^\d{1,2}\.\d{3},\d{2}$/.test(raw)){
+      // BR completo (ex: "1.200,00")
+      num = parseFloat(raw.replace('.', '').replace(',', '.'));
+    } else if(/^\d{2,5}[.,]\d{2}$/.test(raw)){
+      // Decimal simples (ex: "560.00", "1230.00", "560,00")
+      num = parseFloat(raw.replace(',', '.'));
+    } else if(/^\d{2,5}[.,]\d{3}$/.test(raw)){
+      // Ambíguo (3 díg após separador): "1.230" pode ser milhar OU decimal com 3 casas
+      // Se tem 4+ dígitos antes, tratar como milhar; senão como decimal (raro)
+      num = parseFloat(raw.replace(/[.,]/g, ''));
+    } else {
+      // Só dígitos: "1250"
+      num = parseFloat(raw);
+    }
     if(!isNaN(num) && num >= 30 && num <= 99999){
       // Exclui specs comuns
       const SPEC_NUMS = new Set([128, 256, 512, 1024, 32, 64, 16, 4, 5, 8, 12]);
