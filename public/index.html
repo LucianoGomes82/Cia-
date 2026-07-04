@@ -12662,7 +12662,9 @@ function planilhaSelectAllPage(checked){
 // (evita marcar vendas já entregues ou em trânsito — não faz sentido gerar NF depois).
 // Não desmarca as que já estavam marcadas — só ADICIONA as bloqueadas elegíveis.
 function selecionarVendasBloqueadas(){
-  const universo = (typeof vendasDataFull !== 'undefined' && vendasDataFull) ? vendasDataFull : (vendasData || []);
+  // USA SÓ vendasData (Cards, dados frescos da API). Vendas importadas do XLSX
+  // na Planilha podem não ter shipment.substatus e gerar falsos positivos.
+  const universo = vendasData || [];
   if(!universo.length){
     showToast('Nenhuma venda carregada ainda');
     return;
@@ -12671,10 +12673,11 @@ function selecionarVendasBloqueadas(){
   _sincronizarSelecaoComDataset();
   let adicionadas = 0;
   let jaMarcadas = 0;
-  let jaEnviadas = 0;
   const blockedTotal = universo.filter(v => v && !v._isManual && canPrintLabel(v)?.blocked);
-  const blocked     = blockedTotal.filter(v => vendaPodeAgir(v));
-  jaEnviadas = blockedTotal.length - blocked.length;
+  // Categoriza as bloqueadas: elegíveis, já enviadas (blacklist implícita), ou sem substatus
+  const blocked   = blockedTotal.filter(v => vendaPodeAgir(v));
+  const semInfo   = blockedTotal.filter(v => !v.shipment?.substatus && v.status !== 'cancelled');
+  const jaSaidas  = blockedTotal.length - blocked.length - semInfo.length;
   for(const v of blocked){
     const id = String(v.id);
     if(_selectedVendaIds.has(id)){
@@ -12695,7 +12698,8 @@ function selecionarVendasBloqueadas(){
     const partes = [];
     if(adicionadas > 0) partes.push(`${adicionadas} marcada(s)`);
     if(jaMarcadas > 0)  partes.push(`${jaMarcadas} já marcada(s)`);
-    if(jaEnviadas > 0)  partes.push(`${jaEnviadas} já enviada(s) — ignorada(s)`);
+    if(jaSaidas > 0)    partes.push(`${jaSaidas} já enviada(s)`);
+    if(semInfo.length > 0) partes.push(`${semInfo.length} sem info`);
     showToast(partes.length ? `🚫 ${partes.join(' · ')}` : 'Todas as bloqueadas já foram enviadas');
   }
 }
@@ -12720,36 +12724,31 @@ function updateVendaBulkBar(){
   }
 }
 
-// Substatus que indicam que a venda JÁ SAIU do estoque ou foi finalizada —
-// pra essas NÃO faz sentido marcar pra emitir NF depois (mercadoria já foi embora).
-// Blacklist ao invés de whitelist: qualquer OUTRO estado (inclusive substatus vazio,
-// "sem envio ainda", agência aguardando o comprador escolher, etc.) permite ação.
-const NAO_AGIR_SUBSTATUS = new Set([
-  'shipped',              // Já enviado
-  'in_transit',           // Em trânsito
-  'out_for_delivery',     // Saiu pra entrega
-  'delivered',            // Entregue
-  'not_delivered',        // Não entregue (fracasso de entrega)
-  'returning_to_sender',  // Retornando ao vendedor
-  'returned',             // Devolvida
-  'forwarded',            // Já em rota
-  'in_hub',               // No hub
-  'in_warehouse',         // No depósito
+// Substatus que indicam que a venda AINDA precisa de ação (etiqueta, DC-e, etc.).
+// Whitelist estrita: SÓ marcar se o substatus é EXPLICITAMENTE um dos abaixo.
+// Substatus vazio (null/undefined) NÃO conta — pode ser venda antiga importada
+// do XLSX que não tem info completa, e pode já ter sido enviada há muito tempo.
+const PODE_AGIR_SUBSTATUS = new Set([
+  'invoice_pending',      // Aguardando DC-e (precisa de NF pra prosseguir)
+  'ready_to_print',       // Pronta pra imprimir etiqueta
+  'printed',              // Impressa mas ainda não postada
+  'ready_to_ship',        // Aguardando processamento
+  'handling',             // Em processamento
+  'buffered',             // Aguardando data de envio
+  'in_packing_list',      // Aguardando lista de envio
+  'measures_ok',          // Pendente medidas
+  'to_be_agreed',         // A combinar com comprador
+  'pending',              // Aguardando pagamento
 ]);
 
-// Retorna true se a venda ainda pode ter etiqueta impressa OU DC-e emitida —
-// ou seja, ainda NÃO saiu do estoque. Usado pra decidir auto-marca.
-// Usa BLACKLIST: só rejeita substatus que indicam despacho concluído. Assim
-// vendas com substatus vazio, "agência aguardando comprador", "aguardando
-// pagamento" etc. entram no fluxo de "ainda pode agir" (que é o esperado).
+// Retorna true APENAS se substatus está na whitelist explícita.
+// Substatus vazio, desconhecido ou já finalizado → false.
 function vendaPodeAgir(v){
   if(!v) return false;
   if(v.status === 'cancelled') return false;
   const sub = v.shipment?.substatus;
-  // Substatus vazio = venda ainda não teve envio processado = pode agir
-  if(!sub) return true;
-  // Substatus na blacklist = já saiu, não pode agir
-  return !NAO_AGIR_SUBSTATUS.has(sub);
+  if(!sub) return false;  // Sem substatus explícito = não marca
+  return PODE_AGIR_SUBSTATUS.has(sub);
 }
 
 // Verifica se uma venda pode ter etiqueta impressa
@@ -13028,7 +13027,10 @@ function _autoMarcarBloqueados(){
   if(_autoMarcadoBloqueados) return;
   // Pequeno delay pra deixar o DOM da tabela desenhar antes
   setTimeout(() => {
-    const universo = vendasDataFull || vendasData || [];
+    // USA SÓ vendasData (aba Cards, com dados frescos da API) — não vendasDataFull,
+    // pois a Planilha pode incluir vendas antigas importadas do XLSX que não têm
+    // shipment.substatus preenchido, gerando falsos positivos.
+    const universo = vendasData || [];
     if(!universo.length){
       // Dados ainda não chegaram — retry até 8 vezes (4s total)
       if(_autoMarcarTentativas < 8){
