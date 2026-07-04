@@ -12665,6 +12665,8 @@ function selecionarVendasBloqueadas(){
     showToast('Nenhuma venda carregada ainda');
     return;
   }
+  // Limpa órfãos ANTES pra que a contagem "já marcada(s)" seja real
+  _sincronizarSelecaoComDataset();
   let adicionadas = 0;
   let jaMarcadas = 0;
   let jaEnviadas = 0;
@@ -12965,6 +12967,26 @@ async function setVendasView(mode){
 // auto-marcar. Também pode ser chamada manualmente pelo botão "🚫 Marcar bloqueados".
 let _autoMarcadoBloqueados = false;
 let _autoMarcarTentativas = 0;
+
+// Limpa do Set os IDs que NÃO EXISTEM no dataset atual (órfãos de syncs
+// anteriores, trocas de conta, filtros que removeram vendas do universo).
+// Depois sincroniza os checkboxes visíveis com o estado atualizado do Set.
+// Chamada após todo renderVendas pra manter consistência DOM ↔ Set.
+function _sincronizarSelecaoComDataset(){
+  const universo = vendasDataFull || vendasData || [];
+  if(!universo.length) return;
+  const idsValidos = new Set(universo.map(v => String(v.id)));
+  // Remove órfãos
+  for(const id of Array.from(_selectedVendaIds)){
+    if(!idsValidos.has(id)) _selectedVendaIds.delete(id);
+  }
+  // Sincroniza checkboxes visuais (força reflect do estado real)
+  document.querySelectorAll('input[type="checkbox"][data-venda-id]').forEach(cb => {
+    cb.checked = _selectedVendaIds.has(cb.dataset.vendaId);
+  });
+  updateVendaBulkBar();
+}
+
 function _autoMarcarBloqueados(){
   if(_autoMarcadoBloqueados) return;
   // Pequeno delay pra deixar o DOM da tabela desenhar antes
@@ -12979,19 +13001,31 @@ function _autoMarcarBloqueados(){
       return;
     }
     _autoMarcarTentativas = 0;
+    // ANTES de tudo: remove IDs órfãos (vendas que sumiram entre syncs)
+    _sincronizarSelecaoComDataset();
     // Só marca vendas bloqueadas que AINDA PODEM SER ACIONADAS (não enviadas/entregues)
     const blocked = universo.filter(v =>
       v && !v._isManual && canPrintLabel(v)?.blocked && vendaPodeAgir(v)
     );
-    if(blocked.length === 0) return;
-    for(const v of blocked) _selectedVendaIds.add(String(v.id));
+    if(blocked.length === 0){
+      _autoMarcadoBloqueados = true;
+      return;
+    }
+    let adicionadas = 0;
+    for(const v of blocked){
+      const id = String(v.id);
+      if(!_selectedVendaIds.has(id)){
+        _selectedVendaIds.add(id);
+        adicionadas++;
+      }
+    }
     document.querySelectorAll('input[type="checkbox"][data-venda-id]').forEach(cb => {
       if(_selectedVendaIds.has(cb.dataset.vendaId)) cb.checked = true;
     });
     updateVendaBulkBar();
     _autoMarcadoBloqueados = true;
-    if(typeof showToast === 'function'){
-      showToast(`🚫 ${blocked.length} venda(s) bloqueada(s) marcada(s) para NF`);
+    if(typeof showToast === 'function' && adicionadas > 0){
+      showToast(`🚫 ${adicionadas} venda(s) bloqueada(s) marcada(s) para NF`);
     }
   }, 300);
 }
@@ -14976,6 +15010,7 @@ function renderVendas(){
   if(_vendasView === 'planilha'){
     const filterTipoAtual = document.getElementById('vendas-filter-tipo')?.value || 'all';
     list.innerHTML = renderVendasResumo(items, filterTipoAtual) + renderVendasPlanilha(items);
+    _sincronizarSelecaoComDataset();
     return;
   }
 
@@ -15129,6 +15164,7 @@ function renderVendas(){
 
   const filterTipoCards = document.getElementById('vendas-filter-tipo')?.value || 'all';
   list.innerHTML = renderVendasResumo(items, filterTipoCards) + header + cards;
+  _sincronizarSelecaoComDataset();
   updateVendaBulkBar();
 }
 
