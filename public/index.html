@@ -2472,6 +2472,8 @@ function switchTab(id){
   if(id==='compras') syncCompras();
   if(id==='vendas'){
     syncVendas();
+    // Setup do MutationObserver — sincroniza checkboxes automaticamente a cada re-render
+    _setupSelecaoObserver();
     // Tentar auto-marcar bloqueados após um pequeno delay pra dados carregarem
     setTimeout(() => _autoMarcarBloqueados(), 500);
   }
@@ -12972,19 +12974,50 @@ let _autoMarcarTentativas = 0;
 // anteriores, trocas de conta, filtros que removeram vendas do universo).
 // Depois sincroniza os checkboxes visíveis com o estado atualizado do Set.
 // Chamada após todo renderVendas pra manter consistência DOM ↔ Set.
+// Sincroniza DOM ↔ Set em duas direções:
+//   1. Remove do Set IDs que não existem no dataset atual (órfãos de syncs anteriores)
+//   2. Força TODOS os checkboxes visíveis a refletir o Set (checked = Set.has(id))
+// Assim garantimos que se descrição diz "N vendas selecionadas", exatamente N
+// checkboxes vão aparecer preenchidos visualmente. Sem inconsistência.
 function _sincronizarSelecaoComDataset(){
   const universo = vendasDataFull || vendasData || [];
-  if(!universo.length) return;
-  const idsValidos = new Set(universo.map(v => String(v.id)));
-  // Remove órfãos
-  for(const id of Array.from(_selectedVendaIds)){
-    if(!idsValidos.has(id)) _selectedVendaIds.delete(id);
+  // Só limpa órfãos SE há dataset carregado
+  if(universo.length > 0){
+    const idsValidos = new Set(universo.map(v => String(v.id)));
+    for(const id of Array.from(_selectedVendaIds)){
+      if(!idsValidos.has(id)) _selectedVendaIds.delete(id);
+    }
   }
-  // Sincroniza checkboxes visuais (força reflect do estado real)
+  // Sincroniza checkboxes visuais SEMPRE (mesmo sem dataset)
   document.querySelectorAll('input[type="checkbox"][data-venda-id]').forEach(cb => {
-    cb.checked = _selectedVendaIds.has(cb.dataset.vendaId);
+    const isSelected = _selectedVendaIds.has(cb.dataset.vendaId);
+    if(cb.checked !== isSelected){
+      cb.checked = isSelected;
+    }
   });
   updateVendaBulkBar();
+}
+
+// MutationObserver que "vigia" o container de vendas e dispara sincronização
+// automática toda vez que o innerHTML muda (por renderVendas, paginação,
+// filtro, etc.). Assim não precisamos lembrar de chamar sync em cada ponto
+// de re-render — a sincronização acontece SOZINHA.
+// Debounce de 50ms pra evitar chamadas em cascata quando várias mudanças
+// acontecem juntas.
+let _syncObserverSetup = false;
+let _syncDebounceTimer = null;
+function _setupSelecaoObserver(){
+  if(_syncObserverSetup) return;
+  const list = document.getElementById('vendas-list');
+  if(!list) return;
+  const obs = new MutationObserver(() => {
+    if(_syncDebounceTimer) clearTimeout(_syncDebounceTimer);
+    _syncDebounceTimer = setTimeout(() => {
+      _sincronizarSelecaoComDataset();
+    }, 50);
+  });
+  obs.observe(list, { childList: true, subtree: true });
+  _syncObserverSetup = true;
 }
 
 function _autoMarcarBloqueados(){
