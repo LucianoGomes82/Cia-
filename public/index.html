@@ -12974,36 +12974,40 @@ let _autoMarcarTentativas = 0;
 // anteriores, trocas de conta, filtros que removeram vendas do universo).
 // Depois sincroniza os checkboxes visíveis com o estado atualizado do Set.
 // Chamada após todo renderVendas pra manter consistência DOM ↔ Set.
-// Sincroniza DOM ↔ Set em duas direções:
-//   1. Remove do Set IDs que não existem no dataset atual (órfãos de syncs anteriores)
-//   2. Força TODOS os checkboxes visíveis a refletir o Set (checked = Set.has(id))
-// Assim garantimos que se descrição diz "N vendas selecionadas", exatamente N
-// checkboxes vão aparecer preenchidos visualmente. Sem inconsistência.
-function _sincronizarSelecaoComDataset(){
-  const universo = vendasDataFull || vendasData || [];
-  // Só limpa órfãos SE há dataset carregado
-  if(universo.length > 0){
-    const idsValidos = new Set(universo.map(v => String(v.id)));
-    for(const id of Array.from(_selectedVendaIds)){
-      if(!idsValidos.has(id)) _selectedVendaIds.delete(id);
-    }
-  }
-  // Sincroniza checkboxes visuais SEMPRE (mesmo sem dataset)
+// Atualiza APENAS a UI (checkboxes visuais e bulk-bar) a partir do Set atual.
+// Nunca modifica o Set. Chamada de forma AGRESSIVA (a cada mudança do DOM via
+// MutationObserver) — se o Set tem 29 IDs, exatamente os 29 checkboxes com
+// esses IDs vão aparecer marcados. Sem exceções.
+function _atualizarCheckboxesVisuais(){
   document.querySelectorAll('input[type="checkbox"][data-venda-id]').forEach(cb => {
     const isSelected = _selectedVendaIds.has(cb.dataset.vendaId);
-    if(cb.checked !== isSelected){
-      cb.checked = isSelected;
-    }
+    if(cb.checked !== isSelected) cb.checked = isSelected;
   });
   updateVendaBulkBar();
 }
 
-// MutationObserver que "vigia" o container de vendas e dispara sincronização
-// automática toda vez que o innerHTML muda (por renderVendas, paginação,
-// filtro, etc.). Assim não precisamos lembrar de chamar sync em cada ponto
-// de re-render — a sincronização acontece SOZINHA.
-// Debounce de 50ms pra evitar chamadas em cascata quando várias mudanças
-// acontecem juntas.
+// Limpa do Set os IDs que não existem no dataset atual. IMPORTANTE: só chamar
+// em contextos onde FAZ SENTIDO limpar — não durante re-render (porque durante
+// o processo assíncrono o dataset pode estar temporariamente vazio ou diferente,
+// zerando a seleção sem motivo).
+function _limparIdsOrfaos(){
+  const universo = vendasDataFull || vendasData || [];
+  if(!universo.length) return;
+  const idsValidos = new Set(universo.map(v => String(v.id)));
+  for(const id of Array.from(_selectedVendaIds)){
+    if(!idsValidos.has(id)) _selectedVendaIds.delete(id);
+  }
+}
+
+// Combo: limpa órfãos + sincroniza UI. Usado em auto-marca e "Marcar bloqueados"
+// pra garantir estado consistente antes de contar.
+function _sincronizarSelecaoComDataset(){
+  _limparIdsOrfaos();
+  _atualizarCheckboxesVisuais();
+}
+
+// MutationObserver: só atualiza VISUAL — nunca deleta do Set.
+// Assim, mesmo se o dataset mudar temporariamente, os IDs no Set ficam preservados.
 let _syncObserverSetup = false;
 let _syncDebounceTimer = null;
 function _setupSelecaoObserver(){
@@ -13013,8 +13017,8 @@ function _setupSelecaoObserver(){
   const obs = new MutationObserver(() => {
     if(_syncDebounceTimer) clearTimeout(_syncDebounceTimer);
     _syncDebounceTimer = setTimeout(() => {
-      _sincronizarSelecaoComDataset();
-    }, 50);
+      _atualizarCheckboxesVisuais();  // Só visual, não deleta órfãos
+    }, 30);
   });
   obs.observe(list, { childList: true, subtree: true });
   _syncObserverSetup = true;
@@ -19124,6 +19128,8 @@ loadAnunciosPlanejados();
 loadInvestimentos();
 loadRetiradas();
 loadLancamentosManuais().catch(() => {});
+// Setup do MutationObserver pra vendas — logo no init pra pegar re-renders desde já
+_setupSelecaoObserver();
 
 // Carrega vendas importadas (IndexedDB) em background pra ficarem prontas na visão Planilha
 loadImportedVendas().then(imported => {
