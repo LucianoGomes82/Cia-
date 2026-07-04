@@ -1270,6 +1270,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <button class="btn btn-sm" onclick="limparInvestimentosVendas()" title="Apaga o valor INVESTIDO de cada venda (coluna Investido Luciano/Johnny da Planilha). Não apaga as vendas em si, apenas zera os valores. NÃO afeta lançamentos manuais (aportes/retiradas) — esses ficam no botão 'Lançamentos'." style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">💸 Limpar investimentos</button>
             <button class="btn btn-sm" onclick="openListaBloqueio()" title="Lista de compradores de estados bloqueados para você bloquear no Mercado Livre" style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🚫 Bloquear compradores</button>
             <button class="btn btn-sm" onclick="exportVendasXLSX()" title="Exportar planilha Excel com todas as vendas e investimentos">📤 Exportar XLSX</button>
+            <button class="btn btn-sm" onclick="selecionarVendasBloqueadas()" title="Marca todas as vendas de estados bloqueados (que precisam de NF pra entregar). Você pode adicionar outras vendas manualmente com os checkboxes." style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🚫 Marcar bloqueados p/ NF</button>
             <button class="btn btn-sm" onclick="exportNFXLSX()" title="Gerar planilha no formato de NF emitidas para as vendas marcadas com checkbox" style="background:rgba(168,85,247,.15);color:var(--purple);border:1px solid var(--purple)">📋 Gerar XLSX para NF</button>
             <button class="btn btn-sm" onclick="forceReloadVendasViaAPI()" title="Limpa cache e rebusca todas as vendas direto da API ML (use se faltam dados como CPF, endereço, estado)" style="background:rgba(96,165,250,.12);color:var(--blue);border:1px solid var(--blue)">🔄 Recarregar via API</button>
           </div>
@@ -2469,7 +2470,11 @@ function switchTab(id){
   if(id==='ml'&&mlConn) renderMLList();
   if(id==='estoque') renderEstoque();
   if(id==='compras') syncCompras();
-  if(id==='vendas') syncVendas();
+  if(id==='vendas'){
+    syncVendas();
+    // Tentar auto-marcar bloqueados após um pequeno delay pra dados carregarem
+    setTimeout(() => _autoMarcarBloqueados(), 500);
+  }
   if(id==='posvenda') syncPosVenda();
   if(id==='anunciar') initAnunciar();
   if(id==='perguntas') syncPerguntas();
@@ -12650,7 +12655,9 @@ function planilhaSelectAllPage(checked){
 // Marca automaticamente todas as vendas de ESTADOS BLOQUEADOS que estão visíveis
 // (em todas as páginas — não só a atual). Esses são os pedidos que precisam de NF
 // pra serem entregues manualmente (via correios normais, sem etiqueta ML).
-// Não desmarca as que já estavam marcadas — só ADICIONA as bloqueadas.
+// Filtra também por vendaPodeAgir: só marca as que AINDA NÃO FORAM ENVIADAS
+// (evita marcar vendas já entregues ou em trânsito — não faz sentido gerar NF depois).
+// Não desmarca as que já estavam marcadas — só ADICIONA as bloqueadas elegíveis.
 function selecionarVendasBloqueadas(){
   const universo = (typeof vendasDataFull !== 'undefined' && vendasDataFull) ? vendasDataFull : (vendasData || []);
   if(!universo.length){
@@ -12659,7 +12666,10 @@ function selecionarVendasBloqueadas(){
   }
   let adicionadas = 0;
   let jaMarcadas = 0;
-  const blocked = universo.filter(v => v && !v._isManual && canPrintLabel(v)?.blocked);
+  let jaEnviadas = 0;
+  const blockedTotal = universo.filter(v => v && !v._isManual && canPrintLabel(v)?.blocked);
+  const blocked     = blockedTotal.filter(v => vendaPodeAgir(v));
+  jaEnviadas = blockedTotal.length - blocked.length;
   for(const v of blocked){
     const id = String(v.id);
     if(_selectedVendaIds.has(id)){
@@ -12674,13 +12684,14 @@ function selecionarVendasBloqueadas(){
     if(_selectedVendaIds.has(cb.dataset.vendaId)) cb.checked = true;
   });
   updateVendaBulkBar();
-  if(blocked.length === 0){
+  if(blockedTotal.length === 0){
     showToast('Nenhuma venda para estado bloqueado encontrada');
   } else {
-    const msg = adicionadas > 0
-      ? `✓ ${adicionadas} venda(s) bloqueada(s) marcada(s)${jaMarcadas ? ` · ${jaMarcadas} já estava(m)` : ''}`
-      : `Todas as ${jaMarcadas} venda(s) bloqueada(s) já estavam marcadas`;
-    showToast(msg);
+    const partes = [];
+    if(adicionadas > 0) partes.push(`${adicionadas} marcada(s)`);
+    if(jaMarcadas > 0)  partes.push(`${jaMarcadas} já marcada(s)`);
+    if(jaEnviadas > 0)  partes.push(`${jaEnviadas} já enviada(s) — ignorada(s)`);
+    showToast(partes.length ? `🚫 ${partes.join(' · ')}` : 'Todas as bloqueadas já foram enviadas');
   }
 }
 
@@ -12702,6 +12713,37 @@ function updateVendaBulkBar(){
     else if(n === total){ masterCb.checked = true; masterCb.indeterminate = false; }
     else { masterCb.checked = false; masterCb.indeterminate = true; }
   }
+}
+
+// Substatus que ainda permitem AÇÃO por parte do vendedor (imprimir etiqueta, emitir DC-e).
+// Ou seja: a venda ainda NÃO saiu do estoque nem foi entregue. Nesses estados dá pra:
+//   • Emitir/enviar DC-e (invoice_pending)
+//   • Imprimir etiqueta (ready_to_print, printed)
+//   • Aguardar processamento (handling, ready_to_ship, buffered, in_packing_list)
+//   • Aguardar medidas (measures_ok)
+// Ficam EXCLUÍDOS: shipped, in_transit, out_for_delivery, delivered, not_delivered,
+//                  cancelled, returning_to_sender, returned, forwarded, in_hub, in_warehouse
+// (nesses casos a etiqueta já foi impressa E a mercadoria já saiu — não faz sentido
+//  gerar NF depois pra vendas que já foram embora)
+const PODE_AGIR_SUBSTATUS = new Set([
+  'invoice_pending',      // Aguardando DC-e
+  'ready_to_print',       // Pronta pra imprimir
+  'printed',              // Impressa (mas ainda não postada)
+  'ready_to_ship',        // Aguardando processamento
+  'handling',             // Em processamento
+  'measures_ok',          // Pendente medidas
+  'buffered',             // Aguardando data de envio
+  'in_packing_list',      // Aguardando lista de envio
+  'pending',              // Aguardando pagamento
+]);
+
+// Retorna true se a venda ainda pode ter etiqueta impressa OU DC-e emitida.
+// Usado tanto pra "Marcar bloqueados p/ NF" quanto pra decidir se auto-marcar.
+function vendaPodeAgir(v){
+  if(!v?.shipment?.id) return false;
+  if(v.status === 'cancelled') return false;
+  const sub = v.shipment?.substatus;
+  return PODE_AGIR_SUBSTATUS.has(sub);
 }
 
 // Verifica se uma venda pode ter etiqueta impressa
@@ -12730,21 +12772,58 @@ function canPrintLabel(v){
   // ── Agora verifica o substatus ──
   const sub = v.shipment?.substatus;
   if(!['ready_to_print','printed'].includes(sub)){
+    // Mapa de substatus (ML devolve estes valores em /shipments/{id}.substatus)
     const labels = {
-      invoice_pending:    '📋 Aguardando DC-e',
-      ready_to_ship:      'Aguardando processamento',
-      shipped:            'Já enviado',
-      delivered:          'Já entregue',
-      cancelled:          'Cancelado',
-      not_delivered:      'Não entregue',
-      pending:            'Aguardando pagamento',
-      handling:           'Em processamento',
-      buffered:           '⏰ Aguardando data de envio',
-      in_packing_list:    'Aguardando lista de envio',
-      forwarded:          'Já em rota',
-      in_hub:             'No hub',
-      in_warehouse:       'No depósito',
+      invoice_pending:       '📋 Aguardando DC-e',
+      ready_to_ship:         'Aguardando processamento',
+      shipped:               '🚚 Já enviado',
+      delivered:             '✓ Já entregue',
+      cancelled:             '❌ Cancelado',
+      not_delivered:         '⚠ Não entregue',
+      pending:               'Aguardando pagamento',
+      handling:              '⏳ Em processamento',
+      buffered:              '⏰ Aguardando data de envio',
+      in_packing_list:       'Aguardando lista de envio',
+      forwarded:             '🚚 Já em rota',
+      in_hub:                '🚚 No hub',
+      in_warehouse:          '📦 No depósito',
+      in_transit:            '🚚 Em trânsito',
+      out_for_delivery:      '🚚 Saiu pra entrega',
+      returning_to_sender:   '↩ Retornando ao vendedor',
+      returned:              '↩ Devolvida',
+      waiting_for_withdrawal:'🏢 Aguardando retirada',
+      measures_ok:           'Pendente medidas',
+      to_be_agreed:          '💬 A combinar',
+      stale:                 '⚠ Sem atividade',
     };
+
+    // Se o substatus está vazio, cai pro status da order (paid, cancelled, paused, etc.).
+    // Isso resolve o caso "Status: indisponível" pra vendas que ainda não têm shipment
+    // com substatus preenchido (ex: envio "A combinar" com o comprador).
+    const ORDER_STATUS_LABELS = {
+      paid:           '💰 Pago (sem envio ainda)',
+      pending:        'Aguardando pagamento',
+      cancelled:      '❌ Cancelado',
+      confirmed:      '✓ Confirmado',
+      payment_required:'💳 Pagamento requerido',
+      payment_in_process:'💳 Processando pagamento',
+      partially_paid:'💰 Pagamento parcial',
+      invalid:        '⚠ Inválido',
+    };
+    let reason;
+    if(sub && labels[sub]){
+      reason = labels[sub];
+    } else if(sub){
+      // Substatus retornado pelo ML que não conhecemos ainda — mostra o valor cru
+      // (mas sem "Status:" na frente, pra ficar mais limpo)
+      reason = `${sub}`;
+    } else if(v.status && ORDER_STATUS_LABELS[v.status]){
+      reason = ORDER_STATUS_LABELS[v.status];
+    } else if(v.status){
+      reason = v.status;
+    } else {
+      reason = 'Status indisponível';
+    }
 
     let invoiceAgeHours = null;
     let invoiceSeverity = null;
@@ -12757,7 +12836,7 @@ function canPrintLabel(v){
 
     return {
       ok: false,
-      reason: labels[sub] || `Status: ${sub || 'indisponível'}`,
+      reason,
       substatus: sub,
       needsInvoice: sub === 'invoice_pending',
       invoiceAgeHours,
@@ -12848,7 +12927,7 @@ async function setVendasView(mode){
           vendasDataFull = imported;
           _vendasFullCacheTime = Date.now();
           renderVendas();
-          _autoMarcarBloqueadosNaPlanilha();
+          _autoMarcarBloqueados();
           return;
         }
       } catch(e){ console.warn('Erro ao ler IndexedDB:', e); }
@@ -12876,21 +12955,23 @@ async function setVendasView(mode){
   }
 
   renderVendas();
-  if(mode === 'planilha') _autoMarcarBloqueadosNaPlanilha();
+  _autoMarcarBloqueados();
 }
 
-// Auto-marca vendas de estados bloqueados na Planilha, UMA VEZ por sessão
-// (sinaliza com _autoMarcadoBloqueados). Evita re-marcar toda vez que o
-// usuário troca entre Cards e Planilha ou re-renderiza.
-// Se o usuário limpar seleção via botão "Limpar", volta a poder auto-marcar.
+// Auto-marca vendas de estados bloqueados na aba Vendas (Cards ou Planilha),
+// UMA VEZ por sessão. Se o usuário limpar seleção via "Limpar", volta a poder
+// auto-marcar. Também pode ser chamada manualmente pelo botão "🚫 Marcar bloqueados".
 let _autoMarcadoBloqueados = false;
-function _autoMarcarBloqueadosNaPlanilha(){
+function _autoMarcarBloqueados(){
   if(_autoMarcadoBloqueados) return;
   // Pequeno delay pra deixar o DOM da tabela desenhar antes
   setTimeout(() => {
     const universo = vendasDataFull || vendasData || [];
     if(!universo.length) return;
-    const blocked = universo.filter(v => v && !v._isManual && canPrintLabel(v)?.blocked);
+    // Só marca vendas bloqueadas que AINDA PODEM SER ACIONADAS (não enviadas/entregues)
+    const blocked = universo.filter(v =>
+      v && !v._isManual && canPrintLabel(v)?.blocked && vendaPodeAgir(v)
+    );
     if(blocked.length === 0) return;
     for(const v of blocked) _selectedVendaIds.add(String(v.id));
     document.querySelectorAll('input[type="checkbox"][data-venda-id]').forEach(cb => {
@@ -12899,7 +12980,7 @@ function _autoMarcarBloqueadosNaPlanilha(){
     updateVendaBulkBar();
     _autoMarcadoBloqueados = true;
     if(typeof showToast === 'function'){
-      showToast(`🚫 ${blocked.length} venda(s) de estado bloqueado pré-selecionada(s) para NF`);
+      showToast(`🚫 ${blocked.length} venda(s) bloqueada(s) ainda não enviada(s) pré-selecionada(s) para NF`);
     }
   }, 300);
 }
@@ -15072,14 +15153,28 @@ function renderVendasPlanilha(items){
     'invalid':    { label: '⚠ Inválido',                    color: 'var(--red)' },
   };
   const subStatusMap = {
-    'delivered':       { label: '✓ Entregue',          color: 'var(--green)' },
-    'shipped':         { label: '🚚 À caminho',        color: 'var(--blue)' },
-    'ready_to_print':  { label: '🏷 Pronta',           color: 'var(--green)' },
-    'printed':         { label: '🖨 Impressa',         color: 'var(--blue)' },
-    'invoice_pending': { label: '📋 Aguardando DC-e',  color: 'var(--amber)' },
-    'cancelled':       { label: '❌ Cancelado',         color: 'var(--red)' },
-    'not_delivered':   { label: '⚠ Não entregue',      color: 'var(--red)' },
-    'handling':        { label: '⏳ Em processamento', color: 'var(--text3)' },
+    'delivered':             { label: '✓ Entregue',              color: 'var(--green)' },
+    'shipped':               { label: '🚚 À caminho',             color: 'var(--blue)' },
+    'ready_to_print':        { label: '🏷 Pronta',                color: 'var(--green)' },
+    'printed':               { label: '🖨 Impressa',              color: 'var(--blue)' },
+    'invoice_pending':       { label: '📋 Aguardando DC-e',       color: 'var(--amber)' },
+    'cancelled':             { label: '❌ Cancelado',              color: 'var(--red)' },
+    'not_delivered':         { label: '⚠ Não entregue',           color: 'var(--red)' },
+    'handling':              { label: '⏳ Em processamento',       color: 'var(--text3)' },
+    'ready_to_ship':         { label: '⏳ Aguardando processamento', color: 'var(--text3)' },
+    'in_transit':            { label: '🚚 Em trânsito',           color: 'var(--blue)' },
+    'out_for_delivery':      { label: '🚚 Saiu pra entrega',      color: 'var(--blue)' },
+    'buffered':              { label: '⏰ Aguardando envio',       color: 'var(--amber)' },
+    'in_packing_list':       { label: '📋 Aguardando lista',      color: 'var(--text3)' },
+    'forwarded':             { label: '🚚 Em rota',               color: 'var(--blue)' },
+    'in_hub':                { label: '🚚 No hub',                color: 'var(--blue)' },
+    'in_warehouse':          { label: '📦 No depósito',           color: 'var(--text3)' },
+    'returning_to_sender':   { label: '↩ Retornando',             color: 'var(--amber)' },
+    'returned':              { label: '↩ Devolvida',              color: 'var(--red)' },
+    'waiting_for_withdrawal':{ label: '🏢 Aguardando retirada',   color: 'var(--amber)' },
+    'measures_ok':           { label: '📏 Pendente medidas',      color: 'var(--text3)' },
+    'to_be_agreed':          { label: '💬 A combinar',            color: 'var(--text3)' },
+    'stale':                 { label: '⚠ Sem atividade',          color: 'var(--amber)' },
   };
 
   const rows = pageItems.map((v, idx) => {
