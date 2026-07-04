@@ -12626,6 +12626,7 @@ function selectAllVendas(checked){
 
 function clearVendaSelection(){
   _selectedVendaIds.clear();
+  _autoMarcadoBloqueados = false;  // permite auto-marcar de novo se voltar
   document.querySelectorAll('input[type="checkbox"][data-venda-id]').forEach(cb => cb.checked = false);
   const masterCb = document.getElementById('venda-select-all');
   if(masterCb){ masterCb.checked = false; masterCb.indeterminate = false; }
@@ -12644,6 +12645,43 @@ function planilhaSelectAllPage(checked){
     else        _selectedVendaIds.delete(cb.dataset.vendaId);
   });
   updateVendaBulkBar();
+}
+
+// Marca automaticamente todas as vendas de ESTADOS BLOQUEADOS que estão visíveis
+// (em todas as páginas — não só a atual). Esses são os pedidos que precisam de NF
+// pra serem entregues manualmente (via correios normais, sem etiqueta ML).
+// Não desmarca as que já estavam marcadas — só ADICIONA as bloqueadas.
+function selecionarVendasBloqueadas(){
+  const universo = (typeof vendasDataFull !== 'undefined' && vendasDataFull) ? vendasDataFull : (vendasData || []);
+  if(!universo.length){
+    showToast('Nenhuma venda carregada ainda');
+    return;
+  }
+  let adicionadas = 0;
+  let jaMarcadas = 0;
+  const blocked = universo.filter(v => v && !v._isManual && canPrintLabel(v)?.blocked);
+  for(const v of blocked){
+    const id = String(v.id);
+    if(_selectedVendaIds.has(id)){
+      jaMarcadas++;
+    } else {
+      _selectedVendaIds.add(id);
+      adicionadas++;
+    }
+  }
+  // Marca visualmente os checkboxes visíveis
+  document.querySelectorAll('input[type="checkbox"][data-venda-id]').forEach(cb => {
+    if(_selectedVendaIds.has(cb.dataset.vendaId)) cb.checked = true;
+  });
+  updateVendaBulkBar();
+  if(blocked.length === 0){
+    showToast('Nenhuma venda para estado bloqueado encontrada');
+  } else {
+    const msg = adicionadas > 0
+      ? `✓ ${adicionadas} venda(s) bloqueada(s) marcada(s)${jaMarcadas ? ` · ${jaMarcadas} já estava(m)` : ''}`
+      : `Todas as ${jaMarcadas} venda(s) bloqueada(s) já estavam marcadas`;
+    showToast(msg);
+  }
 }
 
 function updateVendaBulkBar(){
@@ -12810,6 +12848,7 @@ async function setVendasView(mode){
           vendasDataFull = imported;
           _vendasFullCacheTime = Date.now();
           renderVendas();
+          _autoMarcarBloqueadosNaPlanilha();
           return;
         }
       } catch(e){ console.warn('Erro ao ler IndexedDB:', e); }
@@ -12837,6 +12876,32 @@ async function setVendasView(mode){
   }
 
   renderVendas();
+  if(mode === 'planilha') _autoMarcarBloqueadosNaPlanilha();
+}
+
+// Auto-marca vendas de estados bloqueados na Planilha, UMA VEZ por sessão
+// (sinaliza com _autoMarcadoBloqueados). Evita re-marcar toda vez que o
+// usuário troca entre Cards e Planilha ou re-renderiza.
+// Se o usuário limpar seleção via botão "Limpar", volta a poder auto-marcar.
+let _autoMarcadoBloqueados = false;
+function _autoMarcarBloqueadosNaPlanilha(){
+  if(_autoMarcadoBloqueados) return;
+  // Pequeno delay pra deixar o DOM da tabela desenhar antes
+  setTimeout(() => {
+    const universo = vendasDataFull || vendasData || [];
+    if(!universo.length) return;
+    const blocked = universo.filter(v => v && !v._isManual && canPrintLabel(v)?.blocked);
+    if(blocked.length === 0) return;
+    for(const v of blocked) _selectedVendaIds.add(String(v.id));
+    document.querySelectorAll('input[type="checkbox"][data-venda-id]').forEach(cb => {
+      if(_selectedVendaIds.has(cb.dataset.vendaId)) cb.checked = true;
+    });
+    updateVendaBulkBar();
+    _autoMarcadoBloqueados = true;
+    if(typeof showToast === 'function'){
+      showToast(`🚫 ${blocked.length} venda(s) de estado bloqueado pré-selecionada(s) para NF`);
+    }
+  }, 300);
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -14846,6 +14911,7 @@ function renderVendas(){
         <span id="venda-bulk-count">0</span> venda(s) selecionada(s)
       </div>
       <button class="btn btn-sm" onclick="clearVendaSelection()" style="font-size:10px;padding:3px 8px">Limpar</button>
+      <button class="btn btn-sm" onclick="selecionarVendasBloqueadas()" title="Marca automaticamente todas as vendas para estados bloqueados (que precisam de NF pra entregar)" style="font-size:11px;padding:5px 10px;background:rgba(239,68,68,.12);color:var(--red);border:1px solid var(--red)">🚫 Marcar bloqueados</button>
       <button class="btn btn-sm" onclick="exportNFXLSX()" title="Gerar planilha no formato de NF emitidas (aceita vendas em qualquer estado, exceto canceladas/não entregues)" style="font-size:11px;padding:5px 10px;background:rgba(168,85,247,.15);color:var(--purple);border:1px solid var(--purple)">📋 Gerar XLSX para NF</button>
       <button class="btn btn-p btn-sm" onclick="printLabelsBulk()" style="font-size:11px;padding:5px 10px">🖨 Imprimir etiquetas</button>
     </div>`;
