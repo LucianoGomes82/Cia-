@@ -12632,6 +12632,7 @@ function selectAllVendas(checked){
 function clearVendaSelection(){
   _selectedVendaIds.clear();
   _autoMarcadoBloqueados = false;  // permite auto-marcar de novo se voltar
+  _autoMarcarTentativas = 0;
   document.querySelectorAll('input[type="checkbox"][data-venda-id]').forEach(cb => cb.checked = false);
   const masterCb = document.getElementById('venda-select-all');
   if(masterCb){ masterCb.checked = false; masterCb.indeterminate = false; }
@@ -12715,35 +12716,36 @@ function updateVendaBulkBar(){
   }
 }
 
-// Substatus que ainda permitem AÇÃO por parte do vendedor (imprimir etiqueta, emitir DC-e).
-// Ou seja: a venda ainda NÃO saiu do estoque nem foi entregue. Nesses estados dá pra:
-//   • Emitir/enviar DC-e (invoice_pending)
-//   • Imprimir etiqueta (ready_to_print, printed)
-//   • Aguardar processamento (handling, ready_to_ship, buffered, in_packing_list)
-//   • Aguardar medidas (measures_ok)
-// Ficam EXCLUÍDOS: shipped, in_transit, out_for_delivery, delivered, not_delivered,
-//                  cancelled, returning_to_sender, returned, forwarded, in_hub, in_warehouse
-// (nesses casos a etiqueta já foi impressa E a mercadoria já saiu — não faz sentido
-//  gerar NF depois pra vendas que já foram embora)
-const PODE_AGIR_SUBSTATUS = new Set([
-  'invoice_pending',      // Aguardando DC-e
-  'ready_to_print',       // Pronta pra imprimir
-  'printed',              // Impressa (mas ainda não postada)
-  'ready_to_ship',        // Aguardando processamento
-  'handling',             // Em processamento
-  'measures_ok',          // Pendente medidas
-  'buffered',             // Aguardando data de envio
-  'in_packing_list',      // Aguardando lista de envio
-  'pending',              // Aguardando pagamento
+// Substatus que indicam que a venda JÁ SAIU do estoque ou foi finalizada —
+// pra essas NÃO faz sentido marcar pra emitir NF depois (mercadoria já foi embora).
+// Blacklist ao invés de whitelist: qualquer OUTRO estado (inclusive substatus vazio,
+// "sem envio ainda", agência aguardando o comprador escolher, etc.) permite ação.
+const NAO_AGIR_SUBSTATUS = new Set([
+  'shipped',              // Já enviado
+  'in_transit',           // Em trânsito
+  'out_for_delivery',     // Saiu pra entrega
+  'delivered',            // Entregue
+  'not_delivered',        // Não entregue (fracasso de entrega)
+  'returning_to_sender',  // Retornando ao vendedor
+  'returned',             // Devolvida
+  'forwarded',            // Já em rota
+  'in_hub',               // No hub
+  'in_warehouse',         // No depósito
 ]);
 
-// Retorna true se a venda ainda pode ter etiqueta impressa OU DC-e emitida.
-// Usado tanto pra "Marcar bloqueados p/ NF" quanto pra decidir se auto-marcar.
+// Retorna true se a venda ainda pode ter etiqueta impressa OU DC-e emitida —
+// ou seja, ainda NÃO saiu do estoque. Usado pra decidir auto-marca.
+// Usa BLACKLIST: só rejeita substatus que indicam despacho concluído. Assim
+// vendas com substatus vazio, "agência aguardando comprador", "aguardando
+// pagamento" etc. entram no fluxo de "ainda pode agir" (que é o esperado).
 function vendaPodeAgir(v){
-  if(!v?.shipment?.id) return false;
+  if(!v) return false;
   if(v.status === 'cancelled') return false;
   const sub = v.shipment?.substatus;
-  return PODE_AGIR_SUBSTATUS.has(sub);
+  // Substatus vazio = venda ainda não teve envio processado = pode agir
+  if(!sub) return true;
+  // Substatus na blacklist = já saiu, não pode agir
+  return !NAO_AGIR_SUBSTATUS.has(sub);
 }
 
 // Verifica se uma venda pode ter etiqueta impressa
@@ -12962,12 +12964,21 @@ async function setVendasView(mode){
 // UMA VEZ por sessão. Se o usuário limpar seleção via "Limpar", volta a poder
 // auto-marcar. Também pode ser chamada manualmente pelo botão "🚫 Marcar bloqueados".
 let _autoMarcadoBloqueados = false;
+let _autoMarcarTentativas = 0;
 function _autoMarcarBloqueados(){
   if(_autoMarcadoBloqueados) return;
   // Pequeno delay pra deixar o DOM da tabela desenhar antes
   setTimeout(() => {
     const universo = vendasDataFull || vendasData || [];
-    if(!universo.length) return;
+    if(!universo.length){
+      // Dados ainda não chegaram — retry até 8 vezes (4s total)
+      if(_autoMarcarTentativas < 8){
+        _autoMarcarTentativas++;
+        _autoMarcarBloqueados();
+      }
+      return;
+    }
+    _autoMarcarTentativas = 0;
     // Só marca vendas bloqueadas que AINDA PODEM SER ACIONADAS (não enviadas/entregues)
     const blocked = universo.filter(v =>
       v && !v._isManual && canPrintLabel(v)?.blocked && vendaPodeAgir(v)
@@ -12980,7 +12991,7 @@ function _autoMarcarBloqueados(){
     updateVendaBulkBar();
     _autoMarcadoBloqueados = true;
     if(typeof showToast === 'function'){
-      showToast(`🚫 ${blocked.length} venda(s) bloqueada(s) ainda não enviada(s) pré-selecionada(s) para NF`);
+      showToast(`🚫 ${blocked.length} venda(s) bloqueada(s) marcada(s) para NF`);
     }
   }, 300);
 }
