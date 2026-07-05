@@ -2340,6 +2340,8 @@ function toggleBlockedState(uf, blocked){
   saveState();
   renderBlockedStates();
   refreshAnunciosBlockedNotice();
+  // Re-agrupa Lista de Compras sem re-sync (usa cache)
+  if(typeof reagruparComprasSeCache === 'function') reagruparComprasSeCache();
 }
 
 function setAllStates(blocked){
@@ -2351,6 +2353,7 @@ function setAllStates(blocked){
   saveState();
   renderBlockedStates();
   refreshAnunciosBlockedNotice();
+  if(typeof reagruparComprasSeCache === 'function') reagruparComprasSeCache();
 }
 
 function resetBlockedToDefault(){
@@ -2359,6 +2362,7 @@ function resetBlockedToDefault(){
   saveState();
   renderBlockedStates();
   refreshAnunciosBlockedNotice();
+  if(typeof reagruparComprasSeCache === 'function') reagruparComprasSeCache();
 }
 
 // Atualiza o aviso de estados bloqueados em todos os anúncios planejados
@@ -10429,9 +10433,10 @@ async function syncCompras(force = false){
     // ── ETAPA 3: Shipments em paralelo (35% → 85%) — batch 8 anti-503 ──────
     const validOrders  = allOrders.filter(o => o.shipping?.id && o.status !== 'cancelled');
     const batchSize    = 8; // Reduzido de 30 → 8 para evitar 503 do CF/ML
-    const pedidosFiltrados = [];
-    const blockedSet   = new Set((cfg.blockedStates || []).map(s => s.toUpperCase()));
-    const blockedByState = {};
+    // Array com TODAS as vendas com shipment válido (ready_to_print/printed) —
+    // sem filtro de estado. O filtro é aplicado em _agruparVendasCompras pra
+    // permitir re-render sem re-sync quando o usuário muda estados em Config.
+    const vendasCompletas = [];
     // Contadores de motivos de descarte — útil pra exibir contador no header
     const descartadosPorMotivo = {
       shipmentNull: 0,           // /shipments retornou null/erro
@@ -10474,9 +10479,9 @@ async function syncCompras(force = false){
                           || ship.receiver_address?.state
                           || null;
             const uf = normalizeStateUF(typeof stateRaw === 'object' ? stateRaw.id || stateRaw.name : stateRaw);
-            if(uf && blockedSet.has(uf)){
-              return { blocked: true, uf, substatus: sub };
-            }
+            // NÃO filtramos por estado aqui — o filtro é aplicado no re-agrupamento,
+            // pra que o usuário possa desmarcar estados em Config e ver mudança
+            // imediata sem re-sync (usa vendasCompletas do cache).
             return { order, shipment: ship, substatus: sub, uf };
           })
           .catch(() => ({ discarded: true, reason: 'shipmentNull' }))
@@ -10494,14 +10499,7 @@ async function syncCompras(force = false){
           }
           continue;
         }
-        if(r.blocked){
-          if(!blockedByState[r.uf]) blockedByState[r.uf] = { total: 0, substatus: {} };
-          blockedByState[r.uf].total += 1;
-          blockedByState[r.uf].substatus[r.substatus] =
-            (blockedByState[r.uf].substatus[r.substatus] || 0) + 1;
-        } else {
-          pedidosFiltrados.push(r);
-        }
+        vendasCompletas.push(r);  // TODAS as vendas válidas (bloqueadas ou não)
       }
       processed += batch.length;
       const pct = 35 + (processed / validOrders.length) * 50;
@@ -10512,140 +10510,14 @@ async function syncCompras(force = false){
       }
     }
 
-    window._comprasBlockedByState = blockedByState;
-
-    // ── ETAPA 4: Agregação de itens (85% → 95%) ────────────────────────────
-    setComprasProgress(88, `Processando ${pedidosFiltrados.length} pedidos com etiqueta...`);
-
-    const itemMap = {};
-    for(const { order, shipment, substatus } of pedidosFiltrados){
-      const logisticType = shipment.logistic_type || 'unknown';
-      for(const item of (order.order_items||[])){
-        const title    = item.item?.title || 'Produto desconhecido';
-        const qty      = item.quantity || 1;
-        const itemId   = item.item?.id || title;
-
-        const varAttrs = item.item?.variation_attributes || [];
-        let color = null;
-        for(const va of varAttrs){
-          if(/color|cor/i.test(va.id || va.name || '')){
-            color = va.value_name; break;
-          }
-        }
-        if(!color) color = extractMLColor(title);
-
-        let storage = null;
-        for(const va of varAttrs){
-          if(/internal_memory|memory|storage|memoria/i.test(va.id || va.name || '')){
-            storage = va.value_name; break;
-          }
-        }
-
-        const baseKey = normKey(title).slice(0,60);
-        const colorKey = (color||'').toLowerCase();
-        const key      = `${baseKey}|${colorKey}`;
-
-        if(!itemMap[key]){
-          itemMap[key] = {
-            title, itemId, color, storage,
-            qty:           0,
-            pedidos:       [],
-            substatus:     new Set(),
-            logisticTypes: {},
-            _match:        matchMLtoCIA(title),
-          };
-        }
-        itemMap[key].qty += qty;
-        itemMap[key].pedidos.push(order.id);
-        itemMap[key].substatus.add(substatus);
-        itemMap[key].logisticTypes[logisticType] =
-          (itemMap[key].logisticTypes[logisticType] || 0) + qty;
-      }
-    }
-
-    comprasData = Object.values(itemMap).sort((a,b) => b.qty - a.qty);
-
-    // Desconta do estoque
-    loadEstoqueFromStorage();
-    usadosDoEstoque = [];
-    const estoqueWorking = estoqueData.map(i => ({ ...i }));
-    const savedEstoque   = estoqueData;
-    estoqueData = estoqueWorking;
-
-    for(const ped of comprasData){
-      const { used, items } = consumeFromEstoque(ped.title, ped.color, ped.qty);
-      ped._qtyOriginal   = ped.qty;
-      ped._qtyEstoque    = used;
-      ped._estoqueItems  = items;
-      ped.qty            = ped.qty - used;
-      if(items.length){
-        usadosDoEstoque.push({ pedidoTitle: ped.title, pedidoColor: ped.color, items });
-      }
-    }
-    estoqueData = savedEstoque;
-
-    setComprasProgress(95, 'Calculando métricas...');
-
-    // Helper: menor preço CIA filtrado por storage
-    const getBestCIAPrice = (mlTitle, product) => {
-      if(!product?.offers?.length) return null;
-      let valid = product.offers.filter(o=>o.price);
-      if(!valid.length) return null;
-      const mlGB = (normKey(mlTitle).match(/(\d+)gb/gi)||[])
-        .map(s=>parseInt(s))
-        .filter(n=>n>=32 && n<=2048);
-      if(mlGB.length){
-        const storageValid = valid.filter(o=>{
-          if(!o.spec) return false;
-          const nums = (o.spec.match(/(\d+)/g)||[])
-            .map(Number).filter(n=>n>=32 && n<=2048);
-          return nums.some(v=>mlGB.includes(v));
-        });
-        if(storageValid.length) valid = storageValid;
-      }
-      return Math.min(...valid.map(o=>o.price));
-    };
-
-    // Métricas — calculadas uma vez e armazenadas
-    const totalPedidosOrig = comprasData.reduce((s,i)=>s+(i._qtyOriginal||i.qty), 0);
-    const totalEstoque     = comprasData.reduce((s,i)=>s+(i._qtyEstoque||0), 0);
-    const totalComprar     = comprasData.reduce((s,i)=>s+i.qty, 0);
-    const itensComprar     = comprasData.filter(i=>i.qty>0).length;
-    const totalCusto       = comprasData.reduce((s,i)=>{
-      if(i.qty <= 0) return s;
-      const p = getBestCIAPrice(i.title, i._match?.product);
-      return s + (p ? p * i.qty : 0);
-    }, 0);
-
-    window._comprasMetrics = {
-      pedidos:          pedidosFiltrados.length,
-      pedidosOriginais: totalPedidosOrig,
-      unidadesEstoque:  totalEstoque,
-      itens:            itensComprar,
-      unidades:         totalComprar,
-      custo:            totalCusto,
-      // Diagnóstico de filtragem (transparência): conta tudo que foi descartado
-      totalApiOrders:   allOrders.length,       // total bruto da API
-      semShipping:      semShipping,             // sem logística → invisível
-      canceladas:       canceladas,              // status=cancelled
-      shipmentNull:     descartadosPorMotivo.shipmentNull,   // /shipments falhou
-      substatusDescartado: descartadosPorMotivo.substatusDescartado,  // {handling: N, shipped: M, ...}
-      estadosBloqueados: Object.entries(blockedByState).reduce((sum,[_,v]) => sum + v.total, 0),
-    };
-    // Guarda o helper para ser usado no render
-    window._getBestCIAPrice = getBestCIAPrice;
-
-    // ── ETAPA 5: Renderização (95% → 100%) ─────────────────────────────────
-    setComprasProgress(100, 'Pronto!');
-
-    // Salva no cache
-    _comprasCacheData = {
-      comprasData:    comprasData.map(x => ({ ...x, substatus: new Set(x.substatus) })),
-      usadosDoEstoque,
-      blockedByState,
-      metrics:        window._comprasMetrics,
-    };
-    _comprasCacheTime = Date.now();
+    // Aplica filtro de estado bloqueado + agrupamento (extraído em função pra
+    // permitir re-render rápido quando o usuário muda estados em Config).
+    _agruparVendasCompras(vendasCompletas, {
+      totalApiOrders: allOrders.length,
+      semShipping,
+      canceladas,
+      descartadosPorMotivo,
+    });
 
     const elapsed = Math.round((Date.now() - t0) / 100) / 10;
     console.log(`✓ Lista de Compras carregada em ${elapsed}s`);
@@ -10656,6 +10528,168 @@ async function syncCompras(force = false){
     renderCompras();
 
   } catch(e){ showComprasErr(e.message); }
+}
+
+// Aplica filtro por estado bloqueado + agrupamento de itens em comprasData.
+// Extraído do syncCompras pra permitir re-render sem re-sync quando o usuário
+// muda estados bloqueados em Config. Recebe:
+//   vendasCompletas: array de {order, shipment, substatus, uf} (sem filtro de estado)
+//   extras: {totalApiOrders, semShipping, canceladas, descartadosPorMotivo} — diagnóstico
+function _agruparVendasCompras(vendasCompletas, extras = {}){
+  const blockedSet   = new Set((cfg.blockedStates || []).map(s => s.toUpperCase()));
+  const pedidosFiltrados = [];
+  const blockedByState = {};
+
+  // Aplica filtro de estado (bloqueadas vão pro banner, não pra comprasData)
+  for(const r of vendasCompletas){
+    if(r.uf && blockedSet.has(r.uf)){
+      if(!blockedByState[r.uf]) blockedByState[r.uf] = { total: 0, substatus: {} };
+      blockedByState[r.uf].total += 1;
+      blockedByState[r.uf].substatus[r.substatus] =
+        (blockedByState[r.uf].substatus[r.substatus] || 0) + 1;
+    } else {
+      pedidosFiltrados.push(r);
+    }
+  }
+  window._comprasBlockedByState = blockedByState;
+
+  // Agrega itens
+  const itemMap = {};
+  for(const { order, shipment, substatus } of pedidosFiltrados){
+    const logisticType = shipment.logistic_type || 'unknown';
+    for(const item of (order.order_items||[])){
+      const title    = item.item?.title || 'Produto desconhecido';
+      const qty      = item.quantity || 1;
+      const itemId   = item.item?.id || title;
+
+      const varAttrs = item.item?.variation_attributes || [];
+      let color = null;
+      for(const va of varAttrs){
+        if(/color|cor/i.test(va.id || va.name || '')){
+          color = va.value_name; break;
+        }
+      }
+      if(!color) color = extractMLColor(title);
+
+      let storage = null;
+      for(const va of varAttrs){
+        if(/internal_memory|memory|storage|memoria/i.test(va.id || va.name || '')){
+          storage = va.value_name; break;
+        }
+      }
+
+      const baseKey = normKey(title).slice(0,60);
+      const colorKey = (color||'').toLowerCase();
+      const key      = `${baseKey}|${colorKey}`;
+
+      if(!itemMap[key]){
+        itemMap[key] = {
+          title, itemId, color, storage,
+          qty:           0,
+          pedidos:       [],
+          substatus:     new Set(),
+          logisticTypes: {},
+          _match:        matchMLtoCIA(title),
+        };
+      }
+      itemMap[key].qty += qty;
+      itemMap[key].pedidos.push(order.id);
+      itemMap[key].substatus.add(substatus);
+      itemMap[key].logisticTypes[logisticType] =
+        (itemMap[key].logisticTypes[logisticType] || 0) + qty;
+    }
+  }
+
+  comprasData = Object.values(itemMap).sort((a,b) => b.qty - a.qty);
+
+  // Desconta do estoque
+  loadEstoqueFromStorage();
+  usadosDoEstoque = [];
+  const estoqueWorking = estoqueData.map(i => ({ ...i }));
+  const savedEstoque   = estoqueData;
+  estoqueData = estoqueWorking;
+
+  for(const ped of comprasData){
+    const { used, items } = consumeFromEstoque(ped.title, ped.color, ped.qty);
+    ped._qtyOriginal   = ped.qty;
+    ped._qtyEstoque    = used;
+    ped._estoqueItems  = items;
+    ped.qty            = ped.qty - used;
+    if(items.length){
+      usadosDoEstoque.push({ pedidoTitle: ped.title, pedidoColor: ped.color, items });
+    }
+  }
+  estoqueData = savedEstoque;
+
+  // Helper: menor preço CIA filtrado por storage
+  const getBestCIAPrice = (mlTitle, product) => {
+    if(!product?.offers?.length) return null;
+    let valid = product.offers.filter(o=>o.price);
+    if(!valid.length) return null;
+    const mlGB = (normKey(mlTitle).match(/(\d+)gb/gi)||[])
+      .map(s=>parseInt(s))
+      .filter(n=>n>=32 && n<=2048);
+    if(mlGB.length){
+      const storageValid = valid.filter(o=>{
+        if(!o.spec) return false;
+        const nums = (o.spec.match(/(\d+)/g)||[])
+          .map(Number).filter(n=>n>=32 && n<=2048);
+        return nums.some(v=>mlGB.includes(v));
+      });
+      if(storageValid.length) valid = storageValid;
+    }
+    return Math.min(...valid.map(o=>o.price));
+  };
+
+  // Métricas
+  const totalPedidosOrig = comprasData.reduce((s,i)=>s+(i._qtyOriginal||i.qty), 0);
+  const totalEstoque     = comprasData.reduce((s,i)=>s+(i._qtyEstoque||0), 0);
+  const totalComprar     = comprasData.reduce((s,i)=>s+i.qty, 0);
+  const itensComprar     = comprasData.filter(i=>i.qty>0).length;
+  const totalCusto       = comprasData.reduce((s,i)=>{
+    if(i.qty <= 0) return s;
+    const p = getBestCIAPrice(i.title, i._match?.product);
+    return s + (p ? p * i.qty : 0);
+  }, 0);
+
+  window._comprasMetrics = {
+    pedidos:          pedidosFiltrados.length,
+    pedidosOriginais: totalPedidosOrig,
+    unidadesEstoque:  totalEstoque,
+    itens:            itensComprar,
+    unidades:         totalComprar,
+    custo:            totalCusto,
+    totalApiOrders:      extras.totalApiOrders || 0,
+    semShipping:         extras.semShipping || 0,
+    canceladas:          extras.canceladas || 0,
+    shipmentNull:        extras.descartadosPorMotivo?.shipmentNull || 0,
+    substatusDescartado: extras.descartadosPorMotivo?.substatusDescartado || {},
+    estadosBloqueados:   Object.entries(blockedByState).reduce((sum,[_,v]) => sum + v.total, 0),
+  };
+  window._getBestCIAPrice = getBestCIAPrice;
+
+  // Salva no cache — inclui vendasCompletas pra permitir re-agrupamento sem re-sync
+  _comprasCacheData = {
+    vendasCompletas,
+    comprasData:    comprasData.map(x => ({ ...x, substatus: new Set(x.substatus) })),
+    usadosDoEstoque,
+    blockedByState,
+    metrics:        window._comprasMetrics,
+    extras,
+  };
+  _comprasCacheTime = Date.now();
+}
+
+// Chamada por toggleBlockedState / setAllStates / resetBlockedToDefault
+// quando o usuário muda a lista de estados bloqueados em Config.
+// Re-agrupa a partir de vendasCompletas do cache (SEM re-sync) e re-renderiza.
+function reagruparComprasSeCache(){
+  const cache = _comprasCacheData;
+  if(!cache?.vendasCompletas?.length) return false;
+  _agruparVendasCompras(cache.vendasCompletas, cache.extras || {});
+  applyComprasMetrics();
+  renderCompras();
+  return true;
 }
 
 // Atualiza a barra de progresso visual
@@ -12741,11 +12775,35 @@ const PODE_AGIR_SUBSTATUS = new Set([
   'pending',              // Aguardando pagamento
 ]);
 
+// Detecta se uma venda está CANCELADA/DEVOLVIDA em qualquer campo do ML.
+// ML pode indicar cancelamento em vários lugares: order.status, shipment.status,
+// shipment.substatus, tags, ou campo de reembolso. Verifica tudo pra ter certeza.
+function vendaFoiCancelada(v){
+  if(!v) return false;
+  // 1. Status da order
+  if(v.status === 'cancelled' || v.status === 'invalid') return true;
+  // 2. Status/substatus do shipment
+  if(v.shipment?.status === 'cancelled') return true;
+  if(v.shipment?.substatus === 'cancelled') return true;
+  // 3. Tags que indicam cancelamento/devolução/reembolso
+  const tags = v.tags || v.shipment?.tags || [];
+  for(const t of tags){
+    if(typeof t === 'string' && /cancel|refund|return|devolv|reembol/i.test(t)){
+      return true;
+    }
+  }
+  // 4. Substatus de retorno ao vendedor (produto voltando)
+  const sub = v.shipment?.substatus;
+  if(sub === 'returning_to_sender' || sub === 'returned') return true;
+  return false;
+}
+
 // Retorna true APENAS se substatus está na whitelist explícita.
 // Substatus vazio, desconhecido ou já finalizado → false.
+// Cancelamento em qualquer campo → false.
 function vendaPodeAgir(v){
   if(!v) return false;
-  if(v.status === 'cancelled') return false;
+  if(vendaFoiCancelada(v)) return false;  // Detecção robusta de cancelamento
   const sub = v.shipment?.substatus;
   if(!sub) return false;  // Sem substatus explícito = não marca
   return PODE_AGIR_SUBSTATUS.has(sub);
@@ -15619,15 +15677,19 @@ async function exportNFXLSX(){
   const naoEncontradas = [];
   const descartadas = [];  // {id, motivo} — pra avisar
   // Status que indicam que a venda NÃO deve gerar NF (decisão do usuário)
-  const STATUS_DESCARTAR = new Set(['cancelled','not_delivered']);
+  const STATUS_NAO_ENTREGUE = new Set(['not_delivered']);
   for(const id of _selectedVendaIds){
     const v = fonte.find(x => String(x.id) === String(id));
     if(!v){ naoEncontradas.push(id); continue; }
-    // status pode estar em v.status (raiz) ou v.shipment.substatus
+    // Detecção robusta de cancelamento (inclui shipment.status, tags, etc.)
+    if(vendaFoiCancelada(v)){
+      descartadas.push({ id, motivo: 'cancelada' });
+      continue;
+    }
     const status = String(v.status || '').toLowerCase();
     const substatus = String(v.shipment?.substatus || v.substatus || '').toLowerCase();
-    if(STATUS_DESCARTAR.has(status) || STATUS_DESCARTAR.has(substatus)){
-      descartadas.push({ id, motivo: substatus === 'cancelled' || status === 'cancelled' ? 'cancelada' : 'não entregue' });
+    if(STATUS_NAO_ENTREGUE.has(status) || STATUS_NAO_ENTREGUE.has(substatus)){
+      descartadas.push({ id, motivo: 'não entregue' });
       continue;
     }
     selecionadas.push(v);
@@ -15635,9 +15697,21 @@ async function exportNFXLSX(){
   if(selecionadas.length === 0){
     let msg = 'Nenhuma venda válida para gerar NF.';
     if(naoEncontradas.length) msg += `\n• ${naoEncontradas.length} não encontradas nos dados carregados.`;
-    if(descartadas.length) msg += `\n• ${descartadas.length} descartadas por status (canceladas/não entregues).`;
+    if(descartadas.length) msg += `\n• ${descartadas.length} descartadas (canceladas/não entregues).`;
     alert(msg);
     return;
+  }
+
+  // Avisa se houve descartes pra dar transparência
+  if(descartadas.length > 0){
+    const cancel = descartadas.filter(d => d.motivo === 'cancelada').length;
+    const naoEntregue = descartadas.filter(d => d.motivo === 'não entregue').length;
+    const partes = [];
+    if(cancel) partes.push(`${cancel} cancelada(s)`);
+    if(naoEntregue) partes.push(`${naoEntregue} não entregue(s)`);
+    if(typeof showToast === 'function'){
+      showToast(`⚠ ${partes.join(' + ')} removida(s) da planilha`);
+    }
   }
 
   // 2) Carrega SheetJS se necessário
