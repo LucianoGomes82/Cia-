@@ -1139,9 +1139,14 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
               Mostrar cobertos pelo estoque
             </label>
             <select class="sort-sel" id="compras-filter" onchange="renderCompras()">
+              <option value="all">Todas (não enviadas)</option>
               <option value="both">Pronta + Impressa</option>
-              <option value="ready">Etiqueta Pronta</option>
-              <option value="printed">Etiqueta Impressa</option>
+              <option value="ready">Só Pronta</option>
+              <option value="printed">Só Impressa</option>
+              <option value="invoice_pending">Aguardando DC-e</option>
+              <option value="handling">Em processamento</option>
+              <option value="ready_to_ship">Aguardando processamento</option>
+              <option value="pending">Aguardando pagamento</option>
             </select>
             <select class="sort-sel" id="compras-group" onchange="renderCompras()">
               <option value="store">Agrupar por loja</option>
@@ -10468,10 +10473,13 @@ async function syncCompras(force = false){
           .then(ship => {
             if(!ship) return { discarded: true, reason: 'shipmentNull' };
             const sub = ship.substatus || '(sem substatus)';
-            // Aceita só "pronta pra imprimir" ou "impressa" — etiquetas em ação imediata.
-            // Outras (handling, shipped, in_transit, delivered etc.) significam que a venda
-            // já saiu do estágio onde precisamos comprar pra postar.
-            if(!['ready_to_print','printed'].includes(sub)){
+            // Aceita todas as vendas em qualquer substatus que ainda precisa AÇÃO
+            // do vendedor — mesma whitelist usada em Vendas (PODE_AGIR_SUBSTATUS):
+            //   invoice_pending, ready_to_print, printed, ready_to_ship,
+            //   handling, buffered, in_packing_list, measures_ok, to_be_agreed, pending.
+            // Exclui: shipped, in_transit, out_for_delivery, delivered, cancelled etc.
+            // (a venda já saiu do estágio onde precisamos comprar pra postar).
+            if(!PODE_AGIR_SUBSTATUS.has(sub)){
               return { discarded: true, reason: 'substatusDescartado', substatus: sub };
             }
             const stateRaw = ship.receiver_address?.state?.id
@@ -18832,8 +18840,10 @@ async function exportAnunciosXLSX(){
 function exportComprasWhatsApp(){
   const filter = document.getElementById('compras-filter')?.value || 'both';
   let items    = comprasData;
-  if(filter === 'ready')   items = items.filter(i => i.substatus.has('ready_to_print'));
-  if(filter === 'printed') items = items.filter(i => i.substatus.has('printed'));
+  if(filter === 'ready')             items = items.filter(i => i.substatus.has('ready_to_print'));
+  else if(filter === 'printed')      items = items.filter(i => i.substatus.has('printed'));
+  else if(filter === 'both')         items = items.filter(i => i.substatus.has('ready_to_print') || i.substatus.has('printed'));
+  else if(filter && filter !== 'all') items = items.filter(i => i.substatus.has(filter));
 
   if(!items.length){ alert('Nenhum pedido para exportar.'); return; }
 
@@ -19044,8 +19054,12 @@ function renderCompras(){
   if(!tbody) return;
 
   let items = comprasData;
-  if(filter === 'ready')   items = items.filter(i => i.substatus.has('ready_to_print'));
-  if(filter === 'printed') items = items.filter(i => i.substatus.has('printed'));
+  // 'all' e 'both' aceitam tudo (comprasData já tem só substatus válidos)
+  // 'ready'/'printed' filtram só um. Outros filtros ficam por substatus exato.
+  if(filter === 'ready')             items = items.filter(i => i.substatus.has('ready_to_print'));
+  else if(filter === 'printed')      items = items.filter(i => i.substatus.has('printed'));
+  else if(filter === 'both')         items = items.filter(i => i.substatus.has('ready_to_print') || i.substatus.has('printed'));
+  else if(filter && filter !== 'all') items = items.filter(i => i.substatus.has(filter));
 
   // Se não "show all", esconde itens totalmente cobertos pelo estoque (qty=0)
   if(!showAll){
