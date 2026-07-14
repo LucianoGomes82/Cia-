@@ -542,6 +542,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
               <option value="negative">📉 Margem negativa</option>
               <option value="below_min">⚠ Abaixo do mínimo</option>
             </select>
+            <button class="btn btn-sm" onclick="exportMLAnunciosXLSX()" title="Exporta todos os anúncios ativos para XLSX — útil como backup antes de pausar em massa" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📤 Exportar XLSX</button>
             <button class="btn btn-sm" onclick="syncML()" title="Sincronizar">↻ Atualizar</button>
           </div>
         </div>
@@ -1041,6 +1042,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
           <div style="font-size:11px;color:var(--text2);margin-top:3px" id="estoque-sub">Cadastre o estoque para descontar automaticamente da lista de compras</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-p btn-sm" onclick="openContagemFotoModal()" title="Tire fotos da prateleira e a IA identifica e conta os produtos automaticamente" style="background:linear-gradient(135deg,rgba(62,207,142,.2),rgba(96,165,250,.15));border:1px solid var(--green);color:var(--green)">📷 Contar via foto</button>
           <button class="btn btn-sm" onclick="document.getElementById('estoque-file').click()">📁 Importar arquivo</button>
           <button class="btn btn-sm" onclick="toggleEstoqueEdit()">✏️ Editar manual</button>
           <button class="btn btn-sm" onclick="clearEstoque()">🗑 Limpar</button>
@@ -5639,6 +5641,109 @@ function openAllRestockTabs(){
   }
 }
 
+// Exporta TODOS os anúncios ativos (mlItems) para XLSX. Útil como backup antes
+// de fazer pausa em massa dos anúncios — permite ter registro do estado antes
+// da pausa (título, preço, estoque, tipo, permalink) pra reativar depois.
+async function exportMLAnunciosXLSX(){
+  if(!mlItems || !mlItems.length){
+    alert('Nenhum anúncio carregado. Clica em "↻ Atualizar" primeiro.');
+    return;
+  }
+  // Lazy-load XLSX se ainda não carregou
+  if(typeof XLSX === 'undefined'){
+    try {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    } catch(e){
+      alert('❌ Erro ao carregar biblioteca de planilhas. Verifique sua conexão.');
+      return;
+    }
+  }
+
+  // Nome amigável do tipo de anúncio (o ML retorna códigos)
+  const LISTING_TYPE_LABEL = {
+    gold_special:  'Clássico',
+    gold_premium:  'Premium',
+    gold_pro:      'Premium',
+    bronze:        'Grátis',
+    free:          'Grátis',
+    silver:        'Prata',
+    gold:          'Ouro',
+  };
+
+  // Nome amigável do canal logístico
+  const LOGISTIC_LABEL = {
+    fulfillment:  'FULL',
+    self_service: 'Flex',
+    cross_docking:'Cross-docking',
+    xd_drop_off:  'Ponto de coleta',
+    drop_off:     'Ponto de coleta',
+    default:      'Correios',
+  };
+
+  const today  = new Date().toLocaleDateString('pt-BR').replace(/\//g, '-');
+  const timeStr = new Date().toLocaleString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+  const account = (typeof getActiveAccount === 'function' ? getActiveAccount() : null);
+  const accNick = account?.name || account?.nickname || '';
+  const accSuffix = accNick ? `-${accNick.replace(/[^\w-]/g,'')}` : '';
+
+  const rows = mlItems.map(item => {
+    const commissao = item._comissao != null ? (item._comissao * 100).toFixed(0) + '%' : '';
+    const marginPctFmt = (item._marginPct != null && !isNaN(item._marginPct))
+      ? item._marginPct.toFixed(1) + '%'
+      : '';
+    return {
+      'MLB (ID)':          item.id || '',
+      'Título':            item.title || '',
+      'Preço venda (R$)':  Number((item.price || 0).toFixed(2)),
+      'Estoque':           Number(item.available_quantity || 0),
+      'Vendas total':      Number(item.sold_quantity || 0),
+      'Tipo':              LISTING_TYPE_LABEL[item.listing_type_id] || item.listing_type_id || '',
+      'Comissão':          commissao,
+      'Logística':         LOGISTIC_LABEL[item.shipping?.logistic_type] || (item.shipping?.logistic_type || ''),
+      'Frete grátis':      item.shipping?.free_shipping ? 'Sim' : 'Não',
+      'Custo CIA (R$)':    item._custoCIA != null ? Number(item._custoCIA.toFixed(2)) : '',
+      'Match CIA':         item._match?.product?.name || '',
+      'Margem R$':         item._margin != null ? Number(item._margin.toFixed(2)) : '',
+      'Margem %':          marginPctFmt,
+      'Status':            item.status || 'active',
+      'Categoria':         item.category_id || '',
+      'Permalink':         item.permalink || '',
+      'Foto':              item.thumbnail || item.pictures?.[0]?.url || '',
+      'Data criação':      item.date_created || '',
+    };
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows);
+
+  // Ajusta largura das colunas com base no conteúdo
+  const colWidths = Object.keys(rows[0] || {}).map(key => {
+    let maxLen = key.length;
+    for(const r of rows){
+      const v = r[key];
+      const s = v == null ? '' : String(v);
+      if(s.length > maxLen) maxLen = Math.min(s.length, 60); // cap em 60
+    }
+    return { wch: maxLen + 2 };
+  });
+  ws['!cols'] = colWidths;
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Anúncios ativos');
+
+  const fname = `Anuncios_ML${accSuffix}-${today}.xlsx`;
+  XLSX.writeFile(wb, fname);
+
+  if(typeof showToast === 'function'){
+    showToast(`✓ ${rows.length} anúncio(s) exportado(s) — ${fname}`);
+  }
+}
+
 async function syncML(){
   if(!cfg.at){ alert('Configure o Access Token na aba Config.'); switchTab('config'); return; }
   console.log('[syncML] Iniciando sync', {
@@ -9215,6 +9320,307 @@ function clearEstoque(){
   estoqueData = [];
   saveEstoque();
   renderEstoque();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CONTAGEM DE ESTOQUE VIA FOTO — usa Claude com visão pra identificar
+// e contar produtos em fotos de prateleira/estoque.
+// ═══════════════════════════════════════════════════════════════════
+
+let _stockCountImages = [];       // {name, base64, mediaType, previewUrl}
+let _stockCountDetected = [];     // {modelo, capacidade, cor, quantidade}
+
+function openContagemFotoModal(){
+  _stockCountImages = [];
+  _stockCountDetected = [];
+  // Remove modal antigo se existe
+  const oldModal = document.getElementById('contagem-foto-modal');
+  if(oldModal) oldModal.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'contagem-foto-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:720px;width:100%;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div>
+          <div style="font-size:16px;font-weight:700">📷 Contagem de Estoque via Foto</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">A IA vai identificar os produtos nas fotos e sugerir a contagem</div>
+        </div>
+        <button class="btn btn-sm" onclick="fecharContagemFotoModal()">✕</button>
+      </div>
+
+      <div id="contagem-foto-stage-upload">
+        <div style="border:2px dashed var(--border);border-radius:10px;padding:24px;text-align:center;cursor:pointer;transition:border-color .2s"
+             onclick="document.getElementById('contagem-foto-input').click()"
+             onmouseover="this.style.borderColor='var(--green)'"
+             onmouseout="this.style.borderColor='var(--border)'">
+          <div style="font-size:32px;margin-bottom:8px">📷</div>
+          <div style="font-size:13px;color:var(--text2);margin-bottom:4px">Clique para escolher fotos ou usar a câmera</div>
+          <div style="font-size:11px;color:var(--text3)">Até 5 fotos · JPG, PNG · máximo 5MB cada</div>
+        </div>
+        <input type="file" id="contagem-foto-input" accept="image/*" capture="environment" multiple style="display:none" onchange="onContagemFotoSelected(this.files)">
+
+        <div id="contagem-foto-previews" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-top:12px"></div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+          <button class="btn btn-sm" onclick="fecharContagemFotoModal()">Cancelar</button>
+          <button class="btn btn-p btn-sm" id="btn-analisar-foto" onclick="analisarEstoqueFoto()" disabled>🔍 Analisar com IA</button>
+        </div>
+      </div>
+
+      <div id="contagem-foto-stage-analyzing" style="display:none;padding:24px;text-align:center">
+        <div style="font-size:32px;margin-bottom:10px">🔍</div>
+        <div style="font-size:13px;color:var(--text2);margin-bottom:4px" id="contagem-foto-status">Analisando fotos...</div>
+        <div style="font-size:11px;color:var(--text3)">Pode levar alguns segundos</div>
+      </div>
+
+      <div id="contagem-foto-stage-review" style="display:none">
+        <div style="font-size:13px;color:var(--text2);margin-bottom:8px">Revise os produtos identificados. Você pode ajustar quantidade, modelo ou remover linhas antes de adicionar ao estoque.</div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px" id="contagem-foto-tabela"></table>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="voltarContagemFotoUpload()">← Enviar outra foto</button>
+          <button class="btn btn-sm" onclick="adicionarLinhaContagem()">+ Adicionar linha</button>
+          <button class="btn btn-p btn-sm" onclick="aplicarContagemFotoAoEstoque()">✓ Adicionar ao estoque</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function fecharContagemFotoModal(){
+  // Libera URLs de preview pra liberar memória
+  for(const img of _stockCountImages){
+    if(img.previewUrl) URL.revokeObjectURL(img.previewUrl);
+  }
+  _stockCountImages = [];
+  _stockCountDetected = [];
+  const modal = document.getElementById('contagem-foto-modal');
+  if(modal) modal.remove();
+}
+
+async function onContagemFotoSelected(files){
+  if(!files?.length) return;
+  const arr = Array.from(files);
+  const MAX_FOTOS = 5;
+  const MAX_SIZE = 5 * 1024 * 1024;
+
+  for(const f of arr){
+    if(_stockCountImages.length >= MAX_FOTOS){
+      alert(`Limite de ${MAX_FOTOS} fotos por análise. Envie as demais em outra rodada.`);
+      break;
+    }
+    if(f.size > MAX_SIZE){
+      alert(`Foto "${f.name}" é muito grande (>5MB). Reduza antes de enviar.`);
+      continue;
+    }
+    if(!f.type.startsWith('image/')){
+      alert(`"${f.name}" não é uma imagem.`);
+      continue;
+    }
+    try {
+      const base64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(String(r.result).split(',')[1]);
+        r.onerror = () => rej(new Error('Erro ao ler arquivo'));
+        r.readAsDataURL(f);
+      });
+      _stockCountImages.push({
+        name: f.name,
+        base64,
+        mediaType: f.type,
+        previewUrl: URL.createObjectURL(f),
+      });
+    } catch(e){
+      alert(`Erro ao carregar "${f.name}": ${e.message}`);
+    }
+  }
+  renderContagemFotoPreviews();
+}
+
+function renderContagemFotoPreviews(){
+  const container = document.getElementById('contagem-foto-previews');
+  const btn = document.getElementById('btn-analisar-foto');
+  if(!container) return;
+  container.innerHTML = _stockCountImages.map((img, idx) => `
+    <div style="position:relative;border:1px solid var(--border);border-radius:8px;overflow:hidden;aspect-ratio:1;background:var(--bg2)">
+      <img src="${img.previewUrl}" style="width:100%;height:100%;object-fit:cover">
+      <button onclick="removerContagemFoto(${idx})" style="position:absolute;top:4px;right:4px;background:rgba(239,68,68,.9);color:white;border:0;border-radius:50%;width:22px;height:22px;font-size:12px;cursor:pointer;line-height:1">✕</button>
+      <div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.7);color:white;font-size:9px;padding:3px 6px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${img.name}</div>
+    </div>
+  `).join('');
+  if(btn) btn.disabled = _stockCountImages.length === 0;
+}
+
+function removerContagemFoto(idx){
+  const img = _stockCountImages[idx];
+  if(img?.previewUrl) URL.revokeObjectURL(img.previewUrl);
+  _stockCountImages.splice(idx, 1);
+  renderContagemFotoPreviews();
+}
+
+async function analisarEstoqueFoto(){
+  if(_stockCountImages.length === 0) return;
+  // Troca de fase visual
+  document.getElementById('contagem-foto-stage-upload').style.display = 'none';
+  document.getElementById('contagem-foto-stage-analyzing').style.display = 'block';
+  const statusEl = document.getElementById('contagem-foto-status');
+  statusEl.textContent = `Analisando ${_stockCountImages.length} foto(s)...`;
+
+  const prompt = `Analise essa(s) foto(s) de prateleira/estoque de uma revenda de celulares. Identifique TODOS os produtos visíveis (celulares, tablets, smartwatches, acessórios).
+
+Considere:
+- Caixas originais com nome do produto impresso
+- Etiquetas manuscritas (podem ter apenas modelo + cor abreviados)
+- Produtos empilhados/agrupados — CONTE quantas unidades de cada tipo
+- Duplicatas do mesmo modelo/capacidade/cor DEVEM ser somadas na quantidade
+
+Para cada produto identificado, extraia:
+- "modelo": nome completo do modelo (ex: "Xiaomi Redmi 15", "Motorola Moto G84", "iPhone 15 Pro")
+- "capacidade": armazenamento em formato "128GB", "256GB", "512GB", "1TB" (null se não visível)
+- "cor": cor em português capitalizada (ex: "Preto", "Verde", "Azul Meia-noite") — null se não visível
+- "quantidade": número inteiro de unidades visíveis desse modelo/capacidade/cor
+
+Retorne APENAS um array JSON válido, sem markdown, sem explicação, sem texto adicional. Formato:
+[{"modelo":"...","capacidade":"...","cor":"...","quantidade":N},...]
+
+Se não conseguir identificar nada, retorne: []`;
+
+  const content = [];
+  for(const img of _stockCountImages){
+    content.push({
+      type: 'image',
+      source: { type: 'base64', media_type: img.mediaType, data: img.base64 },
+    });
+  }
+  content.push({ type: 'text', text: prompt });
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4000,
+        messages: [{ role: 'user', content }],
+      }),
+    });
+    if(!response.ok){
+      throw new Error(`API retornou ${response.status}`);
+    }
+    const data = await response.json();
+    // Extrai texto do array de content blocks
+    const textResp = (data.content || [])
+      .filter(c => c.type === 'text')
+      .map(c => c.text)
+      .join('\n')
+      .trim();
+    // Remove cerca de markdown se houver, e parseia
+    const cleaned = textResp.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    let detected;
+    try {
+      detected = JSON.parse(cleaned);
+    } catch {
+      // Tenta extrair primeiro JSON array do texto
+      const m = cleaned.match(/\[[\s\S]*\]/);
+      if(m) detected = JSON.parse(m[0]);
+      else throw new Error('IA não retornou um JSON válido');
+    }
+    if(!Array.isArray(detected)) throw new Error('Formato de resposta inesperado');
+    _stockCountDetected = detected.filter(d => d && d.modelo).map(d => ({
+      modelo: String(d.modelo || '').trim(),
+      capacidade: d.capacidade ? String(d.capacidade).trim().toUpperCase().replace(/\s+/g,'') : null,
+      cor: d.cor ? String(d.cor).trim() : null,
+      quantidade: Math.max(1, parseInt(d.quantidade) || 1),
+    }));
+    mostrarRevisaoContagem();
+  } catch(e){
+    alert(`Erro ao analisar fotos: ${e.message}\n\nTente novamente ou envie fotos mais nítidas.`);
+    document.getElementById('contagem-foto-stage-analyzing').style.display = 'none';
+    document.getElementById('contagem-foto-stage-upload').style.display = 'block';
+  }
+}
+
+function mostrarRevisaoContagem(){
+  document.getElementById('contagem-foto-stage-analyzing').style.display = 'none';
+  document.getElementById('contagem-foto-stage-review').style.display = 'block';
+  renderRevisaoContagem();
+}
+
+function renderRevisaoContagem(){
+  const table = document.getElementById('contagem-foto-tabela');
+  if(!table) return;
+  if(_stockCountDetected.length === 0){
+    table.innerHTML = `<tr><td style="padding:20px;text-align:center;color:var(--text3)">A IA não identificou nenhum produto. Tente adicionar linhas manualmente ou enviar outra foto.</td></tr>`;
+    return;
+  }
+  table.innerHTML = `
+    <thead>
+      <tr style="border-bottom:1px solid var(--border);color:var(--text3);font-size:10px;text-transform:uppercase">
+        <th style="text-align:left;padding:6px 8px">Modelo</th>
+        <th style="text-align:left;padding:6px 8px;min-width:70px">Cap.</th>
+        <th style="text-align:left;padding:6px 8px;min-width:80px">Cor</th>
+        <th style="text-align:center;padding:6px 8px;min-width:70px">Qtd</th>
+        <th style="width:32px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      ${_stockCountDetected.map((d, i) => `
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:4px 6px"><input type="text" value="${(d.modelo||'').replace(/"/g,'&quot;')}" onchange="_stockCountDetected[${i}].modelo=this.value" style="width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text);font-size:12px"></td>
+          <td style="padding:4px 6px"><input type="text" value="${d.capacidade||''}" onchange="_stockCountDetected[${i}].capacidade=this.value.trim()||null" placeholder="256GB" style="width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text);font-size:12px"></td>
+          <td style="padding:4px 6px"><input type="text" value="${d.cor||''}" onchange="_stockCountDetected[${i}].cor=this.value.trim()||null" placeholder="Preto" style="width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text);font-size:12px"></td>
+          <td style="padding:4px 6px"><input type="number" min="1" value="${d.quantidade}" onchange="_stockCountDetected[${i}].quantidade=Math.max(1,parseInt(this.value)||1)" style="width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text);font-size:12px;text-align:center"></td>
+          <td style="padding:4px"><button onclick="removerLinhaContagem(${i})" title="Remover" style="background:transparent;border:0;color:var(--red);cursor:pointer;font-size:16px;padding:2px 6px">✕</button></td>
+        </tr>
+      `).join('')}
+    </tbody>
+  `;
+}
+
+function adicionarLinhaContagem(){
+  _stockCountDetected.push({ modelo:'', capacidade:null, cor:null, quantidade:1 });
+  renderRevisaoContagem();
+}
+
+function removerLinhaContagem(i){
+  _stockCountDetected.splice(i, 1);
+  renderRevisaoContagem();
+}
+
+function voltarContagemFotoUpload(){
+  document.getElementById('contagem-foto-stage-review').style.display = 'none';
+  document.getElementById('contagem-foto-stage-upload').style.display = 'block';
+}
+
+function aplicarContagemFotoAoEstoque(){
+  const validos = _stockCountDetected.filter(d => d.modelo && d.quantidade > 0);
+  if(validos.length === 0){
+    alert('Nenhum produto válido para adicionar. Preencha ao menos o modelo em uma linha.');
+    return;
+  }
+  // Monta linhas de texto no formato do estoque: "qtd modelo capacidade cor"
+  const linhas = validos.map(d => {
+    const parts = [d.modelo];
+    if(d.capacidade) parts.push(d.capacidade);
+    if(d.cor) parts.push(d.cor);
+    return `${d.quantidade} ${parts.join(' ')}`;
+  });
+  // Junta com o texto existente do estoque (soma em vez de substituir)
+  const textoAtual = estoqueData.map(e => {
+    const base = e.basePrice ? ` - ${e.basePrice.toFixed(2).replace('.',',')}` : '';
+    return `${e.qty} ${e.raw}${base}`;
+  });
+  const novoTexto = [...textoAtual, ...linhas].join('\n');
+  // Reusa parseEstoqueText passando o texto completo
+  parseEstoqueText(novoTexto);
+  if(typeof showToast === 'function'){
+    showToast(`✓ ${validos.length} produto(s) adicionado(s) ao estoque via foto`);
+  }
+  fecharContagemFotoModal();
 }
 
 function removeEstoqueItem(idx){
