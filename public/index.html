@@ -5692,6 +5692,26 @@ async function exportMLAnunciosXLSX(){
   const accNick = account?.name || account?.nickname || '';
   const accSuffix = accNick ? `-${accNick.replace(/[^\w-]/g,'')}` : '';
 
+  // Extrai os "códigos de anúncio" que aparecem no painel do ML.
+  // Não é SKU (que o vendedor cadastra) — são IDs numéricos que o ML gera:
+  //   • Cada VARIAÇÃO (cor/capacidade/etc) tem seu próprio ID numérico
+  //   • Anúncios em catálogo têm um catalog_product_id
+  // No painel do ML aparecem prefixados com # (ex: #4448180989)
+  function extractCodigoAnuncio(item){
+    const codes = [];
+    // IDs das variações — o principal código que o usuário procura
+    if(item.variations?.length){
+      for(const v of item.variations){
+        if(v.id != null) codes.push(String(v.id));
+      }
+    }
+    // Se não tem variações mas está em catálogo, usa o catalog_product_id
+    if(codes.length === 0 && item.catalog_product_id){
+      codes.push(String(item.catalog_product_id));
+    }
+    return codes.join(' · ');
+  }
+
   const rows = mlItems.map(item => {
     const commissao = item._comissao != null ? (item._comissao * 100).toFixed(0) + '%' : '';
     const marginPctFmt = (item._marginPct != null && !isNaN(item._marginPct))
@@ -5699,6 +5719,7 @@ async function exportMLAnunciosXLSX(){
       : '';
     return {
       'MLB (ID)':          item.id || '',
+      'Código anúncio':    extractCodigoAnuncio(item),
       'Título':            item.title || '',
       'Preço venda (R$)':  Number((item.price || 0).toFixed(2)),
       'Estoque':           Number(item.available_quantity || 0),
@@ -5782,7 +5803,7 @@ async function syncML(){
     let all = [];
     for(let i=0; i<allIds.length; i+=20){
       const r3 = await proxyFetch(
-        `/items?ids=${allIds.slice(i,i+20).join(',')}&attributes=id,title,price,available_quantity,sold_quantity,listing_type_id,shipping,permalink,user_product_id`
+        `/items?ids=${allIds.slice(i,i+20).join(',')}&attributes=id,title,price,available_quantity,sold_quantity,listing_type_id,shipping,permalink,user_product_id,catalog_product_id,attributes,variations`
       );
       if(r3.ok){ const d3=await r3.json(); all=all.concat(d3.filter(x=>x.code===200).map(x=>x.body)); }
     }
