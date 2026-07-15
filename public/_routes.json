@@ -1,5 +1,5 @@
 {
   "version": 1,
-  "include": ["/ml-proxy", "/ml-token", "/ml-binary"],
+  "include": ["/ml-proxy", "/ml-token", "/ml-binary", "/claude-vision"],
   "exclude": []
 }

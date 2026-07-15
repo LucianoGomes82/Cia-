@@ -9520,25 +9520,28 @@ Se não conseguir identificar nada, retorne: []`;
   content.push({ type: 'text', text: prompt });
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    // Chama a Pages Function proxy (não direto a Anthropic — CORS impede).
+    // O backend valida a API key configurada em ANTHROPIC_API_KEY e repassa.
+    const response = await fetch('/claude-vision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        images: _stockCountImages.map(img => ({
+          media_type: img.mediaType,
+          data: img.base64,
+        })),
+        prompt,
+        model: 'claude-sonnet-4-5',
         max_tokens: 4000,
-        messages: [{ role: 'user', content }],
       }),
     });
-    if(!response.ok){
-      throw new Error(`API retornou ${response.status}`);
-    }
     const data = await response.json();
-    // Extrai texto do array de content blocks
-    const textResp = (data.content || [])
-      .filter(c => c.type === 'text')
-      .map(c => c.text)
-      .join('\n')
-      .trim();
+    if(!response.ok){
+      // Mensagem amigável se a API key não estiver configurada
+      const errMsg = data?.error || `Erro HTTP ${response.status}`;
+      throw new Error(errMsg);
+    }
+    const textResp = String(data.text || '').trim();
     // Remove cerca de markdown se houver, e parseia
     const cleaned = textResp.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     let detected;
@@ -9559,7 +9562,16 @@ Se não conseguir identificar nada, retorne: []`;
     }));
     mostrarRevisaoContagem();
   } catch(e){
-    alert(`Erro ao analisar fotos: ${e.message}\n\nTente novamente ou envie fotos mais nítidas.`);
+    let msg = `Erro ao analisar fotos: ${e.message}`;
+    if(/ANTHROPIC_API_KEY|não configurada/i.test(e.message)){
+      msg = '⚙ Configuração necessária\n\n' +
+            'A chave da API Anthropic ainda não foi configurada. Peça pro admin do app:\n\n' +
+            '1. Acessar Cloudflare Pages → cialista → Settings → Environment variables\n' +
+            '2. Adicionar variável ANTHROPIC_API_KEY (produção e preview)\n' +
+            '3. Obter a chave em https://console.anthropic.com/settings/keys\n' +
+            '4. Fazer novo deploy pra aplicar';
+    }
+    alert(msg);
     document.getElementById('contagem-foto-stage-analyzing').style.display = 'none';
     document.getElementById('contagem-foto-stage-upload').style.display = 'block';
   }
