@@ -11677,7 +11677,21 @@ function setRetirada(orderId, socio, value){
 // dos itens atualmente filtrados. Com o filtro Compra Garantida, o Total ML vira
 // "valor em risco de reclamação".
 function renderVendasResumo(items, filterTipo){
-  const reais = items.filter(v => !v._isManual && !v._excludeFromFinancials);
+  // Regra: uma venda é "real" (entra no cálculo financeiro) se:
+  //   • Não é lançamento manual (_isManual)
+  //   • Não é excluída via _excludeFromFinancials (bloqueada/fake)
+  //   • EXCEÇÃO: bloqueadas COM investimento cadastrado CONTAM
+  //     (você emitiu NF e enviou fora do fluxo ML — mesma regra do Ranking v101).
+  //     Sem essa exceção, o Investido dos sócios ficaria menor do que a soma
+  //     real dos investimentos cadastrados na planilha do sócio.
+  const reais = items.filter(v => {
+    if(v._isManual) return false;
+    if(!v._excludeFromFinancials) return true;
+    // Bloqueada/Fake: só conta se tem investimento cadastrado (foi enviada)
+    const invLuc = getInvestimento(v.id, 'luciano') || 0;
+    const invJon = getInvestimento(v.id, 'johnny')  || 0;
+    return (invLuc > 0 || invJon > 0);
+  });
   const manuaisFiltrados = items.filter(v => v._isManual);
 
   const totalML   = reais.reduce((s, v) => s + (typeof v.totalLiquido === 'number' ? v.totalLiquido : (v.total || 0)), 0);
