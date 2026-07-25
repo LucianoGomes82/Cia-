@@ -1258,6 +1258,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <div style="display:inline-flex;background:var(--bg2);border:1px solid var(--border);border-radius:6px;overflow:hidden">
               <button id="vendas-view-cards" onclick="setVendasView('cards')" class="btn btn-sm" style="font-size:11px;padding:5px 10px;border-radius:0;border:0;background:var(--bg3)">📋 Cards</button>
               <button id="vendas-view-planilha" onclick="setVendasView('planilha')" class="btn btn-sm" style="font-size:11px;padding:5px 10px;border-radius:0;border:0;background:transparent">📊 Planilha</button>
+              <button id="vendas-view-ranking" onclick="setVendasView('ranking')" class="btn btn-sm" style="font-size:11px;padding:5px 10px;border-radius:0;border:0;background:transparent">🏆 Ranking</button>
             </div>
             <select class="sort-sel" id="vendas-period" onchange="syncVendas(true)">
               <option value="7">Últimos 7 dias</option>
@@ -9520,9 +9521,9 @@ Se não conseguir identificar nada, retorne: []`;
   content.push({ type: 'text', text: prompt });
 
   try {
-    // Chama a Pages Function proxy (não direto a Anthropic — CORS impede).
-    // O backend valida a API key configurada em ANTHROPIC_API_KEY e repassa.
-    const response = await fetch('/claude-vision', {
+    // Chama a Pages Function proxy (não direto Google — precisa esconder API key).
+    // Backend valida GEMINI_API_KEY configurada e repassa.
+    const response = await fetch('/gemini-vision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -9531,13 +9532,11 @@ Se não conseguir identificar nada, retorne: []`;
           data: img.base64,
         })),
         prompt,
-        model: 'claude-sonnet-4-5',
-        max_tokens: 4000,
+        model: 'gemini-1.5-flash',  // free tier: 1500 req/dia
       }),
     });
     const data = await response.json();
     if(!response.ok){
-      // Mensagem amigável se a API key não estiver configurada
       const errMsg = data?.error || `Erro HTTP ${response.status}`;
       throw new Error(errMsg);
     }
@@ -9563,13 +9562,13 @@ Se não conseguir identificar nada, retorne: []`;
     mostrarRevisaoContagem();
   } catch(e){
     let msg = `Erro ao analisar fotos: ${e.message}`;
-    if(/ANTHROPIC_API_KEY|não configurada/i.test(e.message)){
+    if(/GEMINI_API_KEY|não configurada/i.test(e.message)){
       msg = '⚙ Configuração necessária\n\n' +
-            'A chave da API Anthropic ainda não foi configurada. Peça pro admin do app:\n\n' +
-            '1. Acessar Cloudflare Pages → cialista → Settings → Environment variables\n' +
-            '2. Adicionar variável ANTHROPIC_API_KEY (produção e preview)\n' +
-            '3. Obter a chave em https://console.anthropic.com/settings/keys\n' +
-            '4. Fazer novo deploy pra aplicar';
+            'A chave da API Gemini ainda não foi configurada. Configure:\n\n' +
+            '1. Obter chave GRÁTIS: https://aistudio.google.com/apikey (login Google)\n' +
+            '2. Cloudflare Pages → cialista → Settings → Environment variables\n' +
+            '3. Adicionar GEMINI_API_KEY com o valor da chave (Production e Preview)\n' +
+            '4. Re-deploy pra aplicar';
     }
     alert(msg);
     document.getElementById('contagem-foto-stage-analyzing').style.display = 'none';
@@ -13408,9 +13407,11 @@ async function setVendasView(mode){
   // Atualiza visual dos botões
   const btnCards    = document.getElementById('vendas-view-cards');
   const btnPlanilha = document.getElementById('vendas-view-planilha');
+  const btnRanking  = document.getElementById('vendas-view-ranking');
   if(btnCards && btnPlanilha){
     btnCards.style.background = mode === 'cards' ? 'var(--bg3)' : 'transparent';
     btnPlanilha.style.background = mode === 'planilha' ? 'var(--bg3)' : 'transparent';
+    if(btnRanking) btnRanking.style.background = mode === 'ranking' ? 'var(--bg3)' : 'transparent';
   }
 
   // Mostra/esconde barra de filtros avançados.
@@ -13427,8 +13428,8 @@ async function setVendasView(mode){
   disable(fromEl, mode !== 'planilha');
   disable(toEl,   mode !== 'planilha');
 
-  // Se entrou na Planilha pela primeira vez (ou cache expirou), tenta carregar do IndexedDB
-  if(mode === 'planilha'){
+  // Se entrou na Planilha ou Ranking pela primeira vez, tenta carregar do IndexedDB
+  if(mode === 'planilha' || mode === 'ranking'){
     if(!vendasDataFull && !_vendasFullLoading){
       // Tenta IndexedDB primeiro (planilha importada)
       try {
@@ -13448,7 +13449,7 @@ async function setVendasView(mode){
         list.innerHTML = `
           <div style="padding:30px;text-align:center;background:var(--bg2);border:1px solid var(--border);border-radius:8px">
             <div style="font-size:32px;margin-bottom:10px">📊</div>
-            <div style="font-size:14px;font-weight:600;margin-bottom:6px">Visão Planilha — Histórico Completo</div>
+            <div style="font-size:14px;font-weight:600;margin-bottom:6px">${mode === 'ranking' ? 'Ranking de Produtos' : 'Visão Planilha'} — Histórico Completo</div>
             <div style="font-size:11px;color:var(--text3);margin-bottom:18px;line-height:1.6">
               Para usar essa visão, importe a planilha XLSX de vendas que o Mercado Livre disponibiliza.<br>
               Vá em <strong>Vender → Vendas → Exportar</strong> no painel ML, baixe o arquivo, e clique em "📥 Importar XLSX" no topo desta aba.
@@ -15236,8 +15237,8 @@ function renderVendas(){
   const empty = document.getElementById('vendas-empty');
   if(!list) return;
 
-  // Escolhe dataset: cards usa vendasData (200 mais recentes), planilha usa vendasDataFull (histórico completo)
-  let rawData = (_vendasView === 'planilha' && vendasDataFull) ? vendasDataFull : vendasData;
+  // Escolhe dataset: cards usa vendasData (200 mais recentes), planilha/ranking usa vendasDataFull (histórico completo)
+  let rawData = ((_vendasView === 'planilha' || _vendasView === 'ranking') && vendasDataFull) ? vendasDataFull : vendasData;
 
   // Mescla com lançamentos manuais (aportes, retiradas, despesas, receitas) — em AMBAS as visões.
   // Antes (v72-): só na Planilha. Isso causava INCONSISTÊNCIA entre cards superior (que usam
@@ -15269,9 +15270,9 @@ function renderVendas(){
     });
   }
 
-  // ── Filtros avançados (só na visão Planilha) ──
+  // ── Filtros avançados (só na visão Planilha e Ranking) ──
   let filtroAplicado = false;
-  if(_vendasView === 'planilha'){
+  if(_vendasView === 'planilha' || _vendasView === 'ranking'){
     const filterTipo = document.getElementById('vendas-filter-tipo')?.value || 'all';
     const filterFrom = document.getElementById('vendas-filter-from')?.value || '';
     const filterTo   = document.getElementById('vendas-filter-to')?.value || '';
@@ -15550,6 +15551,13 @@ function renderVendas(){
   }
   empty.style.display = 'none';
 
+  // ── BRANCH: Modo Ranking (ordenação por rentabilidade) ──
+  if(_vendasView === 'ranking'){
+    const filterTipoAtual = document.getElementById('vendas-filter-tipo')?.value || 'all';
+    list.innerHTML = renderVendasResumo(items, filterTipoAtual) + renderVendasRanking(items);
+    return;
+  }
+
   // ── BRANCH: Modo Planilha ──
   if(_vendasView === 'planilha'){
     const filterTipoAtual = document.getElementById('vendas-filter-tipo')?.value || 'all';
@@ -15719,6 +15727,172 @@ function renderVendas(){
 // Paginação client-side pra evitar trava com >500 itens
 const _planilhaPageSize = 200;
 let _planilhaPage = 1;
+
+// ══════════════════════════════════════════════════════════════════════
+// RANKING DE PRODUTOS — agrega vendas por título e ordena por lucro
+// ══════════════════════════════════════════════════════════════════════
+
+// Estado do ranking (sort + direção)
+let _rankingSort = 'lucroTotal';
+let _rankingDir  = 'desc';  // 'desc' ou 'asc'
+
+function setRankingSort(col){
+  if(_rankingSort === col){
+    // Segundo clique na mesma coluna: inverte direção
+    _rankingDir = _rankingDir === 'desc' ? 'asc' : 'desc';
+  } else {
+    _rankingSort = col;
+    _rankingDir  = 'desc';  // Nova coluna: começa DESC (mais rentável primeiro)
+  }
+  renderVendas();
+}
+
+function renderVendasRanking(items){
+  // Filtra só vendas reais (não lançamentos manuais) e não canceladas
+  const vendas = items.filter(v => v && !v._isManual && v.status !== 'cancelled');
+  if(vendas.length === 0){
+    return `<div style="padding:30px;text-align:center;background:var(--bg2);border:1px solid var(--border);border-radius:8px;color:var(--text3)">
+      Nenhuma venda encontrada com os filtros atuais.
+    </div>`;
+  }
+
+  // Agrupa por título do primeiro item (que é onde temos a info principal)
+  const grupos = new Map();  // titulo → {unidades, receita, custo, lucro, vendasIds}
+  for(const v of vendas){
+    const titulo = (v.firstItem?.title || v.items?.[0]?.title || '(sem título)').trim();
+    const key    = titulo.toLowerCase();
+    let g = grupos.get(key);
+    if(!g){
+      g = {
+        titulo,
+        unidades:    0,
+        receita:     0,
+        custoInv:    0,   // investimento dos sócios
+        lucroTotal:  0,
+        vendasIds:   [],
+        mlbs:        new Set(),
+      };
+      grupos.set(key, g);
+    }
+    // Unidades: soma de v.items[*].quantity (ou pega firstItem se items não vier)
+    const itemsList = v.items?.length ? v.items : (v.firstItem ? [v.firstItem] : []);
+    let qtd = 0;
+    for(const it of itemsList){
+      qtd += (it.quantity || 1);
+      if(it.item_id) g.mlbs.add(it.item_id);
+    }
+    if(qtd === 0) qtd = 1;
+    g.unidades += qtd;
+    g.receita   += (typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0);
+    g.custoInv  += (getInvestimento(v.id, 'luciano') + getInvestimento(v.id, 'johnny'));
+    g.lucroTotal += calcLucroVenda(v);
+    g.vendasIds.push(v.id);
+  }
+
+  // Converte pra array + calcula agregados derivados
+  let ranking = Array.from(grupos.values()).map(g => ({
+    ...g,
+    precoMedio:   g.unidades > 0 ? g.receita / g.unidades : 0,
+    lucroUnitario: g.unidades > 0 ? g.lucroTotal / g.unidades : 0,
+    margemPct:    g.receita > 0 ? (g.lucroTotal / g.receita) * 100 : 0,
+    qtdMLBs:      g.mlbs.size,
+  }));
+
+  // Ordena
+  ranking.sort((a, b) => {
+    const va = a[_rankingSort];
+    const vb = b[_rankingSort];
+    if(typeof va === 'string') return _rankingDir === 'desc' ? vb.localeCompare(va) : va.localeCompare(vb);
+    return _rankingDir === 'desc' ? (vb - va) : (va - vb);
+  });
+
+  // Métricas agregadas do ranking (topo)
+  const totalUnidades = ranking.reduce((s, r) => s + r.unidades, 0);
+  const totalReceita  = ranking.reduce((s, r) => s + r.receita, 0);
+  const totalLucro    = ranking.reduce((s, r) => s + r.lucroTotal, 0);
+  const margemMedia   = totalReceita > 0 ? (totalLucro / totalReceita * 100) : 0;
+
+  const fmt   = n => (n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtInt = n => Math.round(n || 0).toLocaleString('pt-BR');
+
+  // Sort arrow por coluna
+  const arrow = (col) => _rankingSort === col ? (_rankingDir === 'desc' ? ' ↓' : ' ↑') : '';
+  const th = (label, col, align = 'right') => `
+    <th onclick="setRankingSort('${col}')" style="padding:8px 10px;text-align:${align};cursor:pointer;user-select:none;font-size:10px;text-transform:uppercase;color:var(--text3);border-bottom:1px solid var(--border);background:var(--bg2);position:sticky;top:0"
+        onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background='var(--bg2)'">
+      ${label}${arrow(col)}
+    </th>
+  `;
+
+  // Renderiza banner de métricas + tabela
+  return `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px">
+      <div style="padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px">
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase">Produtos únicos</div>
+        <div style="font-size:20px;font-weight:700;color:var(--text)">${ranking.length}</div>
+      </div>
+      <div style="padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px">
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase">Unidades vendidas</div>
+        <div style="font-size:20px;font-weight:700;color:var(--blue)">${fmtInt(totalUnidades)}</div>
+      </div>
+      <div style="padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px">
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase">Receita líquida</div>
+        <div style="font-size:20px;font-weight:700;color:var(--green)">R$ ${fmt(totalReceita)}</div>
+      </div>
+      <div style="padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px">
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase">Lucro total</div>
+        <div style="font-size:20px;font-weight:700;color:${totalLucro >= 0 ? 'var(--green)' : 'var(--red)'}">R$ ${fmt(totalLucro)}</div>
+      </div>
+      <div style="padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px">
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase">Margem média</div>
+        <div style="font-size:20px;font-weight:700;color:${margemMedia >= 15 ? 'var(--green)' : margemMedia >= 5 ? 'var(--amber)' : 'var(--red)'}">${margemMedia.toFixed(1)}%</div>
+      </div>
+    </div>
+
+    <div style="font-size:11px;color:var(--text3);margin-bottom:6px">
+      💡 Clique nos cabeçalhos para ordenar por qualquer coluna. Padrão: lucro total decrescente.
+    </div>
+
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;max-height:70vh;overflow-y:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr>
+            <th style="padding:8px 10px;text-align:center;font-size:10px;text-transform:uppercase;color:var(--text3);border-bottom:1px solid var(--border);background:var(--bg2);position:sticky;top:0;width:40px">#</th>
+            ${th('Produto', 'titulo', 'left')}
+            ${th('Unid.', 'unidades')}
+            ${th('Preço médio', 'precoMedio')}
+            ${th('Receita', 'receita')}
+            ${th('Lucro total', 'lucroTotal')}
+            ${th('Lucro/un', 'lucroUnitario')}
+            ${th('Margem %', 'margemPct')}
+          </tr>
+        </thead>
+        <tbody>
+          ${ranking.map((r, i) => {
+            const margemColor = r.margemPct >= 15 ? 'var(--green)' :
+                                r.margemPct >= 5  ? 'var(--amber)' : 'var(--red)';
+            const lucroColor  = r.lucroTotal >= 0 ? 'var(--green)' : 'var(--red)';
+            return `
+              <tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:8px 10px;text-align:center;color:var(--text3);font-weight:600">${i+1}</td>
+                <td style="padding:8px 10px" title="${(r.titulo || '').replace(/"/g,'&quot;')}">
+                  <div style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">${r.titulo || '(sem título)'}</div>
+                  ${r.qtdMLBs > 1 ? `<div style="font-size:10px;color:var(--text3);margin-top:2px">${r.qtdMLBs} MLBs distintos</div>` : ''}
+                </td>
+                <td style="padding:8px 10px;text-align:right;font-weight:600">${fmtInt(r.unidades)}</td>
+                <td style="padding:8px 10px;text-align:right">R$ ${fmt(r.precoMedio)}</td>
+                <td style="padding:8px 10px;text-align:right">R$ ${fmt(r.receita)}</td>
+                <td style="padding:8px 10px;text-align:right;font-weight:700;color:${lucroColor}">R$ ${fmt(r.lucroTotal)}</td>
+                <td style="padding:8px 10px;text-align:right;color:${lucroColor}">R$ ${fmt(r.lucroUnitario)}</td>
+                <td style="padding:8px 10px;text-align:right;font-weight:600;color:${margemColor}">${r.margemPct.toFixed(1)}%</td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
 
 function renderVendasPlanilha(items){
   // Reset da página se mudou o dataset (heurística simples por tamanho)
