@@ -14146,7 +14146,11 @@ function detectSheetType(aoa){
 // Parse de aba ML pura (BASE_*)
 function parseAbaML(aoa, headerRow){
   const headers = (aoa[headerRow] || []).map(h => String(h || '').toLowerCase().trim());
-  const dataRows = aoa.slice(headerRow + 1);
+  // Regra: DESCONSIDERAR a primeira linha logo após o header.
+  // No formato de exportação do ML, a linha 2 do arquivo (logo abaixo do cabeçalho)
+  // contém totalizadores/subtotais — NÃO é venda de produto e infla artificialmente
+  // as métricas. Sempre pulada aqui.
+  const dataRows = aoa.slice(headerRow + 2);
 
   const findCol = (candidates) => {
     for(const c of candidates){
@@ -14352,7 +14356,10 @@ function parseAbaSocio(aoa, headerRow, sheetName, vendasMap){
     total:      findCol(['total (brl)']),
   };
 
-  const dataRows = aoa.slice(headerRow + 1);
+  // Regra: DESCONSIDERAR a primeira linha logo após o header (linha 2 do XLSX).
+  // Assim como na aba ML, essa linha contém totalizadores/subtotais — NÃO é
+  // uma venda real. Ex: R$ 57.170 Lucro Diário, R$ 202.100 Inv. Johnny, "Retido".
+  const dataRows = aoa.slice(headerRow + 2);
 
   const lancamentosManuais = [];
   let investUpdated = 0;
