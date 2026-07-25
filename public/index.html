@@ -15735,6 +15735,7 @@ let _planilhaPage = 1;
 // Estado do ranking (sort + direção)
 let _rankingSort = 'lucroTotal';
 let _rankingDir  = 'desc';  // 'desc' ou 'asc'
+let _rankingSearch = '';    // termo de busca preservado entre renders
 
 function setRankingSort(col){
   if(_rankingSort === col){
@@ -15745,6 +15746,20 @@ function setRankingSort(col){
     _rankingDir  = 'desc';  // Nova coluna: começa DESC (mais rentável primeiro)
   }
   renderVendas();
+}
+
+// Chamado a cada tecla no input de busca. Guarda o termo em variável módulo
+// pra sobreviver ao re-render, dispara render, e re-foca no input restaurando
+// posição do cursor.
+function updateRankingSearch(el){
+  _rankingSearch = el.value || '';
+  const cursor = el.selectionStart;
+  renderVendas();
+  const novo = document.getElementById('ranking-search');
+  if(novo){
+    novo.focus();
+    try { novo.setSelectionRange(cursor, cursor); } catch{}
+  }
 }
 
 function renderVendasRanking(items){
@@ -15767,10 +15782,12 @@ function renderVendasRanking(items){
         titulo,
         unidades:    0,
         receita:     0,
-        custoInv:    0,   // investimento dos sócios
+        custoInv:    0,   // investimento dos sócios (aparece como coluna)
         lucroTotal:  0,
         vendasIds:   [],
         mlbs:        new Set(),
+        vendasBloqSemInv:  0,  // vendas bloqueadas SEM investimento (ainda não enviadas)
+        vendasSemCusto:    0,  // vendas normais SEM investimento cadastrado (dados incompletos)
       };
       grupos.set(key, g);
     }
@@ -15782,21 +15799,55 @@ function renderVendasRanking(items){
       if(it.item_id) g.mlbs.add(it.item_id);
     }
     if(qtd === 0) qtd = 1;
-    g.unidades += qtd;
-    g.receita   += (typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0);
-    g.custoInv  += (getInvestimento(v.id, 'luciano') + getInvestimento(v.id, 'johnny'));
-    g.lucroTotal += calcLucroVenda(v);
+
+    // Cálculo do lucro pro ranking:
+    // - Vendas normais COM investimento: entram normal
+    // - Vendas de estado bloqueado COM investimento: entram normal (enviadas fora do fluxo ML)
+    // - Vendas de estado bloqueado SEM investimento: não entram (ainda pendentes)
+    // - Vendas normais SEM investimento cadastrado: NÃO entram (dados incompletos que
+    //   inflariam o lucro artificialmente — melhor mostrar só as com custo real)
+    const invLuc = getInvestimento(v.id, 'luciano');
+    const invJon = getInvestimento(v.id, 'johnny');
+    const temInvestimento = (invLuc > 0 || invJon > 0);
+
+    if(!temInvestimento){
+      // Sem investimento cadastrado — categoriza pra estatística mas NÃO entra no lucro
+      if(v._excludeFromFinancials){
+        g.vendasBloqSemInv += qtd;
+      } else {
+        g.vendasSemCusto += qtd;
+      }
+      continue;
+    }
+
+    // Entra normal (bloqueada com investimento ou venda regular com custo)
+    const totalLiq = (typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0);
+    g.unidades   += qtd;
+    g.receita    += totalLiq;
+    g.custoInv   += (invLuc + invJon);
+    g.lucroTotal += (totalLiq - invLuc - invJon);
     g.vendasIds.push(v.id);
   }
 
   // Converte pra array + calcula agregados derivados
   let ranking = Array.from(grupos.values()).map(g => ({
     ...g,
-    precoMedio:   g.unidades > 0 ? g.receita / g.unidades : 0,
+    precoMedio:    g.unidades > 0 ? g.receita / g.unidades : 0,
     lucroUnitario: g.unidades > 0 ? g.lucroTotal / g.unidades : 0,
-    margemPct:    g.receita > 0 ? (g.lucroTotal / g.receita) * 100 : 0,
-    qtdMLBs:      g.mlbs.size,
+    margemPct:     g.receita > 0 ? (g.lucroTotal / g.receita) * 100 : 0,
+    // "Margem % por unidade" = Margem % dividida pela quantidade vendida.
+    // Indica quanta margem "por venda" existe — produtos que precisaram de muitas
+    // vendas pra atingir a mesma margem % terão valor menor. Útil pra comparar
+    // eficiência de margem entre produtos com volumes diferentes.
+    margemUnitPct: (g.receita > 0 && g.unidades > 0) ? ((g.lucroTotal / g.receita) * 100 / g.unidades) : 0,
+    qtdMLBs:       g.mlbs.size,
   }));
+
+  // Filtro de busca de produto (em memória, aplicado depois do agrupamento)
+  const searchTerm = (_rankingSearch || '').toLowerCase().trim();
+  if(searchTerm){
+    ranking = ranking.filter(r => (r.titulo || '').toLowerCase().includes(searchTerm));
+  }
 
   // Ordena
   ranking.sort((a, b) => {
@@ -15849,8 +15900,16 @@ function renderVendasRanking(items){
       </div>
     </div>
 
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+      <input type="text" id="ranking-search" placeholder="🔍 Buscar produto..."
+        value="${(_rankingSearch || '').replace(/"/g,'&quot;')}"
+        oninput="updateRankingSearch(this)"
+        style="flex:1;min-width:240px;max-width:400px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-size:12px">
+      ${searchTerm ? `<span style="font-size:11px;color:var(--text3)">${ranking.length} produto(s) encontrado(s)</span>` : ''}
+    </div>
+
     <div style="font-size:11px;color:var(--text3);margin-bottom:6px">
-      💡 Clique nos cabeçalhos para ordenar por qualquer coluna. Padrão: lucro total decrescente.
+      💡 Clique nos cabeçalhos para ordenar. Vendas SEM investimento cadastrado NÃO entram no cálculo — indicadas com ⚠ abaixo do título.
     </div>
 
     <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;max-height:70vh;overflow-y:auto">
@@ -15862,9 +15921,11 @@ function renderVendasRanking(items){
             ${th('Unid.', 'unidades')}
             ${th('Preço médio', 'precoMedio')}
             ${th('Receita', 'receita')}
+            ${th('Custo', 'custoInv')}
             ${th('Lucro total', 'lucroTotal')}
             ${th('Lucro/un', 'lucroUnitario')}
             ${th('Margem %', 'margemPct')}
+            ${th('Margem %/un', 'margemUnitPct')}
           </tr>
         </thead>
         <tbody>
@@ -15878,13 +15939,17 @@ function renderVendasRanking(items){
                 <td style="padding:8px 10px" title="${(r.titulo || '').replace(/"/g,'&quot;')}">
                   <div style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">${r.titulo || '(sem título)'}</div>
                   ${r.qtdMLBs > 1 ? `<div style="font-size:10px;color:var(--text3);margin-top:2px">${r.qtdMLBs} MLBs distintos</div>` : ''}
+                  ${r.vendasSemCusto > 0 ? `<div style="font-size:10px;color:var(--red);margin-top:2px" title="Vendas SEM investimento cadastrado — não entram no cálculo do lucro. Cadastre o custo dos sócios pra incluí-las.">⚠ ${r.vendasSemCusto} un. sem custo cadastrado</div>` : ''}
+                  ${r.vendasBloqSemInv > 0 ? `<div style="font-size:10px;color:var(--amber);margin-top:2px" title="Vendas de estado bloqueado sem investimento (ainda não enviadas).">⏳ ${r.vendasBloqSemInv} un. bloqueada(s) pendente(s)</div>` : ''}
                 </td>
                 <td style="padding:8px 10px;text-align:right;font-weight:600">${fmtInt(r.unidades)}</td>
                 <td style="padding:8px 10px;text-align:right">R$ ${fmt(r.precoMedio)}</td>
                 <td style="padding:8px 10px;text-align:right">R$ ${fmt(r.receita)}</td>
+                <td style="padding:8px 10px;text-align:right;color:var(--text3)">R$ ${fmt(r.custoInv)}</td>
                 <td style="padding:8px 10px;text-align:right;font-weight:700;color:${lucroColor}">R$ ${fmt(r.lucroTotal)}</td>
                 <td style="padding:8px 10px;text-align:right;color:${lucroColor}">R$ ${fmt(r.lucroUnitario)}</td>
                 <td style="padding:8px 10px;text-align:right;font-weight:600;color:${margemColor}">${r.margemPct.toFixed(1)}%</td>
+                <td style="padding:8px 10px;text-align:right;color:${margemColor}" title="Margem % ÷ Quantidade de unidades">${r.margemUnitPct.toFixed(2)}%</td>
               </tr>
             `;
           }).join('')}
