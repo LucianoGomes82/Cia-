@@ -14165,11 +14165,22 @@ function detectSheetType(aoa){
 // Parse de aba ML pura (BASE_*)
 function parseAbaML(aoa, headerRow){
   const headers = (aoa[headerRow] || []).map(h => String(h || '').toLowerCase().trim());
-  // Regra: DESCONSIDERAR a primeira linha logo após o header.
-  // No formato de exportação do ML, a linha 2 do arquivo (logo abaixo do cabeçalho)
-  // contém totalizadores/subtotais — NÃO é venda de produto e infla artificialmente
-  // as métricas. Sempre pulada aqui.
-  const dataRows = aoa.slice(headerRow + 2);
+  // Regra: só pula a primeira linha após o header SE for totalizador/subtotal.
+  // Detecção: o N.º de venda dela não é um inteiro puro (ex: 883.26, vazio, ou texto).
+  // Isso protege abas ML puras (BASE_*) onde a primeira linha após o cabeçalho é
+  // uma venda real (MLB inteiro válido) — não pode ser pulada.
+  const colVendaIdx = headers.findIndex(h =>
+    /n\.?º?\s+de\s+venda/i.test(h) || h === 'venda' || h === '# venda'
+  );
+  const firstDataRow = aoa[headerRow + 1];
+  let skipFirst = false;
+  if(firstDataRow && colVendaIdx !== -1){
+    const rawId = firstDataRow[colVendaIdx];
+    const idStr = rawId != null ? String(rawId).trim() : '';
+    // Se NÃO é um inteiro puro (16 dígitos padrão MLB), é totalizador → skip
+    skipFirst = !/^\d{10,20}$/.test(idStr);
+  }
+  const dataRows = aoa.slice(headerRow + (skipFirst ? 2 : 1));
 
   const findCol = (candidates) => {
     for(const c of candidates){
@@ -14375,10 +14386,16 @@ function parseAbaSocio(aoa, headerRow, sheetName, vendasMap){
     total:      findCol(['total (brl)']),
   };
 
-  // Regra: DESCONSIDERAR a primeira linha logo após o header (linha 2 do XLSX).
-  // Assim como na aba ML, essa linha contém totalizadores/subtotais — NÃO é
-  // uma venda real. Ex: R$ 57.170 Lucro Diário, R$ 202.100 Inv. Johnny, "Retido".
-  const dataRows = aoa.slice(headerRow + 2);
+  // Regra: só pula a primeira linha após o header SE for totalizador/subtotal.
+  // Detecção: o N.º de venda dela não é um inteiro puro (ex: 883.26, "Retido").
+  const firstDataRow = aoa[headerRow + 1];
+  let skipFirst = false;
+  if(firstDataRow && cols.orderId !== -1){
+    const rawId = firstDataRow[cols.orderId];
+    const idStr = rawId != null ? String(rawId).trim() : '';
+    skipFirst = !/^\d{10,20}$/.test(idStr);
+  }
+  const dataRows = aoa.slice(headerRow + (skipFirst ? 2 : 1));
 
   const lancamentosManuais = [];
   let investUpdated = 0;
