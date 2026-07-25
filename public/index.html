@@ -15835,11 +15835,6 @@ function renderVendasRanking(items){
     precoMedio:    g.unidades > 0 ? g.receita / g.unidades : 0,
     lucroUnitario: g.unidades > 0 ? g.lucroTotal / g.unidades : 0,
     margemPct:     g.receita > 0 ? (g.lucroTotal / g.receita) * 100 : 0,
-    // "Margem % por unidade" = Margem % dividida pela quantidade vendida.
-    // Indica quanta margem "por venda" existe — produtos que precisaram de muitas
-    // vendas pra atingir a mesma margem % terão valor menor. Útil pra comparar
-    // eficiência de margem entre produtos com volumes diferentes.
-    margemUnitPct: (g.receita > 0 && g.unidades > 0) ? ((g.lucroTotal / g.receita) * 100 / g.unidades) : 0,
     qtdMLBs:       g.mlbs.size,
   }));
 
@@ -15925,7 +15920,6 @@ function renderVendasRanking(items){
             ${th('Lucro total', 'lucroTotal')}
             ${th('Lucro/un', 'lucroUnitario')}
             ${th('Margem %', 'margemPct')}
-            ${th('Margem %/un', 'margemUnitPct')}
           </tr>
         </thead>
         <tbody>
@@ -15949,7 +15943,6 @@ function renderVendasRanking(items){
                 <td style="padding:8px 10px;text-align:right;font-weight:700;color:${lucroColor}">R$ ${fmt(r.lucroTotal)}</td>
                 <td style="padding:8px 10px;text-align:right;color:${lucroColor}">R$ ${fmt(r.lucroUnitario)}</td>
                 <td style="padding:8px 10px;text-align:right;font-weight:600;color:${margemColor}">${r.margemPct.toFixed(1)}%</td>
-                <td style="padding:8px 10px;text-align:right;color:${margemColor}" title="Margem % ÷ Quantidade de unidades">${r.margemUnitPct.toFixed(2)}%</td>
               </tr>
             `;
           }).join('')}
