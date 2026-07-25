@@ -15276,11 +15276,27 @@ function renderVendas(){
 
   // ── Ordena por data desc (mais nova primeiro) ──
   // Faz cópia pra não mutar o array original
-  const sourceData = [...rawData].sort((a, b) => {
+  let sourceData = [...rawData].sort((a, b) => {
     const dA = a.date_created ? new Date(a.date_created).getTime() : 0;
     const dB = b.date_created ? new Date(b.date_created).getTime() : 0;
     return dB - dA;
   });
+
+  // ── Filtro de data — SEMPRE aplicado (afeta cards do topo E lista) ──
+  // Antes: só rodava em Planilha/Ranking, então cards do topo mostravam TUDO
+  // sempre, ignorando o período escolhido. Agora todos os cards refletem
+  // exatamente o período selecionado (De/Até).
+  const filterFromGlobal = document.getElementById('vendas-filter-from')?.value || '';
+  const filterToGlobal   = document.getElementById('vendas-filter-to')?.value   || '';
+  if(filterFromGlobal || filterToGlobal){
+    sourceData = sourceData.filter(v => {
+      if(!v.date_created) return false;
+      const vDate = getDateStringBR(new Date(v.date_created));
+      if(filterFromGlobal && vDate < filterFromGlobal) return false;
+      if(filterToGlobal   && vDate > filterToGlobal)   return false;
+      return true;
+    });
+  }
 
   const search = (document.getElementById('vendas-search')?.value || '').toLowerCase().trim();
   let items = sourceData;
@@ -15297,11 +15313,9 @@ function renderVendas(){
   }
 
   // ── Filtros avançados (só na visão Planilha e Ranking) ──
-  let filtroAplicado = false;
+  let filtroAplicado = !!(filterFromGlobal || filterToGlobal);
   if(_vendasView === 'planilha' || _vendasView === 'ranking'){
     const filterTipo = document.getElementById('vendas-filter-tipo')?.value || 'all';
-    const filterFrom = document.getElementById('vendas-filter-from')?.value || '';
-    const filterTo   = document.getElementById('vendas-filter-to')?.value || '';
 
     // Filtro de tipo
     if(filterTipo !== 'all'){
@@ -15316,27 +15330,24 @@ function renderVendas(){
       });
     }
 
-    // Filtro de data (compara YYYY-MM-DD da venda com from/to)
-    if(filterFrom || filterTo){
-      filtroAplicado = true;
-      items = items.filter(v => {
-        if(!v.date_created) return false;  // sem data, não passa
-        const vDate = getDateStringBR(new Date(v.date_created));  // "2026-04-30"
-        if(filterFrom && vDate < filterFrom) return false;
-        if(filterTo   && vDate > filterTo) return false;
-        return true;
-      });
-    }
+    // Filtro de data já foi aplicado em sourceData acima — só marca flag pra badge
 
     // Atualiza contagem visual
     const countEl = document.getElementById('vendas-filter-count');
     if(countEl){
       if(filtroAplicado){
-        countEl.textContent = `Mostrando ${items.length} de ${sourceData.length}`;
+        countEl.textContent = `Mostrando ${items.length} de ${rawData.length}`;
         countEl.style.color = 'var(--blue)';
       } else {
         countEl.textContent = '';
       }
+    }
+  } else if(filterFromGlobal || filterToGlobal){
+    // Modo Cards: também mostra contador quando há filtro de data
+    const countEl = document.getElementById('vendas-filter-count');
+    if(countEl){
+      countEl.textContent = `Mostrando ${items.length} de ${rawData.length}`;
+      countEl.style.color = 'var(--blue)';
     }
   }
 
