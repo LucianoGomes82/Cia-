@@ -11761,13 +11761,18 @@ function renderVendasResumo(items, filterTipo){
 }
 
 function calcLucroVenda(v){
-  // Se é venda de estado bloqueado, não conta no lucro (só fica para acompanhamento)
-  if(v._excludeFromFinancials) return 0;
+  // Regra (consistente com Ranking v101 e painel financeiro):
+  // - Venda de estado bloqueado/fake SEM investimento cadastrado → não conta
+  //   (ainda pendente de envio ou anulada)
+  // - Venda de estado bloqueado/fake COM investimento cadastrado → conta normal
+  //   (você já emitiu NF/enviou fora do fluxo ML — é lucro real)
+  // - Venda normal → conta sempre
+  const luciano = getInvestimento(v.id, 'luciano');
+  const johnny  = getInvestimento(v.id, 'johnny');
+  if(v._excludeFromFinancials && luciano <= 0 && johnny <= 0) return 0;
   // Lucro = Total Líquido (já descontado comissão ML e frete bancado pelo vendedor)
   // menos os investimentos dos sócios
   const totalLiq = (typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0);
-  const luciano = getInvestimento(v.id, 'luciano');
-  const johnny  = getInvestimento(v.id, 'johnny');
   return totalLiq - luciano - johnny;
 }
 
@@ -15373,8 +15378,18 @@ function renderVendas(){
   }
 
   // ── Métricas financeiras: separa vendas reais de lançamentos manuais ──
-  // Vendas (não bloqueadas, não manuais)
-  const vendasFinanc = sourceData.filter(v => !v._excludeFromFinancials && !v._isManual);
+  // Vendas reais para o painel financeiro (mesma regra do Ranking v101 / v105):
+  // - Não é manual (aporte/retirada/despesa/receita)
+  // - Se marcada como bloqueada/fake (_excludeFromFinancials): só entra se TEM
+  //   investimento cadastrado — nesse caso foi efetivamente enviada e conta
+  //   como venda real. Sem investimento fica de fora (pendente).
+  const vendasFinanc = sourceData.filter(v => {
+    if(v._isManual) return false;
+    if(!v._excludeFromFinancials) return true;
+    const invLuc = getInvestimento(v.id, 'luciano') || 0;
+    const invJon = getInvestimento(v.id, 'johnny')  || 0;
+    return (invLuc > 0 || invJon > 0);
+  });
   // Lançamentos manuais
   const manuais = sourceData.filter(v => v._isManual);
   const blockedCount = sourceData.filter(v => !v._isManual && v._isBlockedState && !v._isFake).length;
