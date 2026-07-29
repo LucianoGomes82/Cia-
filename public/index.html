@@ -1274,6 +1274,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <button class="btn btn-sm" onclick="diagnosticarVenda()" title="Investigar dados de uma venda específica (debug)" style="font-size:11px">🔍 Debug</button>
             <button class="btn btn-sm" onclick="document.getElementById('vendas-import-file').click()" title="Importa XLSX de 2 formatos:&#10;• Planilha de vendas exportada do Mercado Livre (importa todas as vendas)&#10;• Planilha exportada por este app (atualiza apenas investimentos)" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📥 Importar XLSX</button>
             <input type="file" id="vendas-import-file" accept=".xlsx,.xls" style="display:none" onchange="importVendasFromXLSX(event)">
+            <button class="btn btn-sm" id="btn-divergencias" onclick="openDivergenciasModal()" title="Vendas onde o valor da planilha bilateral difere do valor oficial do ML. Valide qual valor usar no cálculo do lucro." style="background:rgba(251,191,36,.15);color:var(--amber);border:1px solid var(--amber);display:none">⚖ Divergências <span id="div-count">0</span></button>
             <button class="btn btn-sm" onclick="limparHistoricoXLSX()" title="Apaga TODAS as vendas que foram importadas via XLSX (planilhas do Mercado Livre). NÃO afeta vendas sincronizadas via API." style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🗑 Limpar histórico XLSX</button>
             <button class="btn btn-sm" onclick="limparInvestimentosVendas()" title="Apaga o valor INVESTIDO de cada venda (coluna Investido Luciano/Johnny da Planilha). Não apaga as vendas em si, apenas zera os valores. NÃO afeta lançamentos manuais (aportes/retiradas) — esses ficam no botão 'Lançamentos'." style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">💸 Limpar investimentos</button>
             <button class="btn btn-sm" onclick="openListaBloqueio()" title="Lista de compradores de estados bloqueados para você bloquear no Mercado Livre" style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red)">🚫 Bloquear compradores</button>
@@ -11655,6 +11656,209 @@ function setInvestimento(orderId, socio, value){
   if(!_investBatchMode) saveInvestimentos();
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// SISTEMA DE DIVERGÊNCIA DE VALORES (v109)
+// ═══════════════════════════════════════════════════════════════════════
+// Quando o Total (BRL) da aba do sócio difere do totalLiquido da aba ML,
+// registramos aqui. O usuário pode validar e escolher qual valor usar:
+// - 'ml'        → mantém o valor oficial do ML (default)
+// - 'bilateral' → usa o valor manual da planilha bilateral
+//
+// Storage: cada entrada é { totalMl, totalBilateral, aceite: 'ml'|'bilateral'|null }
+// - aceite=null → pendente de validação
+// - aceite='ml' ou 'bilateral' → decidido, calcLucroVenda respeita
+//
+let valoresDivergentes = {};  // { orderId: { totalMl, totalBilateral, aceite } }
+
+function loadValoresDivergentes(){
+  try {
+    const raw = localStorage.getItem('cia_valoresDivergentes');
+    valoresDivergentes = raw ? JSON.parse(raw) : {};
+  } catch { valoresDivergentes = {}; }
+}
+function saveValoresDivergentes(){
+  try {
+    localStorage.setItem('cia_valoresDivergentes', JSON.stringify(valoresDivergentes));
+  } catch(e){ console.warn('Erro salvando valoresDivergentes:', e); }
+}
+// Registra uma divergência detectada durante import. Preserva decisão prévia
+// se já existia (não sobrescreve aceite do usuário).
+function registrarDivergencia(orderId, totalMl, totalBilateral){
+  const key = String(orderId);
+  const prev = valoresDivergentes[key];
+  valoresDivergentes[key] = {
+    totalMl,
+    totalBilateral,
+    aceite: prev?.aceite || null,  // preserva decisão anterior
+  };
+}
+// Retorna o valor "efetivo" pra usar no cálculo do lucro:
+// - Se venda tem divergência aceita como bilateral → usa totalBilateral
+// - Senão (nenhum aceite OU aceite='ml') → retorna null (caller usa totalLiquido default)
+function getValorEfetivo(orderId){
+  const d = valoresDivergentes[String(orderId)];
+  if(!d) return null;
+  if(d.aceite === 'bilateral') return d.totalBilateral;
+  return null;
+}
+// Retorna quantas divergências estão pendentes de validação
+function contarDivergenciasPendentes(){
+  let n = 0;
+  for(const k in valoresDivergentes){
+    if(!valoresDivergentes[k].aceite) n++;
+  }
+  return n;
+}
+// Aceita uma divergência com o valor escolhido pelo usuário
+function aceitarDivergencia(orderId, escolha){
+  const d = valoresDivergentes[String(orderId)];
+  if(!d) return;
+  d.aceite = escolha;  // 'ml' ou 'bilateral'
+  saveValoresDivergentes();
+}
+
+// Atualiza o contador visível no botão de divergências (chamado em vários lugares)
+function refreshDivergenciasBadge(){
+  const btn = document.getElementById('btn-divergencias');
+  const span = document.getElementById('div-count');
+  if(!btn || !span) return;
+  const total = Object.keys(valoresDivergentes).length;
+  const pendentes = contarDivergenciasPendentes();
+  if(total === 0){
+    btn.style.display = 'none';
+    return;
+  }
+  btn.style.display = '';
+  span.textContent = pendentes > 0 ? `(${pendentes} pendente${pendentes > 1 ? 's' : ''} · ${total})` : `(${total} · ✓)`;
+  // Cor mais forte se tem pendentes
+  btn.style.borderColor = pendentes > 0 ? 'var(--amber)' : 'var(--green)';
+  btn.style.color       = pendentes > 0 ? 'var(--amber)' : 'var(--green)';
+}
+
+// Abre modal com lista de vendas divergentes pra validação
+function openDivergenciasModal(){
+  const oldModal = document.getElementById('divergencias-modal');
+  if(oldModal) oldModal.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'divergencias-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:960px;width:100%;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div>
+          <div style="font-size:16px;font-weight:700">⚖ Divergências de Valor</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">Vendas onde o valor da planilha bilateral difere do valor oficial do ML. Escolha qual usar em cada uma.</div>
+        </div>
+        <button class="btn btn-sm" onclick="fecharDivergenciasModal()">✕</button>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding-bottom:8px;border-bottom:1px solid var(--border)">
+        <button class="btn btn-sm" onclick="aceitarTodasDivergencias('bilateral')" style="background:rgba(62,207,142,.15);color:var(--green);border:1px solid var(--green)">✓ Aceitar TODAS como Bilateral</button>
+        <button class="btn btn-sm" onclick="aceitarTodasDivergencias('ml')" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">✓ Aceitar TODAS como ML</button>
+      </div>
+      <div id="divergencias-tabela"></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  renderDivergenciasTabela();
+}
+
+function fecharDivergenciasModal(){
+  const modal = document.getElementById('divergencias-modal');
+  if(modal) modal.remove();
+  // Ao fechar, força re-render pra refletir mudanças
+  if(typeof renderVendas === 'function') renderVendas();
+  refreshDivergenciasBadge();
+}
+
+function renderDivergenciasTabela(){
+  const container = document.getElementById('divergencias-tabela');
+  if(!container) return;
+
+  // Monta lista de divergências enriquecidas com dados da venda (se disponível)
+  const source = (typeof vendasDataFull !== 'undefined' && vendasDataFull) ? vendasDataFull : (typeof vendasData !== 'undefined' ? vendasData : []);
+  const vendasMap = new Map(source.map(v => [String(v.id), v]));
+
+  const entradas = Object.entries(valoresDivergentes).map(([orderId, d]) => {
+    const v = vendasMap.get(orderId);
+    return {
+      orderId,
+      titulo: v?.firstItem?.title || v?.items?.[0]?.title || '(venda não encontrada)',
+      data: v?.date_created ? new Date(v.date_created).toLocaleDateString('pt-BR') : '-',
+      totalMl: d.totalMl,
+      totalBilateral: d.totalBilateral,
+      diff: d.totalBilateral - d.totalMl,
+      aceite: d.aceite,
+    };
+  }).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+
+  if(entradas.length === 0){
+    container.innerHTML = `<div style="padding:30px;text-align:center;color:var(--text3)">Nenhuma divergência registrada.</div>`;
+    return;
+  }
+
+  const fmt = n => (n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  container.innerHTML = `
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border);color:var(--text3);font-size:10px;text-transform:uppercase">
+            <th style="text-align:left;padding:8px 6px">MLB / Produto / Data</th>
+            <th style="text-align:right;padding:8px 6px;min-width:100px">Valor ML</th>
+            <th style="text-align:right;padding:8px 6px;min-width:100px">Valor Bilateral</th>
+            <th style="text-align:right;padding:8px 6px;min-width:90px">Diferença</th>
+            <th style="text-align:center;padding:8px 6px;min-width:200px">Escolha</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${entradas.map(e => {
+            const diffColor = e.diff > 0 ? 'var(--green)' : 'var(--red)';
+            const statusIcon = e.aceite === 'bilateral' ? '✓ Bilateral'
+                             : e.aceite === 'ml'        ? '✓ ML'
+                             : '<span style="color:var(--amber)">⏳ Pendente</span>';
+            return `
+              <tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:8px 6px">
+                  <div style="font-weight:500">${e.orderId}</div>
+                  <div style="font-size:10px;color:var(--text3);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.titulo}</div>
+                  <div style="font-size:10px;color:var(--text3)">${e.data}</div>
+                </td>
+                <td style="padding:8px 6px;text-align:right">R$ ${fmt(e.totalMl)}</td>
+                <td style="padding:8px 6px;text-align:right">R$ ${fmt(e.totalBilateral)}</td>
+                <td style="padding:8px 6px;text-align:right;color:${diffColor};font-weight:600">${e.diff > 0 ? '+' : ''}R$ ${fmt(e.diff)}</td>
+                <td style="padding:8px 6px;text-align:center">
+                  <div style="display:flex;gap:4px;justify-content:center;flex-wrap:wrap">
+                    <button class="btn btn-sm" onclick="_aceitarDivClick('${e.orderId}','ml')" style="font-size:10px;padding:3px 8px;${e.aceite === 'ml' ? 'background:rgba(96,165,250,.3);border:1px solid var(--blue)' : ''}">ML</button>
+                    <button class="btn btn-sm" onclick="_aceitarDivClick('${e.orderId}','bilateral')" style="font-size:10px;padding:3px 8px;${e.aceite === 'bilateral' ? 'background:rgba(62,207,142,.3);border:1px solid var(--green)' : ''}">Bilateral</button>
+                  </div>
+                  <div style="font-size:10px;margin-top:4px">${statusIcon}</div>
+                </td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function _aceitarDivClick(orderId, escolha){
+  aceitarDivergencia(orderId, escolha);
+  renderDivergenciasTabela();
+  refreshDivergenciasBadge();
+}
+
+function aceitarTodasDivergencias(escolha){
+  if(!confirm(`Aceitar TODAS as ${Object.keys(valoresDivergentes).length} divergências como "${escolha === 'bilateral' ? 'Bilateral' : 'ML'}"?`)) return;
+  for(const k in valoresDivergentes){
+    valoresDivergentes[k].aceite = escolha;
+  }
+  saveValoresDivergentes();
+  renderDivergenciasTabela();
+  refreshDivergenciasBadge();
+}
+
 // Retiradas por venda (mesmo schema dos investimentos, storage separado)
 let retiradasVendas = {};
 function loadRetiradas(){
@@ -11694,7 +11898,7 @@ function renderVendasResumo(items, filterTipo){
   });
   const manuaisFiltrados = items.filter(v => v._isManual);
 
-  const totalML   = reais.reduce((s, v) => s + (typeof v.totalLiquido === 'number' ? v.totalLiquido : (v.total || 0)), 0);
+  const totalML   = reais.reduce((s, v) => s + getTotalEfetivo(v), 0);
   // Investido em vendas reais
   const invVendasLuciano = reais.reduce((s, v) => s + (getInvestimento(v.id, 'luciano') || 0), 0);
   const invVendasJohnny  = reais.reduce((s, v) => s + (getInvestimento(v.id, 'johnny')  || 0), 0);
@@ -11703,6 +11907,7 @@ function renderVendasResumo(items, filterTipo){
   // pra consistência visual: invLiqLuciano = invVendas + aportes - retiradas
   let aportesLuciano = 0, aportesJohnny = 0;
   let retiradasLuciano = 0, retiradasJohnny = 0;
+  let ajustesLuciano = 0, ajustesJohnny = 0;
   let totalReceitasManual = 0, totalDespesasManual = 0;
   for(const m of manuaisFiltrados){
     if(m.tipo === 'aporte'){
@@ -11711,6 +11916,10 @@ function renderVendasResumo(items, filterTipo){
     } else if(m.tipo === 'retirada'){
       retiradasLuciano += (m.valorLuciano || 0);
       retiradasJohnny  += (m.valorJohnny  || 0);
+    } else if(m.tipo === 'ajuste'){
+      // Ajustes de caixa: podem ser negativos, valores livres por sócio
+      ajustesLuciano  += (m.valorLuciano || 0);
+      ajustesJohnny   += (m.valorJohnny  || 0);
     } else if(m.tipo === 'receita'){
       totalReceitasManual += (m.valorLuciano || 0) + (m.valorJohnny || 0);
     } else if(m.tipo === 'despesa'){
@@ -11718,8 +11927,8 @@ function renderVendasResumo(items, filterTipo){
     }
   }
 
-  const invLuciano = invVendasLuciano + aportesLuciano - retiradasLuciano;
-  const invJohnny  = invVendasJohnny  + aportesJohnny  - retiradasJohnny;
+  const invLuciano = invVendasLuciano + aportesLuciano - retiradasLuciano + ajustesLuciano;
+  const invJohnny  = invVendasJohnny  + aportesJohnny  - retiradasJohnny  + ajustesJohnny;
 
   // Lucro = (Total ML + Receitas avulsas) - investimento em vendas - Despesas
   // OBS: aportes/retiradas NÃO afetam lucro (são fluxos de capital)
@@ -11760,6 +11969,16 @@ function renderVendasResumo(items, filterTipo){
   </div>`;
 }
 
+// Retorna o total efetivo da venda pro cálculo financeiro.
+// Se há divergência aceita como 'bilateral', usa o valor da planilha do sócio.
+// Senão, retorna o totalLiquido oficial do ML (ou v.total como fallback).
+function getTotalEfetivo(v){
+  if(!v) return 0;
+  const valorEfetivo = getValorEfetivo(v.id);
+  if(valorEfetivo !== null) return valorEfetivo;
+  return (typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0);
+}
+
 function calcLucroVenda(v){
   // Regra (consistente com Ranking v101 e painel financeiro):
   // - Venda de estado bloqueado/fake SEM investimento cadastrado → não conta
@@ -11770,10 +11989,8 @@ function calcLucroVenda(v){
   const luciano = getInvestimento(v.id, 'luciano');
   const johnny  = getInvestimento(v.id, 'johnny');
   if(v._excludeFromFinancials && luciano <= 0 && johnny <= 0) return 0;
-  // Lucro = Total Líquido (já descontado comissão ML e frete bancado pelo vendedor)
-  // menos os investimentos dos sócios
-  const totalLiq = (typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0);
-  return totalLiq - luciano - johnny;
+  // Total efetivo respeita divergências aceitas como bilateral
+  return getTotalEfetivo(v) - luciano - johnny;
 }
 
 // Detecta se uma venda é de estado bloqueado
@@ -11863,7 +12080,19 @@ const TIPOS_LANCAMENTO = {
   retirada:  { label: '💰 Retirada',  icon: '💰', color: 'var(--amber)',  sign: -1, hint: 'Sócio tira dinheiro do caixa' },
   despesa:   { label: '📋 Despesa',   icon: '📋', color: 'var(--red)',    sign: -1, hint: 'Custo operacional (ML Ads, embalagem, etc.)' },
   receita:   { label: '🎁 Receita',   icon: '🎁', color: 'var(--green)',  sign: +1, hint: 'Entrada de dinheiro avulsa' },
+  ajuste:    { label: '⚖️ Ajuste de Caixa', icon: '⚖️', color: 'var(--purple)', sign: 0, hint: 'Valores livres por sócio (positivos ou negativos) — corrige divergências de caixa entre MP e Caixa Geral' },
   outro:     { label: '📌 Outro',     icon: '📌', color: 'var(--text2)',  sign: 0,  hint: 'Anotação sem impacto financeiro' },
+};
+
+// Subcategorias específicas do tipo "ajuste" — ajudam a organizar e auditar.
+// Cada categoria é só uma etiqueta; o cálculo é sempre o mesmo (não afeta lucro,
+// afeta INVESTIDO e saldos MP/Caixa conforme origem escolhida).
+const CATEGORIAS_AJUSTE = {
+  reembolso_meli:      { label: 'Reembolso Meli',           icon: '🔁', hint: 'Meli devolveu valor de venda ao caixa da empresa' },
+  compensacao_venda:   { label: 'Compensação de Venda',     icon: '🔀', hint: 'Cobertura ou ressarcimento entre sócios por conta de venda específica' },
+  diferenca_caixa:     { label: 'Diferença de Caixa',       icon: '⚠️', hint: 'Divergência encontrada em fechamento/conferência' },
+  transferencia_socios:{ label: 'Transferência entre Sócios', icon: '↔️', hint: 'Um sócio repassou valor para outro (zera no total, muda por sócio)' },
+  outro:               { label: 'Outro',                    icon: '📎', hint: 'Ajuste sem categoria específica' },
 };
 
 // Abre modal pra novo lançamento ou edição (passar lancamentoExistente para editar)
@@ -12509,7 +12738,8 @@ function openGerenciarLancamentos(){
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
             <span style="font-weight:600;color:${t.color};font-size:12px">${t.label.replace(t.icon + ' ', '')}</span>
-            ${(l.tipo === 'aporte' || l.tipo === 'retirada') && l.origem === 'mercadopago' ? `<span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px">🏦 Mercado Pago</span>` : ''}
+            ${l.tipo === 'ajuste' && l.categoria && CATEGORIAS_AJUSTE[l.categoria] ? `<span style="background:rgba(168,85,247,.15);color:var(--purple);font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px">${CATEGORIAS_AJUSTE[l.categoria].icon} ${CATEGORIAS_AJUSTE[l.categoria].label}</span>` : ''}
+            ${(l.tipo === 'aporte' || l.tipo === 'retirada' || l.tipo === 'ajuste') && l.origem === 'mercadopago' ? `<span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px">🏦 Mercado Pago</span>` : ''}
             <span style="font-size:10px;color:var(--text3)">${dt}</span>
           </div>
           ${desc}
@@ -12621,6 +12851,7 @@ function openNovoLancamentoModal(lancamentoExistente = null){
     date_created: new Date().toISOString(),
     tipo: 'aporte',
     origem: 'caixa',  // 'caixa' | 'mercadopago' — só aplicável a retirada/aporte
+    categoria: 'diferenca_caixa',  // subcategoria (só aplicável a ajuste)
     description: '',
     valorLuciano: 0,
     valorJohnny: 0,
@@ -12690,22 +12921,33 @@ function openNovoLancamentoModal(lancamentoExistente = null){
       <div style="font-size:10px;color:var(--text3);margin-top:6px;font-style:italic" id="lanc-origem-hint"></div>
     </div>
 
+    <!-- Categoria (só aparece quando tipo=ajuste) -->
+    <div id="lanc-categoria-wrapper" style="margin-bottom:14px;display:none">
+      <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:6px">Categoria do ajuste</label>
+      <select id="lanc-categoria" style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;cursor:pointer">
+        ${Object.entries(CATEGORIAS_AJUSTE).map(([key, c]) => `
+          <option value="${key}" ${l.categoria === key ? 'selected' : ''}>${c.icon} ${c.label}</option>
+        `).join('')}
+      </select>
+      <div id="lanc-categoria-hint" style="font-size:10px;color:var(--text3);margin-top:6px;font-style:italic"></div>
+    </div>
+
     <!-- Valores por sócio -->
     <div style="margin-bottom:14px">
       <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:6px">Valores</label>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div>
           <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">👤 Luciano</label>
-          <input type="number" id="lanc-luciano" value="${l.valorLuciano || ''}" step="0.01" min="0" placeholder="0,00"
+          <input type="number" id="lanc-luciano" value="${l.valorLuciano || ''}" step="0.01" placeholder="0,00"
             style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace;text-align:right">
         </div>
         <div>
           <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">👤 Johnny</label>
-          <input type="number" id="lanc-johnny" value="${l.valorJohnny || ''}" step="0.01" min="0" placeholder="0,00"
+          <input type="number" id="lanc-johnny" value="${l.valorJohnny || ''}" step="0.01" placeholder="0,00"
             style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace;text-align:right">
         </div>
       </div>
-      <div style="font-size:10px;color:var(--text3);margin-top:4px">💡 Pode preencher um, outro ou ambos. O efeito (entrada/saída) é definido pelo tipo escolhido acima.</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:4px" id="lanc-valores-hint">💡 Pode preencher um, outro ou ambos. O efeito (entrada/saída) é definido pelo tipo escolhido acima.</div>
     </div>
 
     <!-- Descrição -->
@@ -12735,9 +12977,9 @@ function openNovoLancamentoModal(lancamentoExistente = null){
     const hint = document.getElementById('lanc-hint');
     if(hint && t) hint.textContent = `${t.icon} ${t.hint}`;
 
-    // Mostra/esconde origem do dinheiro (só faz sentido em aporte/retirada)
+    // Mostra/esconde origem do dinheiro (aporte/retirada/ajuste — todos afetam saldo)
     const origemWrap = document.getElementById('lanc-origem-wrapper');
-    const showOrigem = (checked.value === 'aporte' || checked.value === 'retirada');
+    const showOrigem = (checked.value === 'aporte' || checked.value === 'retirada' || checked.value === 'ajuste');
     if(origemWrap) origemWrap.style.display = showOrigem ? 'block' : 'none';
 
     // Atualiza hint da origem conforme tipo (se visível)
@@ -12749,10 +12991,14 @@ function openNovoLancamentoModal(lancamentoExistente = null){
           origemHintEl.textContent = origemChecked === 'mercadopago'
             ? 'O sócio está transferindo dinheiro do saldo MP para o caixa da empresa.'
             : 'O sócio está pondo dinheiro próprio no caixa.';
-        } else {
+        } else if(checked.value === 'retirada'){
           origemHintEl.textContent = origemChecked === 'mercadopago'
             ? '🏦 Saída direta do saldo do Mercado Pago (sem passar pelo caixa).'
             : '💼 Saída do caixa geral.';
+        } else if(checked.value === 'ajuste'){
+          origemHintEl.textContent = origemChecked === 'mercadopago'
+            ? '⚖️ Ajuste no saldo do MP. Valores positivos aumentam, negativos diminuem.'
+            : '⚖️ Ajuste no caixa geral. Valores positivos aumentam INVESTIDO do sócio, negativos diminuem.';
         }
       }
     }
@@ -12770,6 +13016,33 @@ function openNovoLancamentoModal(lancamentoExistente = null){
         lbl.style.background = 'var(--bg2)';
       }
     });
+
+    // Hint dos valores muda conforme tipo (avisa se aceita negativo)
+    const valoresHint = document.getElementById('lanc-valores-hint');
+    if(valoresHint){
+      if(checked.value === 'ajuste'){
+        valoresHint.innerHTML = '⚖️ <strong>Ajuste de caixa:</strong> use valores POSITIVOS para aumentar, NEGATIVOS para diminuir. Cada sócio pode ter valor diferente (útil pra reconciliar divergências).';
+      } else {
+        valoresHint.innerHTML = '💡 Pode preencher um, outro ou ambos. O efeito (entrada/saída) é definido pelo tipo escolhido acima.';
+      }
+    }
+
+    // Mostra/esconde seletor de categoria (só faz sentido em ajuste)
+    const catWrap = document.getElementById('lanc-categoria-wrapper');
+    if(catWrap) catWrap.style.display = (checked.value === 'ajuste') ? 'block' : 'none';
+    if(checked.value === 'ajuste'){
+      // Atualiza hint da categoria conforme selecionada
+      const catSel = document.getElementById('lanc-categoria');
+      const catHint = document.getElementById('lanc-categoria-hint');
+      if(catSel && catHint){
+        const updateCatHint = () => {
+          const c = CATEGORIAS_AJUSTE[catSel.value];
+          catHint.textContent = c ? c.hint : '';
+        };
+        updateCatHint();
+        catSel.onchange = updateCatHint;
+      }
+    }
 
     // Atualiza visual dos cards de origem
     modal.querySelectorAll('label[data-origem-card]').forEach(lbl => {
@@ -12789,6 +13062,7 @@ async function salvarLancamento(id, isEdit){
   if(!modal) return;
   const tipo = modal.querySelector('input[name="lanc-tipo"]:checked')?.value || 'aporte';
   const origem = modal.querySelector('input[name="lanc-origem"]:checked')?.value || 'caixa';
+  const categoria = document.getElementById('lanc-categoria')?.value || 'diferenca_caixa';
   const dataStr = document.getElementById('lanc-data').value;
   const valorLuciano = parseFloat(document.getElementById('lanc-luciano').value) || 0;
   const valorJohnny  = parseFloat(document.getElementById('lanc-johnny').value)  || 0;
@@ -12805,8 +13079,10 @@ async function salvarLancamento(id, isEdit){
     id,
     _isManual: true,
     tipo,
-    // Origem só faz sentido para aporte/retirada — outros tipos ignoram
-    origem: (tipo === 'aporte' || tipo === 'retirada') ? origem : 'caixa',
+    // Origem faz sentido para aporte/retirada/ajuste (todos afetam saldos MP/Caixa)
+    origem: (tipo === 'aporte' || tipo === 'retirada' || tipo === 'ajuste') ? origem : 'caixa',
+    // Categoria só é persistida em ajustes; outros tipos ignoram
+    categoria: (tipo === 'ajuste') ? categoria : null,
     date_created: dateISO,
     description,
     valorLuciano,
@@ -14074,6 +14350,8 @@ async function importVendasFromXLSX(event){
   } finally {
     _investBatchMode = false;
     saveInvestimentos();  // 1 única gravação no localStorage no final
+    saveValoresDivergentes();  // salva divergências detectadas
+    if(typeof refreshDivergenciasBadge === 'function') refreshDivergenciasBadge();
   }
 
   const allVendas = Array.from(vendasMap.values());
@@ -14421,6 +14699,21 @@ function parseAbaSocio(aoa, headerRow, sheetName, vendasMap){
         if(invJ !== 0) setInvestimento(orderId, 'johnny', invJ);
         if(invL !== 0) setInvestimento(orderId, 'luciano', invL);
         if(invJ !== 0 || invL !== 0) investUpdated++;
+      }
+
+      // Detecta divergência de valor entre bilateral e ML.
+      // Aba do sócio tem col "Total (BRL)" — se difere do totalLiquido da venda
+      // no ML (aba BASE_*), registra pra usuário validar depois.
+      const totalBilateral = Number(row[cols.total]) || 0;
+      if(totalBilateral > 0 && vendasMap){
+        const v = vendasMap.get(orderId);
+        if(v){
+          const totalMl = (typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0);
+          // Threshold: divergência > R$ 1,00 é considerada relevante
+          if(Math.abs(totalBilateral - totalMl) > 1){
+            registrarDivergencia(orderId, totalMl, totalBilateral);
+          }
+        }
       }
 
       // Se é Fake, marca a venda no map
@@ -15426,7 +15719,7 @@ function renderVendas(){
   const total          = sourceData.filter(v => !v._isManual).length;  // Conta só vendas reais
   const totalValid     = vendasFinanc.length;
   const faturamentoBruto = vendasFinanc.reduce((s,v) => s + (v.total || 0), 0);
-  const faturamentoLiq   = vendasFinanc.reduce((s,v) => s + ((typeof v.totalLiquido === 'number') ? v.totalLiquido : (v.total || 0)), 0);
+  const faturamentoLiq   = vendasFinanc.reduce((s,v) => s + getTotalEfetivo(v), 0);
   const totalMlFee     = vendasFinanc.reduce((s,v) => s + (v.mlFee || 0), 0);
   const totalFreteVend = vendasFinanc.reduce((s,v) => s + (v.shippingPaidBySeller || 0), 0);
   const ticket         = totalValid > 0 ? faturamentoLiq / totalValid : 0;
@@ -15440,6 +15733,9 @@ function renderVendas(){
   let totalAportes = 0, totalRetiradas = 0, totalDespesas = 0, totalReceitas = 0;
   let aportesLuciano = 0, aportesJohnny = 0;
   let retiradasLuciano = 0, retiradasJohnny = 0;
+  // Ajustes de caixa (aceitam valores negativos, servem pra reconciliar)
+  let ajustesLuciano = 0, ajustesJohnny = 0;
+  let ajustesNoMP = 0, ajustesNoCaixa = 0;
   // Separados por origem (caixa vs mercadopago) — só aportes e retiradas
   let aportesNoMP = 0, retiradasDoMP = 0;
   let aportesNoCaixa = 0, retiradasDoCaixa = 0;
@@ -15457,6 +15753,13 @@ function renderVendas(){
       retiradasJohnny  += (m.valorJohnny  || 0);
       if(m.origem === 'mercadopago') retiradasDoMP += valTotal;
       else                            retiradasDoCaixa += valTotal;
+    } else if(m.tipo === 'ajuste'){
+      // Ajuste de caixa: valores livres por sócio (podem ser negativos).
+      // Não afeta lucro — só saldos do MP/Caixa e INVESTIDO dos sócios.
+      ajustesLuciano += (m.valorLuciano || 0);
+      ajustesJohnny  += (m.valorJohnny  || 0);
+      if(m.origem === 'mercadopago') ajustesNoMP    += valTotal;
+      else                            ajustesNoCaixa += valTotal;
     } else if(m.tipo === 'despesa'){
       totalDespesas += valTotal;
     } else if(m.tipo === 'receita'){
@@ -15464,10 +15767,11 @@ function renderVendas(){
     }
   }
 
-  // Saldo Real do Mercado Pago = faturamento líquido + aportes ao MP - retiradas do MP
+  // Saldo Real do Mercado Pago = faturamento líquido + aportes ao MP - retiradas do MP + ajustes ao MP
   // (Vendas entram no MP automaticamente; aportes ao MP são raros mas possíveis;
-  //  retiradas do MP são as que o usuário marca como saídas diretas do MP)
-  const saldoMP = faturamentoLiq + aportesNoMP - retiradasDoMP;
+  //  retiradas do MP são as que o usuário marca como saídas diretas do MP;
+  //  ajustes ao MP reconciliam divergências entre saldo real e calculado)
+  const saldoMP = faturamentoLiq + aportesNoMP - retiradasDoMP + ajustesNoMP;
 
   // Lucro total = vendas (já considera bloqueadas) + receitas - despesas
   // Aportes e retiradas NÃO afetam lucro (são só fluxo de caixa)
@@ -15490,13 +15794,14 @@ function renderVendas(){
     }, 0);
 
   // Diferença / Saldo Disponível =
-  //   Mercado Pago (líquido)
+  //   Mercado Pago (líquido, já com ajustes ao MP)
   //   + Aportes (entradas externas)
   //   + Receitas (avulsas)
+  //   + Ajustes ao Caixa (podem ser negativos)
   //   - Investimentos (custo das vendas)
   //   - Retiradas (saídas externas)
   //   - Despesas (custos operacionais)
-  const saldoDisponivel = faturamentoLiq + totalAportes + totalReceitas
+  const saldoDisponivel = faturamentoLiq + totalAportes + totalReceitas + ajustesNoCaixa
                         - totalInvestido - totalRetiradas - totalDespesas;
   const diferenca = saldoDisponivel; // alias para compat
 
@@ -15516,8 +15821,8 @@ function renderVendas(){
   // Métricas linha 2 (sócios) — INVESTIMENTO LÍQUIDO do sócio
   // = Investimento em vendas + Aportes feitos por ele - Retiradas feitas por ele
   // (Aporte e Retirada são fluxos de capital do sócio; Despesa NÃO afeta — é gasto operacional)
-  const invLiqLuciano = totalInvLuciano + aportesLuciano - retiradasLuciano;
-  const invLiqJohnny  = totalInvJohnny  + aportesJohnny  - retiradasJohnny;
+  const invLiqLuciano = totalInvLuciano + aportesLuciano - retiradasLuciano + ajustesLuciano;
+  const invLiqJohnny  = totalInvJohnny  + aportesJohnny  - retiradasJohnny  + ajustesJohnny;
   setEl('vendas-inv-luciano', fmtBRL(invLiqLuciano));
   setEl('vendas-inv-johnny',  fmtBRL(invLiqJohnny));
   setEl('vendas-total',       String(total));
@@ -19951,7 +20256,14 @@ loadState();
 loadEstoqueFromStorage();
 loadAnunciosPlanejados();
 loadInvestimentos();
+loadValoresDivergentes();
 loadRetiradas();
+// Espera DOM pronto pra atualizar o badge (que depende do botão HTML)
+if(document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', () => refreshDivergenciasBadge());
+} else {
+  setTimeout(refreshDivergenciasBadge, 0);
+}
 loadLancamentosManuais().catch(() => {});
 // Setup do MutationObserver pra vendas — logo no init pra pegar re-renders desde já
 _setupSelecaoObserver();
