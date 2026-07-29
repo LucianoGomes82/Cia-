@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Listas CIA v113 — design system (tokens estendidos + primitiva ciaModal .cia-ov/.cia-sheet) + aba Vendas 100% migrada pros novos modais. Base: V112. -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
@@ -309,6 +310,70 @@ input:focus,select:focus{border-color:var(--green)}
   .frow{grid-template-columns:1fr}
   .tab{padding:10px 10px;font-size:12px}
   .top-stats{display:none}
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CIA DESIGN SYSTEM — camada adicional (não redefine tokens seus)
+   Estende :root, adiciona componentes namespaced `cia-`.
+   Tudo consome os tokens existentes (verde/dark/DM mantidos).
+   ═══════════════════════════════════════════════════════════ */
+:root{
+  /* superfícies tintadas — consolidam os rgba() repetidos inline */
+  --green-bg:rgba(62,207,142,.10);  --green-bd:rgba(62,207,142,.22);
+  --amber-bg:rgba(245,158,11,.10);  --amber-bd:rgba(245,158,11,.22);
+  --red-bg:rgba(248,113,113,.10);   --red-bd:rgba(248,113,113,.24);
+  --blue-bg:rgba(96,165,250,.10);   --blue-bd:rgba(96,165,250,.22);
+  --purple-bg:rgba(167,139,250,.12);--purple-bd:rgba(167,139,250,.24);
+  /* raio / espaçamento / sombra / toque / fontes como token */
+  --r-sm:6px; --r:10px; --r-lg:14px; --pill:999px;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 1px 3px rgba(0,0,0,.4);
+  --shadow-lg:0 12px 32px rgba(0,0,0,.5);
+  --tap:44px;
+  --font:'DM Sans',sans-serif; --mono:'DM Mono',monospace;
+}
+
+/* ── Modal / bottom-sheet (primitiva compartilhada) ─────────── */
+.cia-ov{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10000;
+  display:flex;align-items:center;justify-content:center;padding:20px}
+.cia-sheet{background:var(--bg);border:1px solid var(--border);border-radius:var(--r-lg);
+  width:100%;max-width:520px;max-height:88vh;display:flex;flex-direction:column;
+  box-shadow:var(--shadow-lg)}
+.cia-sheet__head{position:sticky;top:0;background:var(--bg);z-index:1;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:16px 20px;border-bottom:1px solid var(--border);
+  font-size:16px;font-weight:700;font-family:var(--font)}
+.cia-sheet__body{padding:20px;overflow:auto;display:flex;flex-direction:column;gap:16px}
+.cia-sheet__foot{position:sticky;bottom:0;background:var(--bg);
+  display:flex;gap:12px;padding:14px 20px;border-top:1px solid var(--border)}
+.cia-sheet__foot>*{flex:1}
+.cia-x{background:none;border:none;color:var(--text3);font-size:22px;line-height:1;
+  cursor:pointer;width:34px;height:34px;border-radius:8px;flex-shrink:0}
+.cia-x:hover{background:var(--bg3);color:var(--text)}
+/* No celular: sobe de baixo, largura total, sem exigir paisagem */
+@media(max-width:560px){
+  .cia-ov{align-items:flex-end;padding:0}
+  .cia-sheet{max-width:100%;max-height:92vh;border-radius:var(--r-lg) var(--r-lg) 0 0}
+}
+
+/* ── Alerta que vira atalho (badge passivo → ação) ──────────── */
+.cia-alert{display:flex;align-items:center;gap:12px;padding:12px 16px;
+  border-radius:var(--r);font-size:13px;line-height:1.5}
+.cia-alert--warn{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-bd)}
+.cia-alert--err{background:var(--red-bg);color:var(--red);border:1px solid var(--red-bd)}
+.cia-alert__act{margin-left:auto;flex-shrink:0}
+
+/* ── Hierarquia dos metric cards (herói + secundários) ──────── */
+.metrics.cia-hero{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.metric.cia-metric--hero{grid-column:span 2}
+.metric.cia-metric--hero .mval{font-size:34px}
+@media(max-width:700px){.metric.cia-metric--hero{grid-column:1/-1}}
+
+/* ── Alvos de toque no celular (fat-finger fix) ─────────────── */
+@media(max-width:560px){
+  .btn,.fbtn,.sort-sel{min-height:var(--tap)}
+  .tab{min-height:var(--tap);display:inline-flex;align-items:center}
+  .search,input,select{min-height:var(--tap)}
 }
 </style>
 </head>
@@ -3535,7 +3600,11 @@ function stripBold(s){
 
 // Remove emojis decorativos do início da linha (ícones que não são cor)
 function stripLeadingDecoEmoji(s){
-  return s.replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}\u{1F300}-\u{1F9FF}📲📱☎️〽️♦️✅💸🛡️🇧🇷⬜⬛🟩💠〽♦⬜⬛🟩🔷🔸▪▫◼◻➡️♠️🚦]+\s*/gu,'').trim();
+  // v112: adiciona limpeza de caracteres invisíveis no início (ZWJ U+200D, VS16 U+FE0F,
+  // BOM U+FEFF, MARK U+200E/200F, hair space U+200A) — formato Top Eletronicos que
+  // começa produtos com "‍️ Body Splash..." (ZWJ+VS16 antes de espaço+letra).
+  const cleaned = s.replace(/^[\u200D\u200E\u200F\u2028\u2029\u200A\uFE0F\uFEFF]+/gu, '');
+  return cleaned.replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}\u{1F300}-\u{1F9FF}📲📱☎️〽️♦️✅💸🛡️🇧🇷⬜⬛🟩💠〽♦⬜⬛🟩🔷🔸▪▫◼◻➡️♠️🚦]+\s*/gu,'').trim();
 }
 
 // ── Mapa completo de emojis de cor ────────────────────────────────────────────
@@ -3601,7 +3670,9 @@ function colorDot(name){
 
 // ── Regex de preço ────────────────────────────────────────────────────────────
 // Captura: R$530 | R$ 1.299,00 | 620,00 | 2.150 | 750 (min 3 dígitos para evitar anos)
-const PRICE_RX = /(?:💰\s*|R\$\s?|RS\s?)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d{3,5})(?=[*\s💸,;.\n\)🔋$❌]|$)/i;
+// v112: RS agora exige espaço obrigatório (evita bater em siglas tipo "RS5", "RS8",
+// "M5-RS3" que não são preços). Chaves {} também aceitas depois de 💰 (formato MB Shop).
+const PRICE_RX = /(?:💰\s*\{?|R\$\s?\{?|RS\s+)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d{3,5})\}?(?=[*\s💸,;.\n\)\}🔋$❌]|$)/i;
 
 function extractPrice(s){
   // 0) "-1250" ou "-1250,00" no início — preço em linha separada com traço
@@ -3669,7 +3740,8 @@ function extractPrice(s){
     .replace(/\b\d+[Cc]\s*(?:cpu|gpu)\b/gi,'');            // 6C CPU 5C GPU
 
   // 1) com símbolo 💰 ou R$ — captura número após símbolo
-  let m = clean.match(/(?:💰\s*|R\$\s?|RS\s?)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d{3,5})(?=[*\s💸,;.\n\)🔋✅]|$)/i);
+  // v112: RS exige espaço obrigatório (não bate em "RS5" sigla). 💰 aceita { opcional.
+  let m = clean.match(/(?:💰\s*\{?|R\$\s?\{?|RS\s+)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d{3,5})\}?(?=[*\s💸,;.\n\)\}🔋✅]|$)/i);
 
   // 1b) número antes de ✅ ou 🔋 sem símbolo (ex: "2500✅🔋84%")
   if(!m) m = clean.match(/\b(\d{3,5})(?=[✅🔋])/);
@@ -3681,9 +3753,20 @@ function extractPrice(s){
   if(!m) m = clean.match(/\b(\d{3,5}[.,]\d{2})\b/);
 
   // 4) último número >= 3 dígitos no final da string (evita pegar spec do início)
+  // v112: aceita também número após espaço simples no fim (não só hífen/ponto),
+  // pra capturar formato "Neo 100" após separação de "Neo100" pelo pré-processo.
+  // Requer que NÃO haja "GB/TB/RAM" próximo (senão é capacidade, não preço).
   if(!m){
-    const allNums = [...clean.matchAll(/[-.\s](\d{3,5})(?=\s*[*\s]?$)/g)];
-    if(allNums.length) m = allNums[allNums.length-1]; // pega o ÚLTIMO
+    const allNums = [...clean.matchAll(/[-.\s](\d{3,5}(?:[.,]\d{2})?)\s*$/g)];
+    if(allNums.length){
+      const candidate = allNums[allNums.length-1];
+      // Contexto: 15 chars antes do número — se tem GB/TB/RAM, é capacidade
+      const idx = candidate.index || 0;
+      const ctx = clean.slice(Math.max(0, idx - 15), idx + candidate[0].length + 5);
+      if(!/(?:GB|TB|RAM|MP|G\b|\/\d)/i.test(ctx.replace(candidate[1], ''))){
+        m = candidate;
+      }
+    }
   }
 
   if(!m) return null;
@@ -3807,6 +3890,19 @@ function isJunkLine(line){
   if(/^[-=*_•~◆◇○●■□▪▫]{3,}$/.test(t)) return true;
   if(/^loja\s*:/i.test(t)) return true;
 
+  // v112: filtra UUIDs de imagem/anexo (formato Tati Loja: "A36bf7ef-b79e-4717-a8a8-24aa6b0ca5a7")
+  // e outros IDs longos hex/alfanuméricos.
+  if(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(t)) return true;
+
+  // v112: filtra linhas de metadata do WhatsApp (mudança de número, adição de participante):
+  // "‎+55 11 91053-6509 Mudou Para +55 11 93061..."
+  // "‎+55 11 12345-6789 adicionou +55..."
+  // "‎foi adicionado" / "‎foi removido" / "saiu"
+  if(/mudou\s+para\s*\+?\d/i.test(t)) return true;
+  if(/adicionou\s+\+?\d/i.test(t)) return true;
+  if(/foi\s+(adicionad|removid)/i.test(t)) return true;
+  if(/^\+\d[\d\s\-]+$/i.test(t)) return true;  // só número de telefone
+
   // Cabeçalho de lista com data: "28.05.2026 📆〽️📍LOJA 255", "12.06.2026 Loja",
   // "DATA 28/05/26" — linha começa com data (DD.MM.AAAA ou DD/MM/AA) e o restante
   // é texto curto contendo "loja" ou só emojis/spec. Sem preço.
@@ -3863,7 +3959,10 @@ function isJunkLine(line){
 
   // ── Regra 6: garantia/anatel
   if(/\d+\s*ano[s]?\s*de\s*garantia/i.test(clean)) return true;
-  if(/anatel/i.test(clean) && !/💰|r\$|-\s*\d{3}/.test(t)) return true;
+  // v112: "anatel" só é junk quando NÃO tem palavra de produto na linha.
+  // Antes rejeitava headers válidos como "IPHONE 17 PROMAX (256GB) ANATEL".
+  if(/anatel/i.test(clean) && !/💰|r\$|-\s*\d{3}/.test(t)
+     && !/\b(iphone|ipad|macbook|airpods|samsung|galaxy|xiaomi|redmi|poco|moto|realme|watch|pixel|nokia)\b/i.test(clean)) return true;
   if(/garantia\s*(direto|direta|com\s*fabricante|brasil)/i.test(clean)) return true;
 
   // ── Regra 7: aviso de pagamento/pedido mínimo
@@ -3877,6 +3976,14 @@ function isJunkLine(line){
 
   // ── Regra 9: mensagens de contato/atendimento
   if(/(qualquer\s*d[uú]vida|estamos\s*a\s*disposi|duvida\s*estamos|entre\s*em\s*contato)/i.test(clean)) return true;
+
+  // v112: frases genéricas de anúncio/instrução (Top Eletronicos posta muitos anúncios)
+  if(/^(arraste|deslize|clique|toque|acesse|link|swipe|confira|veja)\b/i.test(clean)) return true;
+  if(/^(promocao|desconto|frete\s*gr[aá]tis|oferta)\b/i.test(clean) && !/💰|r\$|-\s*\d{3}/.test(t)) return true;
+
+  // v112: prefixos de meta ("Alteração Note X", "Novo produto X", "Chegou X") sem preço na linha
+  if(/^(altera[cç][aã]o|correc[aã]o|novo\s+produto|chegou|acabou|volt(ou|ei))\b/i.test(clean)
+     && !/💰|r\$|-\s*\d{3}/.test(t)) return true;
 
   // ── Regra 10: texto longo sem preço (aviso/disclaimer)
   if(clean.length > 55 && !/r\$|💰|\d{3,}/.test(t)) return true;
@@ -3920,7 +4027,16 @@ function extractSpec(s){
 function parseProductBlock(lines){
   if(!lines.length) return null;
 
-  const mainLine = normalizeBold(lines[0]);
+  // v112: separa 💰 quando colado a letra/número — formato Jesus Eletr
+  // ("iron neo💰100"). Também separa bandeira colada a números
+  // ("13🇮🇳128💰4000" → "13 🇮🇳 128 💰4000"). Faz isso em TODAS as linhas do bloco.
+  const normalized = lines.map(l =>
+    l.replace(/([a-záéíóúâêôãõçA-ZÁÉÍÓÚÂÊÔÃÕÇ0-9])(💰)/g, '$1 $2')
+     .replace(/([🇦🇧🇨🇩🇪🇫🇬🇭🇮🇯🇰🇱🇲🇳🇴🇵🇶🇷🇸🇹🇺🇻🇼🇽🇾🇿])(\d)/gu, '$1 $2')
+     .replace(/(\d)([🇦🇧🇨🇩🇪🇫🇬🇭🇮🇯🇰🇱🇲🇳🇴🇵🇶🇷🇸🇹🇺🇻🇼🇽🇾🇿])/gu, '$1 $2')
+  );
+
+  const mainLine = normalizeBold(normalized[0]);
   const t = mainLine.trim();
   if(isJunkLine(t)) return null;
 
@@ -3965,12 +4081,15 @@ function parseProductBlock(lines){
     }
 
     // Texto puro pode ser nome de cor (ex: "Cinza", "Roxo") — mas não valores pipe-separados
+    // v112: aceita chaves { e } opcionais (formato MB Shop: "{6.280,00}")
     const subClean = stripEmoji(stripBold(sub))
-      .replace(/(?:💰\s*|R\$\s?|✅\s?)\d[\d.,]*/gi,'')
+      .replace(/(?:💰\s*\{?|R\$\s?\{?|✅\s?)\d[\d.,]*\}?/gi,'')
+      .replace(/\{[\d.,\s]*\}/g,'')                              // resíduo de chave vazia "{,00}"
       .replace(/\b\d{1,2}\.\d{3}\b/g,'')
       .replace(/\b\d{3,5}[.,]\d{2}\b/g,'')
       .replace(/^[-*•·→➡🚦♠♦〽✅]+\s*/,'')
-      .replace(/[,;.]+$/,'')
+      .replace(/[,;.{}]+$/,'')                                    // remove ,;.{} finais
+      .replace(/^\{+\s*/,'')                                      // remove { iniciais
       .trim();
     // Só adiciona como cor se não contém pipe (senão seria lista de cores, já tratado)
     if(subClean.length >= 2 && subClean.length <= 28
@@ -3991,6 +4110,17 @@ function parseProductBlock(lines){
   let name = clean
     .replace(/([a-zA-Z])(\d{1,2}\.\d{3})\b/g,'$1 $2')   // "ram1.780" → "ram 1.780"
     .replace(/([a-zA-Z])(\d{3,5}[.,]\d{2})\b/g,'$1 $2') // "ram1780,00" → "ram 1780,00"
+    // v112: preço inteiro (2-5 díg) colado no FIM da linha após letra minúscula final —
+    // formato Jesus Eletr ("⌚️haylou Iron Neo100"), Tati Loja. Só aplica no FIM pra
+    // não quebrar nomes como "Note14", "iPhone 16", "M5" no MEIO.
+    // Requisitos: (a) letra imediatamente antes; (b) 2-5 dígitos; (c) fim de string ou
+    // fim de linha; (d) preço >= 60 (evita capacidades tipo "Redmi15" errado). Também
+    // aceita opcionalmente ".00" ou ",00" no fim (formato "Active190.00").
+    .replace(/([a-záéíóúâêôãõç])(\d{2,5}(?:[.,]\d{2})?)\s*$/gm, (m, letter, num) => {
+      const n = parseFloat(num.replace(',', '.'));
+      // Só separa se parece PREÇO (>= 60). Evita quebrar "Note14" ou "iPhone 16".
+      return (n >= 60 && n <= 99999) ? `${letter} ${num}` : m;
+    })
     // CRÍTICO: separa rede colada ao preço (ex: "5g1.500" → "5g 1.500", "5g1200" → "5g 1200")
     // Isso acontece quando fornecedor escreve "Note 14 Pro 5G1.500" sem espaço
     .replace(/\b([45][gG])(\d)/g,'$1 $2')
@@ -4008,7 +4138,8 @@ function parseProductBlock(lines){
     .replace(/\d{1,5}[✅🔋💸][^\s\n]*/gu,'')                         // 2500✅🔋84%-100%
     .replace(/🔋\d{1,5}%[-–]?\d{0,3}%?/gu,'')                       // 🔋84%
     .replace(emojiRx,'')                                              // emojis mapeados
-    .replace(/(?:💰\s*|R\$\s?|RS\s?)\d[\d.,]*/gi,'')                // preço com símbolo
+    .replace(/(?:💰\s*\{?|R\$\s?\{?|RS\s+)\d[\d.,]*\}?/gi,'')       // preço com símbolo + chaves (v112)
+    .replace(/\{[\d.,\s]*\}/g,'')                                     // resíduo de chave "{,00}" (v112)
     .replace(/✅\s*R?\$?\s*\d[\d.,]*/gi,'')                          // ✅R$865
     .replace(/\b\d{1,2}\.\d{3}\b/g,'')                               // milhar: 2.150
     .replace(/\b\d{1,3}%[-–]?\d{0,3}%?\b/g,'')                      // bateria: 84%-100%
@@ -11740,26 +11871,23 @@ function openDivergenciasModal(){
   const oldModal = document.getElementById('divergencias-modal');
   if(oldModal) oldModal.remove();
 
-  const modal = document.createElement('div');
-  modal.id = 'divergencias-modal';
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
-  modal.innerHTML = `
-    <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:960px;width:100%;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
-        <div>
-          <div style="font-size:16px;font-weight:700">⚖ Divergências de Valor</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:2px">Vendas onde o valor da planilha bilateral difere do valor oficial do ML. Escolha qual usar em cada uma.</div>
-        </div>
-        <button class="btn btn-sm" onclick="fecharDivergenciasModal()">✕</button>
-      </div>
+  const m = ciaModal({
+    title: '⚖ Divergências de Valor',
+    bodyHTML: `
+      <div style="font-size:11px;color:var(--text3);margin-top:-6px">Vendas onde o valor da planilha bilateral difere do valor oficial do ML. Escolha qual usar em cada uma.</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding-bottom:8px;border-bottom:1px solid var(--border)">
-        <button class="btn btn-sm" onclick="aceitarTodasDivergencias('bilateral')" style="background:rgba(62,207,142,.15);color:var(--green);border:1px solid var(--green)">✓ Aceitar TODAS como Bilateral</button>
-        <button class="btn btn-sm" onclick="aceitarTodasDivergencias('ml')" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">✓ Aceitar TODAS como ML</button>
+        <button class="btn btn-sm" onclick="aceitarTodasDivergencias('bilateral')" style="background:var(--green-bg);color:var(--green);border:1px solid var(--green)">✓ Aceitar TODAS como Bilateral</button>
+        <button class="btn btn-sm" onclick="aceitarTodasDivergencias('ml')" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue)">✓ Aceitar TODAS como ML</button>
       </div>
       <div id="divergencias-tabela"></div>
-    </div>
-  `;
-  document.body.appendChild(modal);
+    `,
+    onClose(){
+      if(typeof renderVendas === 'function') renderVendas();
+      refreshDivergenciasBadge();
+    }
+  });
+  m.el.id = 'divergencias-modal';     // preserva dedup e fecharDivergenciasModal()
+  m.sheet.style.maxWidth = '960px';   // tabela larga
   renderDivergenciasTabela();
 }
 
@@ -12294,7 +12422,8 @@ async function diagnosticarVenda(orderId){
   // Cria o modal (estava sem declaração — bug que travava o Debug)
   const modal = document.createElement('div');
   modal.setAttribute('data-diag-modal', '1');
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px';
+  modal.className = 'cia-ov';
+  modal.style.zIndex = '9999';
   modal.addEventListener('click', (e) => { if(e.target === modal) modal.remove(); });
 
   // Salva o relatório num atributo data-* (não escapa em template literal — mais seguro)
@@ -12461,11 +12590,12 @@ function openListaBloqueio(){
   _bloqueioJaAbertos = new Set();  // novo ciclo de lote a cada abertura
   const modal = document.createElement('div');
   modal.dataset.bloqueioModal = '1';
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.className = 'cia-ov';
+  modal.style.zIndex = '10001';
   modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
 
   modal.innerHTML = `
-    <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;max-width:780px;width:100%;max-height:88vh;display:flex;flex-direction:column;overflow:hidden">
+    <div class="cia-sheet" style="max-width:780px;overflow:hidden">
       <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:between;gap:12px">
         <div style="flex:1">
           <div style="font-size:15px;font-weight:700">🚫 Lista de bloqueio assistida</div>
@@ -12690,7 +12820,8 @@ function openGerenciarLancamentos(){
 
   const modal = document.createElement('div');
   modal.dataset.gerenciaModal = '1';
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.className = 'cia-ov';
+  modal.style.zIndex = '10001';
   modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
 
   // Ordena lançamentos por data desc
@@ -12756,7 +12887,7 @@ function openGerenciarLancamentos(){
     }).join('');
   }
 
-  modal.innerHTML = `<div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;max-width:800px;width:100%;max-height:90vh;display:flex;flex-direction:column">
+  modal.innerHTML = `<div class="cia-sheet" style="max-width:800px">
     <!-- Cabeçalho -->
     <div style="display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border-bottom:1px solid var(--border)">
       <div>
@@ -12859,7 +12990,8 @@ function openNovoLancamentoModal(lancamentoExistente = null){
 
   const modal = document.createElement('div');
   modal.dataset.lancamentoModal = '1';
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.className = 'cia-ov';
+  modal.style.zIndex = '10001';
   modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
 
   const tiposHTML = Object.entries(TIPOS_LANCAMENTO).map(([key, t]) => `
@@ -20379,6 +20511,47 @@ A5 64/3 gold azul preto -520
 📱infinix SMART 10 4g 3/64GB — 
 💰 R$530
 ⚫ Preto | 🟡 Dourado | ⚪ Silver`;
+</script>
+<script>
+/* ── ciaModal(): fábrica de modal única (bottom-sheet no mobile) ──
+   Uso:
+     const m = ciaModal({
+       title: '⚖ Divergências',
+       bodyHTML: '<p>...conteúdo...</p>',
+       footHTML: '<button class="btn" onclick="...">Cancelar</button>'
+                +'<button class="btn btn-p" onclick="...">Salvar</button>',
+       z: 10001,            // opcional, default 10000 (respeita empilhamento)
+       onClose: () => {}    // opcional
+     });
+     m.close();  m.body;  m.sheet;  m.el;
+   Migração: troque o bloco createElement+cssText+innerHTML de cada
+   modal antigo por uma chamada ciaModal({...}). Backdrop e header
+   passam a ser padronizados; só o miolo (bodyHTML) é específico. */
+window.ciaModal = function(opts){
+  opts = opts || {};
+  const ov = document.createElement('div');
+  ov.className = 'cia-ov';
+  if(opts.z) ov.style.zIndex = opts.z;
+  ov.innerHTML =
+      '<div class="cia-sheet" role="dialog" aria-modal="true">'
+    +   '<div class="cia-sheet__head"><span>'+(opts.title||'')+'</span>'
+    +     '<button class="cia-x" aria-label="Fechar" type="button">&times;</button></div>'
+    +   '<div class="cia-sheet__body">'+(opts.bodyHTML||'')+'</div>'
+    +   (opts.footHTML ? '<div class="cia-sheet__foot">'+opts.footHTML+'</div>' : '')
+    + '</div>';
+  function close(){
+    ov.remove();
+    document.removeEventListener('keydown', onKey);
+    if(typeof opts.onClose === 'function') opts.onClose();
+  }
+  function onKey(e){ if(e.key === 'Escape') close(); }
+  ov.addEventListener('click', e => { if(e.target === ov) close(); });
+  ov.querySelector('.cia-x').addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(ov);
+  return { el: ov, sheet: ov.querySelector('.cia-sheet'),
+           body: ov.querySelector('.cia-sheet__body'), close };
+};
 </script>
 </body>
 </html>
