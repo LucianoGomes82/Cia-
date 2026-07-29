@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Listas CIA v113 — design system (tokens estendidos + primitiva ciaModal .cia-ov/.cia-sheet) + aba Vendas 100% migrada pros novos modais. Base: V112. -->
+<!-- Listas CIA v114 — parser Comparativo (piso de preço p/ acessórios, R$ invertido, datas-keycap, R$-sufixo) + design system (tokens estendidos + primitiva ciaModal .cia-ov/.cia-sheet) + aba Vendas 100% migrada pros novos modais. Base: V112. -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
@@ -3675,116 +3675,57 @@ function colorDot(name){
 const PRICE_RX = /(?:💰\s*\{?|R\$\s?\{?|RS\s+)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d{3,5})\}?(?=[*\s💸,;.\n\)\}🔋$❌]|$)/i;
 
 function extractPrice(s){
-  // 0) "-1250" ou "-1250,00" no início — preço em linha separada com traço
   const dashM = s.match(/^-\s*(\d{3,5}(?:[.,]\d{2})?)\s*(?:[a-záéíóú\s]|$)/i);
-  if(dashM){
-    const dp = parseFloat(dashM[1].replace(',','.'));
-    if(!isNaN(dp) && dp >= 100 && dp <= 99999) return dp;
-  }
-
-  // 0b) "preço seguido de $" no final, sem R$ na frente (formato Estrela: "Mac M5-7700$✅")
-  // Tem que ser último número da linha + $, pra não pegar "Modelo A3404$" no meio.
-  const dollarSuffix = s.match(/(\d{2,5}(?:[.,]\d{2,3})?)\s*\$\s*[✅❌]?/);
-  if(dollarSuffix){
-    const dp = parseFloat(dollarSuffix[1].replace(',','.'));
-    if(!isNaN(dp) && dp >= 30 && dp <= 99999) return dp;
-  }
-
-  // 0c) "produto-PREÇO" no fim de linha sem símbolo $ (formato Loja 97: "B110 3g preto branco-95")
-  // Pega o ÚLTIMO número de 2-5 dígitos da linha, precedido de hífen,
-  // desde que NÃO seja uma das specs comuns (4G, 5G, 64GB, 128GB etc.).
-  // Aceita a partir de R$ 30 pra cobrir acessórios (cabos, fones etc.).
+  if(dashM){ const dp=parseFloat(dashM[1].replace(',','.')); if(!isNaN(dp)&&dp>=30&&dp<=99999) return dp; }
+  const dollarSuffix = s.match(/(\d{1,5}(?:[.,]\d{2,3})?)\s*\$\s*[✅❌]?/);
+  if(dollarSuffix){ const dp=parseFloat(dollarSuffix[1].replace(',','.')); if(!isNaN(dp)&&dp>=5&&dp<=99999) return dp; }
+  // v114 FIX B: R$ DEPOIS do número (Estrela "90 R$", "50r$", "35 R$")
+  const rsSuffix = s.match(/(\d{2,5}(?:[.,]\d{2})?)\s*r\$/i);
+  if(rsSuffix){ const dp=parseFloat(rsSuffix[1].replace(',','.')); if(!isNaN(dp)&&dp>=5&&dp<=99999) return dp; }
   const tailDash = s.match(/[-—–]\s*(\d{2,5}(?:[.,]\d{2,3})?)\s*[*✅❌\s]*$/);
   if(tailDash){
-    const raw = tailDash[1];
-    // Distinguir milhar vs decimal:
-    //   • "1.200" ou "9.999" (1-2 díg + . + 3 díg) → MILHAR → 1200, 9999
-    //   • "560.00" ou "1230.00" (3-4 díg + . + 2 díg) → DECIMAL → 560, 1230
-    //   • "560,00" ou "1.500,00" → sempre BR (vírgula = decimal, . = milhar)
-    let num;
-    if(/^\d{1,2}\.\d{3}$/.test(raw)){
-      // Formato milhar sem centavos (ex: "1.200")
-      num = parseFloat(raw.replace('.', ''));
-    } else if(/^\d{1,2}\.\d{3},\d{2}$/.test(raw)){
-      // BR completo (ex: "1.200,00")
-      num = parseFloat(raw.replace('.', '').replace(',', '.'));
-    } else if(/^\d{2,5}[.,]\d{2}$/.test(raw)){
-      // Decimal simples (ex: "560.00", "1230.00", "560,00")
-      num = parseFloat(raw.replace(',', '.'));
-    } else if(/^\d{2,5}[.,]\d{3}$/.test(raw)){
-      // Ambíguo (3 díg após separador): "1.230" pode ser milhar OU decimal com 3 casas
-      // Se tem 4+ dígitos antes, tratar como milhar; senão como decimal (raro)
-      num = parseFloat(raw.replace(/[.,]/g, ''));
-    } else {
-      // Só dígitos: "1250"
-      num = parseFloat(raw);
-    }
-    if(!isNaN(num) && num >= 30 && num <= 99999){
-      // Exclui specs comuns
-      const SPEC_NUMS = new Set([128, 256, 512, 1024, 32, 64, 16, 4, 5, 8, 12]);
-      if(!SPEC_NUMS.has(num)) return num;
-    }
+    const raw = tailDash[1]; let num;
+    if(/^\d{1,2}\.\d{3}$/.test(raw)) num=parseFloat(raw.replace('.',''));
+    else if(/^\d{1,2}\.\d{3},\d{2}$/.test(raw)) num=parseFloat(raw.replace('.','').replace(',','.'));
+    else if(/^\d{2,5}[.,]\d{2}$/.test(raw)) num=parseFloat(raw.replace(',','.'));
+    else if(/^\d{2,5}[.,]\d{3}$/.test(raw)) num=parseFloat(raw.replace(/[.,]/g,''));
+    else num=parseFloat(raw);
+    if(!isNaN(num)&&num>=30&&num<=99999){ const SPEC=new Set([128,256,512,1024,32,64,16,4,5,8,12]); if(!SPEC.has(num)) return num; }
   }
-
-  // Limpeza prévia de tokens que não são preço
   const clean = s
-    .replace(/\b\d+[+\/]\d+\s*[GT]B\b/gi,'')             // specs: 3/64GB 4+128GB
-    .replace(/\b20\d{2}\b/g,'')                            // anos: 2024
-    .replace(/\b(\d+)ram(\d)/gi,'$2')                      // "8ram1.780" → "1.780" (ram colado com preço)
-    .replace(/\b\d+\s*(?:ram|gb|tb|mp|g)\b/gi,' ')        // specs: 128GB 4RAM
-    .replace(/\b4[Gg]\b/g,'')                              // rede: 4G 5G
-    .replace(/\b5[Gg]\b/g,'')
-    .replace(/\b\d+[.,]\d["'']\b/g,'')                    // polegadas: 8.7"
-    .replace(/\b\d{1,3}%[-–]?\d{0,3}%?\b/g,'')           // bateria: 84%-100%
-    .replace(/\bmod\b[^,\n]*/gi,'')                        // MOD.A3404/...
-    .replace(/\b\d+[Cc]\s*(?:cpu|gpu)\b/gi,'');            // 6C CPU 5C GPU
-
-  // 1) com símbolo 💰 ou R$ — captura número após símbolo
-  // v112: RS exige espaço obrigatório (não bate em "RS5" sigla). 💰 aceita { opcional.
-  let m = clean.match(/(?:💰\s*\{?|R\$\s?\{?|RS\s+)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d{3,5})\}?(?=[*\s💸,;.\n\)\}🔋✅]|$)/i);
-
-  // 1b) número antes de ✅ ou 🔋 sem símbolo (ex: "2500✅🔋84%")
+    .replace(/\b\d+[+\/]\d+\s*[GT]B\b/gi,'')
+    .replace(/\b20\d{2}\b/g,'')
+    .replace(/\b(\d+)ram(\d)/gi,'$2')
+    .replace(/\b\d+\s*(?:ram|gb|tb|mp|g)\b/gi,' ')
+    .replace(/\b4[Gg]\b/g,'').replace(/\b5[Gg]\b/g,'')
+    .replace(/\b\d+[.,]\d["'']\b/g,'')
+    .replace(/\b\d{1,3}%[-–]?\d{0,3}%?\b/g,'')
+    .replace(/\bmod\b[^,\n]*/gi,'')
+    .replace(/\b\d+[Cc]\s*(?:cpu|gpu)\b/gi,'');
+  let hasSym=false;
+  let m = clean.match(/(?:💰\s*\{?|R\$\s?\{?|RS\s+)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d{3,5})\}?(?=[*\s💸,;.\n\)\}🔋✅❌]|[a-záéíóúçãõA-Z]|$)/i);
+  if(m) hasSym=true;
   if(!m) m = clean.match(/\b(\d{3,5})(?=[✅🔋])/);
-
-  // 2) milhar sem símbolo: 2.150, 5.750, 9.950
   if(!m) m = clean.match(/\b(\d{1,2}\.\d{3})\b/);
-
-  // 3) decimal sem símbolo: 1350,00 / 475,00 / 620,00
   if(!m) m = clean.match(/\b(\d{3,5}[.,]\d{2})\b/);
-
-  // 4) último número >= 3 dígitos no final da string (evita pegar spec do início)
-  // v112: aceita também número após espaço simples no fim (não só hífen/ponto),
-  // pra capturar formato "Neo 100" após separação de "Neo100" pelo pré-processo.
-  // Requer que NÃO haja "GB/TB/RAM" próximo (senão é capacidade, não preço).
   if(!m){
-    const allNums = [...clean.matchAll(/[-.\s](\d{3,5}(?:[.,]\d{2})?)\s*$/g)];
+    const allNums=[...clean.matchAll(/[-.\s](\d{3,5}(?:[.,]\d{2})?)\s*$/g)];
     if(allNums.length){
-      const candidate = allNums[allNums.length-1];
-      // Contexto: 15 chars antes do número — se tem GB/TB/RAM, é capacidade
-      const idx = candidate.index || 0;
-      const ctx = clean.slice(Math.max(0, idx - 15), idx + candidate[0].length + 5);
-      if(!/(?:GB|TB|RAM|MP|G\b|\/\d)/i.test(ctx.replace(candidate[1], ''))){
-        m = candidate;
-      }
+      const candidate=allNums[allNums.length-1];
+      const idx=candidate.index||0;
+      const after=clean.slice(idx+candidate[0].length, idx+candidate[0].length+3);
+      const numIsSpec = /^\s*(GB|TB|RAM|MP)\b/i.test(after);
+      if(!numIsSpec) m=candidate;
     }
   }
-
   if(!m) return null;
-  const raw = m[1];
-
-  let num;
-  if(/^\d{1,2}\.\d{3}$/.test(raw)){
-    num = parseFloat(raw.replace('.',''));
-  } else {
-    num = parseFloat(raw.replace(/\./g,(c,o,str)=>str.indexOf(',')>o?'':'.').replace(',','.'));
-  }
-
-  // Preços válidos: R$100 a R$99.999
-  // Exclui specs comuns: 128, 256, 512, 64, 32, etc.
+  const raw=m[1]; let num;
+  if(/^\d{1,2}\.\d{3}$/.test(raw)) num=parseFloat(raw.replace('.',''));
+  else num=parseFloat(raw.replace(/\./g,(c,o,str)=>str.indexOf(',')>o?'':'.').replace(',','.'));
   if(isNaN(num)) return null;
-  if(num < 100 || num > 99999) return null;
-  // Exclui potências de 2 comuns usadas como specs de memória
-  const SPEC_NUMS = new Set([128,256,512,1024,32,64]);
+  const floor = hasSym ? 5 : 100;
+  if(num<floor||num>99999) return null;
+  const SPEC_NUMS=new Set([128,256,512,1024,32,64]);
   if(SPEC_NUMS.has(num)) return null;
   return num;
 }
@@ -3887,6 +3828,22 @@ function isColorOnlyLine(line){
 function isJunkLine(line){
   const t = normalizeBold(line.trim());
   if(!t || t.length < 2) return true;
+  // v114 FIX A: data escrita com emoji-keycap (0️⃣1️⃣0️⃣4️⃣2️⃣6️⃣ = 01-04-26)
+  {
+    const kc = (t.match(/[0-9]\uFE0F?\u20E3/gu) || []).length;
+    if(kc >= 4){
+      const semKc = t.replace(/[0-9]\uFE0F?\u20E3/gu,'').replace(/[\s➖.\/-]/g,'').trim();
+      if(semKc.length === 0) return true;
+    }
+  }
+  // v114 FIX C: saudações / avisos operacionais (sem preço na linha)
+  {
+    const semPreco = !/💰|r\$|\d{2,5}\s*\$/i.test(t);
+    const c = normKey(stripEmoji(t));
+    if(semPreco && /\b(agradecemos|desejamos|tenha um|tenha uma|boa tarde|boa noite|boas vendas|otimo final|otima final|abencoado|deus abencoe)\b/.test(c)) return true;
+    if(/(atendimento somente|somente via whats|nao atendemos|fechado aos|nao damos garantia|nao tirar nem|estoque limitad|lista atualizada|separamos mediante)/.test(c) && semPreco) return true;
+  }
+  
   if(/^[-=*_•~◆◇○●■□▪▫]{3,}$/.test(t)) return true;
   if(/^loja\s*:/i.test(t)) return true;
 
