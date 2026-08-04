@@ -3682,6 +3682,9 @@ function extractPrice(s){
   // v114 FIX B: R$ DEPOIS do número (Estrela "90 R$", "50r$", "35 R$")
   const rsSuffix = s.match(/(\d{2,5}(?:[.,]\d{2})?)\s*r\$/i);
   if(rsSuffix){ const dp=parseFloat(rsSuffix[1].replace(',','.')); if(!isNaN(dp)&&dp>=5&&dp<=99999) return dp; }
+  // v114c FIX D: preço marcado por ".." ou "…" sem símbolo (Loja 69 "ECHO Dot 5 ..370", "…1.500", "GO 4..200")
+  const dotsPrice = s.match(/(?:\.{2,}|…)\s*(\d{1,3}(?:\.\d{3})+|\d{2,5})\b/);
+  if(dotsPrice){ const raw=dotsPrice[1]; let dp=/\d\.\d{3}/.test(raw)?parseFloat(raw.replace(/\./g,'')):parseFloat(raw); if(!isNaN(dp)&&dp>=5&&dp<=99999) return dp; }
   const tailDash = s.match(/[-—–]\s*(\d{2,5}(?:[.,]\d{2,3})?)\s*[*✅❌\s]*$/);
   if(tailDash){
     const raw = tailDash[1]; let num;
@@ -3828,6 +3831,8 @@ function isColorOnlyLine(line){
 function isJunkLine(line){
   const t = normalizeBold(line.trim());
   if(!t || t.length < 2) return true;
+  // v114c: cabeçalho de data por extenso (Loja 69 "01/ AGOSTO /2026", "03/agosto/")
+  if(/^\d{1,2}\s*[\/.]\s*(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-zç]*\s*[\/.]?\s*\d{0,4}\s*$/i.test(t)) return true;
   // v114 FIX A: data escrita com emoji-keycap (0️⃣1️⃣0️⃣4️⃣2️⃣6️⃣ = 01-04-26)
   {
     const kc = (t.match(/[0-9]\uFE0F?\u20E3/gu) || []).length;
@@ -4440,9 +4445,12 @@ function parseWhatsAppExport(raw, onProgress, fileName){
   // Cobre formatos comuns: "R$1200", "💰1200", "1200$", "produto-1200".
   const isListMessage = (body) => {
     const matches = [
-      ...(body.match(/(?:R\$|💰)\s*\d{2,5}/g) || []),
+      ...(body.match(/(?:R\$|💰)\s*\{?\s*\d{2,5}/g) || []),        // v114: R$/💰 com { opcional (MB "💰{6.280,00}")
       ...(body.match(/\b\d{2,5}\s*\$/g) || []),                 // "1200$"
       ...(body.match(/[-—–]\s*\d{2,5}(?:[.,]\d{2})?\s*[*✅❌]?\s*$/mg) || []),  // "produto-1200" no fim de linha
+      ...(body.match(/\b\d{3,5}[.,]\d{2}\b/g) || []),           // v114: decimal solto sem símbolo (Smart "600,00"/"700.00")
+      ...(body.match(/:\s*\d{3,5}(?:[.,]\d{2})?\s*$/mg) || []), // v114: ": 600" no fim da linha
+      ...(body.match(/(?:\.{2,}|…)\s*\d{2,5}/g) || []),      // v114c: preço marcado por ".."/"…" (Loja 69)
     ];
     return matches.length >= 4;
   };
