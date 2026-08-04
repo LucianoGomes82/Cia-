@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Listas CIA v114 — parser Comparativo + fix nome-de-arquivo (zip com underscore) e formato ../… (Loja 69) (piso de preço p/ acessórios, R$ invertido, datas-keycap, R$-sufixo) + design system (tokens estendidos + primitiva ciaModal .cia-ov/.cia-sheet) + aba Vendas 100% migrada pros novos modais. Base: V112. -->
+<!-- Listas CIA v114g — parser Comparativo + fix nome-de-arquivo (zip com underscore) e formato ../… (Loja 69) (piso de preço p/ acessórios, R$ invertido, datas-keycap, R$-sufixo) + design system (tokens estendidos + primitiva ciaModal .cia-ov/.cia-sheet) + aba Vendas 100% migrada pros novos modais. Base: V112. -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
@@ -1882,6 +1882,7 @@ let active   = new Set();
 let filterMode = 'all';
 let sortMode   = 'multi';
 let mlItems  = [];
+let catalogOnly = false;  // v114g: toggle "só meu catálogo" na aba Loja
 let mlConn   = false;
 let cfg      = { at:'', rt:'', ai:'', cs:'', tw:10, tc:5, shippingCost:25, fixedFee:0, commissionPremium:0.16, commissionClassico:0.11, minMargin:10,
   blockedStates: ['BA','MT','MS','RO','PA','MA','CE','RN','PB','PE','AL','SE'],
@@ -3694,7 +3695,7 @@ function extractPrice(s){
   // v114c FIX D: preço marcado por ".." ou "…" sem símbolo (Loja 69 "ECHO Dot 5 ..370", "…1.500", "GO 4..200")
   const dotsPrice = s.match(/(?:\.{2,}|…)\s*(\d{1,3}(?:\.\d{3})+|\d{2,5})\b/);
   if(dotsPrice){ const raw=dotsPrice[1]; let dp=/\d\.\d{3}/.test(raw)?parseFloat(raw.replace(/\./g,'')):parseFloat(raw); if(!isNaN(dp)&&dp>=5&&dp<=99999) return dp; }
-  const tailDash = s.match(/[-—–]\s*(\d{2,5}(?:[.,]\d{2,3})?)\s*[*✅❌\s]*$/);
+  const tailDash = s.match(/[-—–]\s*(\d{2,5}(?:[.,]\d{2,3})?)\s*(?:\(\d+\))?[*✅❌\s]*$/);
   if(tailDash){
     const raw = tailDash[1]; let num;
     if(/^\d{1,2}\.\d{3}$/.test(raw)) num=parseFloat(raw.replace('.',''));
@@ -4115,7 +4116,7 @@ function parseProductBlock(lines){
     .replace(/\b\d{1,2}\.\d{3}\b/g,'')                               // milhar: 2.150
     .replace(/\b\d{1,3}%[-–]?\d{0,3}%?\b/g,'')                      // bateria: 84%-100%
     .replace(/\b\d{3,5}[.,]\d{2}\b/g,'')                             // decimal: 1350,00
-    .replace(/[-\s]\d{3,5}[.,]?\d{0,2}(?:\s*[*]?\s*)$/,'')          // preço final: -590 -620, -520
+    .replace(/[-–—\s]\d{3,5}[.,]?\d{0,2}(?:\(\d+\))?(?:\s*[*]?\s*)$/,'')          // v114f: preço final -590 e em-dash —600, com (N) qtd
     .replace(/\b\d+\s*[+\/]\s*\d+\s*(?:GB|TB)?\b/gi,'')             // specs: 3/64GB 8 + 256
     .replace(/\b\d+\s*(?:GB|TB|RAM|MP)\b/gi,'')                      // specs: 128GB 8RAM
     // REMOVIDO: não remove mais 4G/5G — são diferenciadores CRÍTICOS de produto
@@ -4642,10 +4643,12 @@ function mergeProducts(storeObj, lines){
 
     if(isJunkLine(t)) continue;
 
-    const isVariant    = VARIANT_LEAD.test(t);
+    // v114f: linha com nome de produto (redmi/iphone/...) NÃO é variante, mesmo começando com emoji decorativo (❤️ da Tati)
+    const looksLikeProduct = PRODUCT_KEYWORDS.test(t);
+    const isVariant    = VARIANT_LEAD.test(t) && !looksLikeProduct;
     const isColorLine  = isColorOnlyLine(t);
     const isPriceOnly  = PRICE_ONLY.test(t) && stripEmoji(t).replace(/\d[\d.,]*/g,'').trim().length < 3;
-    const isColorEmoji = COLOR_ONLY_S.test(t) && stripEmoji(t).replace(PRICE_RX,'').replace(/[|]/g,'').trim().length < 25;
+    const isColorEmoji = COLOR_ONLY_S.test(t) && !looksLikeProduct && stripEmoji(t).replace(PRICE_RX,'').replace(/[|]/g,'').trim().length < 25;
     const isDashPrice  = DASH_PRICE.test(t); // "-1250 cinza roxo"
 
     if(isVariant || isColorLine || isPriceOnly || isColorEmoji || isDashPrice){
@@ -5017,37 +5020,133 @@ function editPrice(key,store,raw){
 }
 
 // ── Stores ────────────────────────────────────────────────────────────────────
+// v114g: conjunto de produtos (por normKey do nome) que casam com algum anúncio seu
+function getCatalogProductKeys(){
+  const set = new Set();
+  if(typeof mlItems !== 'undefined' && mlItems){
+    for(const it of mlItems){
+      if(it && it._match && it._match.product && it._match.product.name){
+        set.add(normKey(it._match.product.name));
+      }
+    }
+  }
+  return set;
+}
+
 function renderStores(){
   const el=document.getElementById('stores-wrap');
   if(!state.stores.length){ el.innerHTML='<div class="empty">Importe um arquivo primeiro</div>'; return; }
-  el.innerHTML='<div class="store-grid">'+state.stores.map(s=>{
+  const catalogKeys = getCatalogProductKeys();
+  const hasCatalog = catalogKeys.size > 0;
+  const toggle = hasCatalog ? `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+      <button class="btn btn-sm" onclick="catalogOnly=!catalogOnly;renderStores()" style="${catalogOnly?'background:var(--purple-bg);color:var(--purple);border:1px solid var(--purple)':''}">🎯 ${catalogOnly?'Mostrando só meu catálogo':'Só meu catálogo'}</button>
+      <span style="font-size:11px;color:var(--text3)">${catalogKeys.size} produto(s) casam com seus anúncios</span>
+    </div>` : '';
+  el.innerHTML = toggle + '<div class="store-grid">'+state.stores.map((s,si)=>{
     const c=storeClr[s.name]||'#888';
-    const prods=state.products.filter(p=>p.offers.some(o=>o.store===s.name));
+    let prods=state.products.filter(p=>p.offers.some(o=>o.store===s.name));
+    if(catalogOnly) prods = prods.filter(p=>catalogKeys.has(normKey(p.name)));
     const withPrice=prods.filter(p=>p.offers.find(o=>o.store===s.name&&o.price)).length;
     const cheapest=prods.filter(p=>p.minPrice&&p.storeCount>1&&p.offers.find(o=>o.store===s.name&&o.price===p.minPrice)).length;
     const excl=prods.filter(p=>p.storeCount===1).length;
+    const noCat = catalogOnly && prods.length===0;
     return `<div class="scard">
       <div class="scard-head">
         <div class="scard-avatar" style="background:${c}22;color:${c}">${s.name.charAt(0)}</div>
-        <div class="scard-name">${s.name}</div>
-        <div class="scard-meta">${prods.length} produtos</div>
+        <div class="scard-name">${escapeHTML(s.name)}</div>
+        <div class="scard-meta">${prods.length} produtos${catalogOnly?' no seu catálogo':''}</div>
       </div>
       <div class="scard-stats">
         <div class="sstat"><div class="sstat-n" style="color:${c}">${withPrice}</div><div class="sstat-l">Com preço</div></div>
         <div class="sstat"><div class="sstat-n" style="color:var(--green)">${cheapest}</div><div class="sstat-l">+ Barato</div></div>
         <div class="sstat"><div class="sstat-n" style="color:var(--purple)">${excl}</div><div class="sstat-l">Exclusivo</div></div>
       </div>
-      <div class="scard-prods">${prods.slice(0,25).map(p=>{
+      <div class="scard-prods">${noCat ? '<div style="font-size:11px;color:var(--text3);padding:6px 0">Nenhum item casa com seus anúncios.</div>' : prods.slice(0,25).map(p=>{
         const o=p.offers.find(o=>o.store===s.name);
         const best=o?.price&&o.price===p.minPrice&&p.storeCount>1;
+        const inCat=catalogKeys.has(normKey(p.name));
         return `<div class="sprod">
-          <span class="sprod-name">${p.name}</span>
+          <span class="sprod-name">${inCat?'<span style="color:var(--purple)" title="No seu catálogo">★</span> ':''}${escapeHTML(p.name)}</span>
           <span class="sprod-price" style="color:${best?'var(--green)':'var(--text)'}">${o?.price?'R$'+o.price.toFixed(2).replace('.',','):'—'}</span>
           ${best?'<span style="font-size:9px;color:var(--green);margin-left:3px">✓</span>':''}
         </div>`;
-      }).join('')}${prods.length>25?`<div style="font-size:11px;color:var(--text3);padding-top:6px">+${prods.length-25} mais...</div>`:''}</div>
+      }).join('')}</div>
+      <button class="btn btn-sm" onclick="openStoreDetail(${si})" style="margin:10px 16px 14px;width:calc(100% - 32px)">Ver todos os ${prods.length} itens →</button>
     </div>`;
   }).join('')+'</div>';
+}
+
+// v114g: modal com TODOS os itens de uma loja + comparação entre lojas + destaque do catálogo
+function openStoreDetail(storeIdx){
+  const s = state.stores[storeIdx];
+  if(!s) return;
+  const catalogKeys = getCatalogProductKeys();
+  const allProds = state.products.filter(p => p.offers.some(o => o.store === s.name));
+  window._storeDetailState = { storeName: s.name, catalogKeys, allProds };
+  const m = ciaModal({
+    title: `🏪 ${escapeHTML(s.name)}`,
+    bodyHTML: `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input class="cia-input" id="store-detail-search" placeholder="🔍 Buscar item..." oninput="renderStoreDetailList()" style="flex:1;min-width:150px">
+        <select class="cia-select" id="store-detail-sort" onchange="renderStoreDetailList()" style="width:auto;flex:0 0 auto">
+          <option value="name">Nome A→Z</option>
+          <option value="price">Preço ↑</option>
+          <option value="savings">Economia vs melhor ↓</option>
+        </select>
+      </div>
+      ${catalogKeys.size ? `<label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;color:var(--text2)">
+        <input type="checkbox" id="store-detail-catonly" ${catalogOnly?'checked':''} onchange="renderStoreDetailList()"> 🎯 Só itens do meu catálogo
+      </label>` : ''}
+      <div id="store-detail-list"></div>
+    `
+  });
+  m.el.id = 'store-detail-modal';
+  m.sheet.style.maxWidth = '640px';
+  renderStoreDetailList();
+}
+
+function renderStoreDetailList(){
+  const st = window._storeDetailState; if(!st) return;
+  const el = document.getElementById('store-detail-list'); if(!el) return;
+  const q = (document.getElementById('store-detail-search')?.value||'').toLowerCase().trim();
+  const sort = document.getElementById('store-detail-sort')?.value || 'name';
+  const catOnly = document.getElementById('store-detail-catonly')?.checked;
+  let rows = st.allProds.map(p => {
+    const o = p.offers.find(x => x.store === st.storeName);
+    const myPrice = (o && o.price!=null) ? o.price : null;
+    const best = p.minPrice!=null ? p.minPrice : null;
+    const bestStore = best!=null ? ((p.offers.find(x=>x.price===best)||{}).store || '') : '';
+    const isCheapest = myPrice!=null && best!=null && myPrice===best && p.storeCount>1;
+    const inCatalog = st.catalogKeys.has(normKey(p.name));
+    const savings = (myPrice!=null && best!=null && myPrice>best) ? myPrice-best : 0;
+    return { name:p.name, myPrice, best, bestStore, isCheapest, inCatalog, savings, storeCount:p.storeCount };
+  });
+  if(catOnly) rows = rows.filter(r => r.inCatalog);
+  if(q) rows = rows.filter(r => r.name.toLowerCase().includes(q));
+  rows.sort((a,b)=> sort==='price' ? ((a.myPrice==null?1e12:a.myPrice)-(b.myPrice==null?1e12:b.myPrice))
+                   : sort==='savings' ? (b.savings-a.savings)
+                   : a.name.localeCompare(b.name));
+  if(!rows.length){ el.innerHTML='<div class="empty" style="padding:20px 0">Nenhum item.</div>'; return; }
+  const fmt = v => 'R$'+v.toFixed(2).replace('.',',');
+  el.innerHTML = `<div style="font-size:11px;color:var(--text3);margin-bottom:4px">${rows.length} ite${rows.length>1?'ns':'m'}</div>` + rows.map(r=>{
+    const priceStr = r.myPrice!=null ? fmt(r.myPrice) : '—';
+    const cmp = (r.myPrice!=null && r.best!=null && r.storeCount>1)
+      ? (r.isCheapest
+          ? '<span class="cia-badge cia-badge--success">✓ + barato</span>'
+          : `<span style="font-size:10px;color:var(--text3)">melhor ${fmt(r.best)} · ${escapeHTML((r.bestStore||'').split(' ')[0])}${r.savings>0?` (−${fmt(r.savings)})`:''}</span>`)
+      : '';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;display:flex;align-items:center;gap:6px">
+          ${r.inCatalog?'<span class="cia-badge cia-badge--adjust">★ meu</span>':''}
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHTML(r.name)}</span>
+        </div>
+        <div style="margin-top:3px">${cmp}</div>
+      </div>
+      <div style="font-weight:600;font-variant-numeric:tabular-nums;flex:0 0 auto;color:${r.isCheapest?'var(--green)':'var(--text)'}">${priceStr}</div>
+    </div>`;
+  }).join('');
 }
 
 // ── Alerts ────────────────────────────────────────────────────────────────────
