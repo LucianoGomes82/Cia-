@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Listas CIA v114 — parser Comparativo (piso de preço p/ acessórios, R$ invertido, datas-keycap, R$-sufixo) + design system (tokens estendidos + primitiva ciaModal .cia-ov/.cia-sheet) + aba Vendas 100% migrada pros novos modais. Base: V112. -->
+<!-- Listas CIA v114 — parser Comparativo + fix nome-de-arquivo (zip com underscore) e formato ../… (Loja 69) (piso de preço p/ acessórios, R$ invertido, datas-keycap, R$-sufixo) + design system (tokens estendidos + primitiva ciaModal .cia-ov/.cia-sheet) + aba Vendas 100% migrada pros novos modais. Base: V112. -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
@@ -2946,6 +2946,9 @@ function identificarFornecedorPorArquivo(fileName, fornecedores){
 // próximo arquivo desse mesmo contato case na identificação.
 function extrairNomeFornecedorDoArquivo(fileName){
   let n = fileName.replace(/\.(txt|zip)$/i, '');
+  // v114d: nome de .zip chega com underscores e sufixo de cópia (__2_, ___1_, (1))
+  n = n.replace(/_{2,}\d+_?\s*$/, '').replace(/\s*\(\d+\)\s*$/, '');
+  n = n.replace(/_/g, ' ').replace(/\s{2,}/g, ' ').trim();
   let m = n.match(/^Conversa do WhatsApp com (.+?)$/i)
        || n.match(/^WhatsApp Chat (?:with |- )(.+?)$/i);
   if(!m) return null;
