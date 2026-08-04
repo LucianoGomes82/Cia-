@@ -3022,8 +3022,14 @@ function ehMensagemLista(body){
       const m = line.match(/[-—–]\s*(\d{2,5})/);
       if(m && parseInt(m[1]) >= 30){ comPreco++; continue; }
     }
-    // R$ ou 💰 explícito
-    if(/(?:R\$|💰)\s*\d{2,5}/.test(line)){ comPreco++; continue; }
+    // R$ ou 💰 explícito (com { opcional — MB "💰{6.280,00}")
+    if(/(?:R\$|💰)\s*\{?\s*\d{2,5}/.test(line)){ comPreco++; continue; }
+    // v114e: ".." ou "…" marcando preço sem símbolo (Loja 69 "..140", "…1.500")
+    if(/(?:\.{2,}|…)\s*\d{2,5}/.test(line)){ comPreco++; continue; }
+    // v114e: decimal solto sem símbolo (Smart "600,00" / "700.00")
+    if(/\b\d{3,5}[.,]\d{2}\b/.test(line)){ comPreco++; continue; }
+    // v114e: NNN$ ou NNN R$ invertido (Estrela)
+    if(/\d{2,5}\s*(?:\$|r\$)/i.test(line)){ comPreco++; continue; }
   }
   // 4 ou mais linhas com preço já caracteriza uma lista (em vez das 3 anteriores,
   // pra reduzir falso positivo em mensagens curtas tipo "Chegou X-1200")
