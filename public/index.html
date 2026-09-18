@@ -1735,6 +1735,18 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
 
   <!-- ── CONFIG ─────────────────────────────────────────── -->
   <div class="panel" id="tab-config">
+    <!-- Dados do Vendedor (v115) — usado nos recibos -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div>
+          <div class="sec" style="margin:0">🏪 Dados do Vendedor <span id="vend-status-badge" style="font-size:10px;padding:2px 6px;border-radius:3px;margin-left:6px"></span></div>
+          <div style="font-size:11px;color:var(--text3);margin-top:3px">Aparecem em TODOS os recibos (nome, CNPJ, endereço, contato). Salvos no navegador.</div>
+        </div>
+        <button class="btn btn-p btn-sm" onclick="openVendedorConfigModal(refreshVendedorStatusBadge)">✏️ Editar</button>
+      </div>
+      <div id="vend-preview" style="font-size:12px;color:var(--text2);line-height:1.8"></div>
+    </div>
+
     <!-- Gerenciamento de Contas ML -->
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -1969,6 +1981,164 @@ function loadAccounts(){
 
 function getActiveAccount(){
   return accounts.find(a => a.id === activeAccountId) || null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// DADOS DO VENDEDOR (v115) — cadastro persistente pra RECIBO
+// ═══════════════════════════════════════════════════════════════════════
+// Antes o recibo pegava só o `acc.name` da conta ML ativa, o que dava
+// "Vendedor" ou nome curto sem CNPJ/endereço/telefone. Cadastro único aqui
+// serve pra TODOS os recibos, indep. da origem (API/XLSX) e da conta ML.
+let vendedorCfg = {};
+function loadVendedorCfg(){
+  try {
+    const raw = localStorage.getItem('cia_vendedor');
+    vendedorCfg = raw ? JSON.parse(raw) : {};
+  } catch { vendedorCfg = {}; }
+}
+function saveVendedorCfg(){
+  try { localStorage.setItem('cia_vendedor', JSON.stringify(vendedorCfg)); }
+  catch(e){ console.warn('Erro salvando vendedorCfg:', e); }
+}
+// Retorna true se tem pelo menos nome (mínimo pra recibo válido)
+function temVendedorCadastrado(){
+  return !!(vendedorCfg && (vendedorCfg.nome || '').trim());
+}
+
+// Abre modal de edição dos dados do vendedor (usa ciaModal do design v113)
+function openVendedorConfigModal(onSaved){
+  loadVendedorCfg();
+  const v = vendedorCfg;
+  const html = `
+    <div style="display:flex;flex-direction:column;gap:12px;font-size:13px">
+      <div style="background:rgba(96,165,250,.08);border-left:3px solid var(--blue);padding:10px 12px;border-radius:4px;font-size:12px;color:var(--text2)">
+        ℹ️ Esses dados aparecem em TODOS os recibos gerados. São salvos no navegador (localStorage) — sobrevivem entre sessões.
+      </div>
+
+      <div>
+        <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">🏪 Nome fantasia / Razão social *</label>
+        <input type="text" id="vend-nome" value="${escapeHTML(v.nome || '')}" placeholder="Ex: Listas CIA Comércio de Eletrônicos" style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+      </div>
+
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">
+        <div>
+          <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">📄 CNPJ / CPF</label>
+          <input type="text" id="vend-doc" value="${escapeHTML(v.doc || '')}" placeholder="00.000.000/0000-00" style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">Tipo</label>
+          <select id="vend-doc-tipo" style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+            <option value="CNPJ" ${v.docTipo === 'CNPJ' ? 'selected' : ''}>CNPJ</option>
+            <option value="CPF"  ${v.docTipo === 'CPF'  ? 'selected' : ''}>CPF</option>
+            <option value="IE"   ${v.docTipo === 'IE'   ? 'selected' : ''}>IE</option>
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">📍 Endereço (rua, nº)</label>
+        <input type="text" id="vend-endereco" value="${escapeHTML(v.endereco || '')}" placeholder="Rua Exemplo, 123 — Sala 4" style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 100px 100px;gap:10px">
+        <div>
+          <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">Cidade</label>
+          <input type="text" id="vend-cidade" value="${escapeHTML(v.cidade || '')}" placeholder="São Paulo" style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">UF</label>
+          <input type="text" id="vend-uf" value="${escapeHTML(v.uf || '')}" maxlength="2" placeholder="SP" style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;text-transform:uppercase;text-align:center">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">CEP</label>
+          <input type="text" id="vend-cep" value="${escapeHTML(v.cep || '')}" placeholder="00000-000" style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace">
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">📞 Telefone</label>
+          <input type="text" id="vend-telefone" value="${escapeHTML(v.telefone || '')}" placeholder="(11) 99999-9999" style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">✉️ Email</label>
+          <input type="email" id="vend-email" value="${escapeHTML(v.email || '')}" placeholder="contato@loja.com.br" style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+        </div>
+      </div>
+
+      <div style="font-size:10px;color:var(--text3);font-style:italic">* Nome é obrigatório. Demais campos aparecem no recibo quando preenchidos.</div>
+    </div>
+  `;
+  const foot = `
+    <button class="btn btn-sm" onclick="_vendedorConfigSalvar()" style="background:var(--green);color:white;border:none">💾 Salvar</button>
+    <button class="btn btn-sm" onclick="document.querySelector('.cia-ov')?.remove()">Cancelar</button>
+  `;
+  const ref = window.ciaModal({
+    title: '🏪 Dados do Vendedor (para recibos)',
+    bodyHTML: html,
+    footHTML: foot,
+    onClose: () => { if(typeof onSaved === 'function') onSaved(); },
+  });
+  // Guarda callback pra o salvar invocar
+  window._vendedorConfigCallback = onSaved;
+}
+function _vendedorConfigSalvar(){
+  const nome = (document.getElementById('vend-nome')?.value || '').trim();
+  if(!nome){
+    alert('Nome / razão social é obrigatório.');
+    return;
+  }
+  vendedorCfg = {
+    nome,
+    doc:      (document.getElementById('vend-doc')?.value || '').trim(),
+    docTipo:  (document.getElementById('vend-doc-tipo')?.value || 'CNPJ'),
+    endereco: (document.getElementById('vend-endereco')?.value || '').trim(),
+    cidade:   (document.getElementById('vend-cidade')?.value || '').trim(),
+    uf:       (document.getElementById('vend-uf')?.value || '').trim().toUpperCase(),
+    cep:      (document.getElementById('vend-cep')?.value || '').trim(),
+    telefone: (document.getElementById('vend-telefone')?.value || '').trim(),
+    email:    (document.getElementById('vend-email')?.value || '').trim(),
+  };
+  saveVendedorCfg();
+  document.querySelector('.cia-ov')?.remove();
+  if(typeof window._vendedorConfigCallback === 'function') window._vendedorConfigCallback();
+  refreshVendedorStatusBadge();
+  alert('✓ Dados do vendedor salvos! Novos recibos vão usar esses dados.');
+}
+
+// Atualiza badge de status + preview na aba Config
+function refreshVendedorStatusBadge(){
+  const badge = document.getElementById('vend-status-badge');
+  const preview = document.getElementById('vend-preview');
+  loadVendedorCfg();
+  const v = vendedorCfg || {};
+  if(!badge && !preview) return;
+  if(temVendedorCadastrado()){
+    if(badge){
+      badge.textContent = '✓ Cadastrado';
+      badge.style.background = 'rgba(62,207,142,.15)';
+      badge.style.color = 'var(--green)';
+    }
+    if(preview){
+      const linhas = [
+        `<div><strong style="color:var(--text)">${escapeHTML(v.nome)}</strong></div>`,
+        v.doc ? `<div>${escapeHTML(v.docTipo || 'CNPJ')}: ${escapeHTML(v.doc)}</div>` : '',
+        v.endereco ? `<div>📍 ${escapeHTML(v.endereco)}</div>` : '',
+        (v.cidade || v.uf) ? `<div>${escapeHTML(v.cidade || '')}${v.uf ? ' - ' + escapeHTML(v.uf) : ''}${v.cep ? ' · CEP ' + escapeHTML(v.cep) : ''}</div>` : '',
+        (v.telefone || v.email) ? `<div>${v.telefone ? '📞 ' + escapeHTML(v.telefone) : ''}${v.telefone && v.email ? ' · ' : ''}${v.email ? '✉️ ' + escapeHTML(v.email) : ''}</div>` : '',
+      ].filter(Boolean).join('');
+      preview.innerHTML = linhas;
+    }
+  } else {
+    if(badge){
+      badge.textContent = '⚠ Não cadastrado';
+      badge.style.background = 'rgba(251,191,36,.15)';
+      badge.style.color = 'var(--amber)';
+    }
+    if(preview){
+      preview.innerHTML = `<div style="color:var(--amber);font-style:italic">Nenhum dado cadastrado. Os recibos vão mostrar apenas o nome da conta ML ativa. Clique em "✏️ Editar" pra configurar.</div>`;
+    }
+  }
 }
 
 function syncCfgFromActiveAccount(){
@@ -2546,6 +2716,7 @@ function switchTab(id){
     }
   }
   if(id==='lojas') renderStores();
+  if(id==='config') refreshVendedorStatusBadge();
   if(id==='ml'&&mlConn) renderMLList();
   if(id==='estoque') renderEstoque();
   if(id==='compras') syncCompras();
@@ -18168,9 +18339,28 @@ function showRecibo(orderId){
     </tr>`;
   }).join('');
 
-  // Conta ML ativa
+  // Dados do VENDEDOR (v115): usa cadastro persistente (localStorage cia_vendedor)
+  // em vez do nome curto da conta ML. Sem cadastro → mostra fallback + aviso pra configurar.
+  loadVendedorCfg();
+  const vend = vendedorCfg || {};
   const acc = getActiveAccount?.() || {};
-  const sellerLabel = acc.name || 'Vendedor';
+  const sellerLabel = vend.nome || acc.name || 'Vendedor não cadastrado';
+  const sellerDoc = vend.doc
+    ? `<div class="address"><span class="FontLatoBold">${escapeHTML(vend.docTipo || 'CNPJ')}:</span> ${escapeHTML(vend.doc)}</div>`
+    : '';
+  const sellerEndereco = vend.endereco
+    ? `<div class="address">${escapeHTML(vend.endereco)}</div>` : '';
+  const sellerCidade = (vend.cidade || vend.uf)
+    ? `<div class="address">${escapeHTML(vend.cidade || '')}${vend.uf ? ' - ' + escapeHTML(vend.uf) : ''}${vend.cep ? ' — CEP: ' + escapeHTML(vend.cep) : ''}</div>` : '';
+  const sellerContato = (vend.telefone || vend.email)
+    ? `<div class="address">${vend.telefone ? '<span class="FontLatoBold">Tel:</span> ' + escapeHTML(vend.telefone) : ''}${vend.telefone && vend.email ? ' — ' : ''}${vend.email ? '<span class="FontLatoBold">Email:</span> ' + escapeHTML(vend.email) : ''}</div>` : '';
+  // Aviso amarelo no topo do recibo quando cadastro incompleto
+  const avisoCadastro = !temVendedorCadastrado()
+    ? `<div style="background:#fef3c7;border-left:4px solid #f59e0b;color:#78350f;padding:10px 14px;margin:0 0 12px 0;font-size:12px">
+         ⚠️ <strong>Dados do vendedor não cadastrados.</strong> Este recibo está mostrando apenas o nome da conta ML.
+         Clique em <strong>"🏪 Vendedor"</strong> na barra acima para cadastrar CNPJ, endereço e contato — ou vá em <strong>Config → Dados do Vendedor</strong>.
+       </div>`
+    : '';
 
   const reciboHTML = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -18221,6 +18411,7 @@ function showRecibo(orderId){
 </style>
 </head>
 <body>
+${avisoCadastro}
 <header class="clearfix">
   <div id="logo">
     <span class="brand">📋 Listas CIA</span>
@@ -18228,6 +18419,10 @@ function showRecibo(orderId){
   </div>
   <div id="company">
     <h2 class="name">${escapeHTML(sellerLabel)}</h2>
+    ${sellerDoc}
+    ${sellerEndereco}
+    ${sellerCidade}
+    ${sellerContato}
     <div style="font-size:11px;color:#999;margin-top:4px">Recibo gerado em ${new Date().toLocaleDateString('pt-BR')}</div>
   </div>
 </header>
@@ -18302,6 +18497,7 @@ function showRecibo(orderId){
         <div style="font-size:11px;color:var(--text3);margin-top:2px">${escapeHTML(buyerName)} · R$${fmtMoney(totalCobrado)}</div>
       </div>
       <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" onclick="_editarVendedorEReabrir('${v.id}')" title="Editar dados do vendedor">🏪 Vendedor</button>
         <button class="btn btn-sm" onclick="downloadReciboPDF('${v.id}')" title="Salvar como PDF">📥 PDF</button>
         <button class="btn btn-p btn-sm" onclick="printRecibo()" title="Imprimir">🖨 Imprimir</button>
         <button onclick="this.closest('div[style*=fixed]').remove();URL.revokeObjectURL('${blobUrl}')" style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Fechar</button>
@@ -18321,6 +18517,20 @@ function printRecibo(){
   if(!iframe) return;
   try { iframe.contentWindow.focus(); iframe.contentWindow.print(); }
   catch(e){ alert('Erro ao imprimir: ' + e.message); }
+}
+
+// v115: abre config do vendedor a partir do recibo; após salvar, re-renderiza
+// o recibo pra refletir os dados novos.
+function _editarVendedorEReabrir(orderId){
+  // Fecha a janela de recibo atual
+  const modais = document.querySelectorAll('div[style*="fixed"]');
+  modais.forEach(m => {
+    if(m.querySelector('#recibo-iframe')) m.remove();
+  });
+  openVendedorConfigModal(() => {
+    // Reabre o recibo com dados atualizados
+    setTimeout(() => showRecibo(orderId), 100);
+  });
 }
 
 // "PDF" via janela de impressão do navegador (usuário escolhe "Salvar como PDF" no diálogo)
@@ -20462,6 +20672,7 @@ loadEstoqueFromStorage();
 loadAnunciosPlanejados();
 loadInvestimentos();
 loadValoresDivergentes();
+loadVendedorCfg();
 loadRetiradas();
 // Espera DOM pronto pra atualizar o badge (que depende do botão HTML)
 if(document.readyState === 'loading'){
