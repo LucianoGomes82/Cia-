@@ -672,6 +672,22 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
         <button class="btn btn-sm oport-brand-chip" data-brand="Tablets" onclick="setOportBrand('Tablets')">Tablets</button>
         <button class="btn btn-sm oport-brand-chip" data-brand="Apple" onclick="setOportBrand('Apple')">Apple</button>
         <button class="btn btn-sm oport-brand-chip" data-brand="Motorola" onclick="setOportBrand('Motorola')">Motorola</button>
+
+        <!-- v116/v117: filtro de faixa de investimento por produto -->
+        <div style="display:flex;align-items:center;gap:4px;margin-left:12px;padding-left:12px;border-left:1px solid var(--border);flex-wrap:wrap">
+          <span style="font-size:11px;color:var(--text3)">💰 Custo:</span>
+          <span style="font-size:11px;color:var(--text3)">R$</span>
+          <input type="number" id="oport-min-cost" placeholder="mín" step="50" min="0"
+            style="width:75px;padding:5px 8px;background:var(--bg2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-size:12px;font-family:'DM Mono',monospace;text-align:right"
+            oninput="_debounceOportCostRange()"
+            title="Custo MÍNIMO por unidade. Deixe vazio para não limitar.">
+          <span style="font-size:11px;color:var(--text3)">até R$</span>
+          <input type="number" id="oport-max-cost" placeholder="máx" step="50" min="0"
+            style="width:75px;padding:5px 8px;background:var(--bg2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-size:12px;font-family:'DM Mono',monospace;text-align:right"
+            oninput="_debounceOportCostRange()"
+            title="Custo MÁXIMO por unidade. Deixe vazio para não limitar.">
+          <button class="btn btn-sm" onclick="clearOportCostRange()" title="Limpar faixa de custo" style="padding:4px 8px;font-size:11px">✕</button>
+        </div>
       </div>
     </div>
 
@@ -2716,7 +2732,6 @@ function switchTab(id){
     }
   }
   if(id==='lojas') renderStores();
-  if(id==='config') refreshVendedorStatusBadge();
   if(id==='ml'&&mlConn) renderMLList();
   if(id==='estoque') renderEstoque();
   if(id==='compras') syncCompras();
@@ -2735,9 +2750,10 @@ function switchTab(id){
   if(id==='oport'){
     // Inicializa destaque visual dos chips de marca (Todos sai sublinhado por padrão)
     if(typeof setOportBrand === 'function') setOportBrand(_oportSelectedBrand || 'all');
+    if(typeof _hydrateOportCostRange === 'function') _hydrateOportCostRange();
     renderOportTop(); renderOportRare(); renderOportAll();
   }  // 3 cards
-  if(id==='config'){ renderAccountsList(); renderBlockedStates(); renderFornecedoresWA(); }
+  if(id==='config'){ renderAccountsList(); renderBlockedStates(); renderFornecedoresWA(); refreshVendedorStatusBadge(); }
 }
 function showUpload(){ document.getElementById('upload-area').style.display='block'; document.getElementById('import-result').style.display='none'; switchTab('import'); }
 
@@ -8733,6 +8749,54 @@ let _oportTopMLCache = new Map();       // key produto → dados de busca públi
 let _oportAllPage = 1;                  // página atual da Lista Completa
 const _oportAllPerPage = 20;            // 20 itens/página (mobile-friendly)
 let _oportSelectedBrand = 'all';        // marca selecionada nos chips (afeta 3 cards)
+// v116/v117: filtro de FAIXA de investimento por produto (min-max do custo de compra).
+// 0/null = sem limite naquele lado. Persistido em localStorage pra manter entre sessões.
+let _oportMinCost = Number(localStorage.getItem('cia_oport_min_cost')) || 0;
+let _oportMaxCost = Number(localStorage.getItem('cia_oport_max_cost')) || 0;
+let _oportCostRangeTimer = null;
+
+// Aplica a faixa (min+max), salva e re-renderiza os 3 cards.
+function setOportCostRange(minVal, maxVal){
+  const mn = Number(minVal) || 0;
+  const mx = Number(maxVal) || 0;
+  _oportMinCost = mn > 0 ? mn : 0;
+  _oportMaxCost = mx > 0 ? mx : 0;
+  try {
+    localStorage.setItem('cia_oport_min_cost', String(_oportMinCost));
+    localStorage.setItem('cia_oport_max_cost', String(_oportMaxCost));
+  } catch {}
+  _oportAllPage = 1;  // volta pra primeira página
+  if(typeof renderOportTop  === 'function') renderOportTop();
+  if(typeof renderOportRare === 'function') renderOportRare();
+  if(typeof renderOportAll  === 'function') renderOportAll();
+}
+
+// Debounce pra não re-renderizar a cada tecla enquanto digita
+function _debounceOportCostRange(){
+  const mn = document.getElementById('oport-min-cost');
+  const mx = document.getElementById('oport-max-cost');
+  clearTimeout(_oportCostRangeTimer);
+  _oportCostRangeTimer = setTimeout(() => {
+    setOportCostRange(mn?.value || 0, mx?.value || 0);
+  }, 350);
+}
+
+// Limpa a faixa toda (botão ✕)
+function clearOportCostRange(){
+  const mn = document.getElementById('oport-min-cost');
+  const mx = document.getElementById('oport-max-cost');
+  if(mn) mn.value = '';
+  if(mx) mx.value = '';
+  setOportCostRange(0, 0);
+}
+
+// Restaura os valores persistidos nos inputs ao carregar a tela
+function _hydrateOportCostRange(){
+  const mn = document.getElementById('oport-min-cost');
+  const mx = document.getElementById('oport-max-cost');
+  if(mn && _oportMinCost > 0) mn.value = String(_oportMinCost);
+  if(mx && _oportMaxCost > 0) mx.value = String(_oportMaxCost);
+}
 
 // Define a marca selecionada e atualiza TODA a aba Oportunidades:
 //   1. Marca visual do chip ativo
@@ -8805,6 +8869,11 @@ function computeOportBase(){
 
   _oportBaseData = state.products
     .filter(p => p.minPrice && p.minPrice > 0)
+    // v116/v117: filtro de faixa de custo (min-max). Só produtos cujo menor preço na
+    // lista CIA (minPrice = custo de compra) esteja dentro do orçamento do usuário.
+    // 0 em qualquer lado = sem limite naquele lado.
+    .filter(p => !(_oportMinCost > 0) || p.minPrice >= _oportMinCost)
+    .filter(p => !(_oportMaxCost > 0) || p.minPrice <= _oportMaxCost)
     .filter(filterByBrand)
     .map(prod => {
       const custoCIA   = prod.minPrice;
