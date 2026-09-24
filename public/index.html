@@ -595,8 +595,18 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
 
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
-          <div class="sec" style="margin:0">Anúncios ativos</div>
+          <div>
+            <div class="sec" style="margin:0">Anúncios do ML <span id="ml-status-summary" style="font-weight:400;color:var(--text3);font-size:11px;margin-left:8px"></span></div>
+          </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <!-- v119: FILTRO MESTRE de status (ativo/pausado/encerrado/todos) -->
+            <select class="sort-sel" id="ml-status-filter" onchange="setMLStatusFilter(this.value)" style="border-left:3px solid var(--purple);padding-left:8px" title="Filtro mestre por status do anúncio">
+              <option value="active">🟢 Só ativos</option>
+              <option value="paused">⏸ Só pausados</option>
+              <option value="closed">🔴 Só encerrados</option>
+              <option value="inactive">💤 Só inativos (pausados + encerrados)</option>
+              <option value="all">🌐 Todos os status</option>
+            </select>
             <input class="search" type="text" id="ml-search" placeholder="🔍 Buscar anúncio..." style="width:200px" oninput="renderMLList()">
             <select class="sort-sel" id="ml-filter" onchange="renderMLList()">
               <option value="all">Todos</option>
@@ -607,8 +617,8 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
               <option value="negative">📉 Margem negativa</option>
               <option value="below_min">⚠ Abaixo do mínimo</option>
             </select>
-            <button class="btn btn-sm" onclick="exportMLAnunciosXLSX()" title="Exporta todos os anúncios ativos para XLSX — útil como backup antes de pausar em massa" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📤 Exportar XLSX</button>
-            <button class="btn btn-sm" onclick="syncML()" title="Sincronizar">↻ Atualizar</button>
+            <button class="btn btn-sm" onclick="exportMLAnunciosXLSX()" title="Exporta anúncios do filtro atual para XLSX — útil como backup antes de pausar em massa" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid var(--blue)">📤 Exportar XLSX</button>
+            <button class="btn btn-sm" onclick="syncML()" title="Sincronizar (busca ativos + pausados + encerrados)">↻ Atualizar</button>
           </div>
         </div>
 
@@ -622,6 +632,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
           <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--purple);margin-right:4px"></span>Cruzado com CIA</span>
           <span style="color:var(--green)">↑ Margem positiva</span>
           <span style="color:var(--red)">↓ Margem negativa</span>
+          <span style="color:var(--text3)">🟢 Ativo · ⏸ Pausado · 🔴 Encerrado</span>
         </div>
 
         <div style="overflow-x:auto">
@@ -1910,6 +1921,18 @@ let active   = new Set();
 let filterMode = 'all';
 let sortMode   = 'multi';
 let mlItems  = [];
+// v119: filtro mestre de status na aba ML (active/paused/closed/inactive/all).
+// Persistido em localStorage. Default 'active' pra manter comportamento antigo.
+let _mlStatusFilter = localStorage.getItem('cia_ml_status_filter') || 'active';
+function setMLStatusFilter(v){
+  _mlStatusFilter = v || 'active';
+  try { localStorage.setItem('cia_ml_status_filter', _mlStatusFilter); } catch {}
+  if(typeof renderMLList === 'function') renderMLList();
+}
+function _hydrateMLStatusFilter(){
+  const sel = document.getElementById('ml-status-filter');
+  if(sel && _mlStatusFilter) sel.value = _mlStatusFilter;
+}
 let catalogOnly = false;  // v114g: toggle "só meu catálogo" na aba Loja
 let mlConn   = false;
 let cfg      = { at:'', rt:'', ai:'', cs:'', tw:10, tc:5, shippingCost:25, fixedFee:0, commissionPremium:0.16, commissionClassico:0.11, minMargin:10,
@@ -2732,7 +2755,7 @@ function switchTab(id){
     }
   }
   if(id==='lojas') renderStores();
-  if(id==='ml'&&mlConn) renderMLList();
+  if(id==='ml'&&mlConn){ _hydrateMLStatusFilter(); renderMLList(); }
   if(id==='estoque') renderEstoque();
   if(id==='compras') syncCompras();
   if(id==='vendas'){
@@ -5675,13 +5698,33 @@ function renderMLList(){
   if(!mlItems.length) return;
   const f   = document.getElementById('ml-filter')?.value || 'all';
   const q   = (document.getElementById('ml-search')?.value || '').toLowerCase().trim();
+  const sf  = _mlStatusFilter || 'active';  // v119: filtro mestre de status
   const tbody = document.getElementById('ml-list');
   const empty = document.getElementById('ml-empty');
   if(!tbody) return;
 
+  // v119: atualiza resumo de contagem por status no header
+  const summary = document.getElementById('ml-status-summary');
+  if(summary){
+    const cnt = { active:0, paused:0, closed:0, other:0 };
+    for(const it of mlItems){
+      const s = it.status || 'active';
+      if(cnt[s] !== undefined) cnt[s]++; else cnt.other++;
+    }
+    summary.innerHTML = `<span style="color:var(--green)">🟢 ${cnt.active} ativos</span> · <span style="color:var(--amber)">⏸ ${cnt.paused} pausados</span> · <span style="color:var(--red)">🔴 ${cnt.closed} encerrados</span>`;
+  }
+
   // Filtra
   const minMarg = parseFloat(cfg.minMargin) || 10;
   let items = mlItems.filter(item => {
+    // v119: FILTRO MESTRE de status (aplicado ANTES dos outros)
+    const st = item.status || 'active';
+    if(sf === 'active'   && st !== 'active')  return false;
+    if(sf === 'paused'   && st !== 'paused')  return false;
+    if(sf === 'closed'   && st !== 'closed')  return false;
+    if(sf === 'inactive' && st === 'active')  return false;  // só pausados+encerrados
+    // sf === 'all' passa tudo
+
     if(q && !item.title.toLowerCase().includes(q)) return false;
     if(f === 'danger')  return item._risk === 'danger';
     if(f === 'warn')    return item._risk === 'warn';
@@ -5865,6 +5908,14 @@ function renderMLList(){
             ${item._isPremium?'PREMIUM':'CLÁSSICO'} ${Math.round((item._comissao||0)*100)}%
           </span>
           ${item._freeShipping?'<span style="font-size:10px;color:var(--text3)">🚚 frete grátis</span>':''}
+          ${(() => {
+            const st = item.status || 'active';
+            if(st === 'active') return '';  // Estado default, não polui
+            const cfgS = { paused:  {ic:'⏸', color:'var(--amber)', bg:'rgba(245,158,11,.15)', label:'PAUSADO'},
+                           closed:  {ic:'🔴', color:'var(--red)',   bg:'rgba(239,68,68,.15)',  label:'ENCERRADO'} }[st];
+            if(!cfgS) return '';
+            return `<span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;background:${cfgS.bg};color:${cfgS.color}" title="Anúncio ${cfgS.label.toLowerCase()} — não vende no momento">${cfgS.ic} ${cfgS.label}</span>`;
+          })()}
         </div>
         <div style="font-size:13px;font-weight:500;margin-bottom:2px">${item.title}</div>
         <div style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -6186,27 +6237,37 @@ async function syncML(){
     } else if(!r.ok){ showMLErr('Erro '+r.status+' ao conectar.'); return; }
 
     const me = await r.json();
-    document.getElementById('ml-load-msg').textContent = 'Buscando anúncios ativos...';
 
-    // Busca todos os IDs (até 200)
+    // v119: busca anúncios por múltiplos status (API do ML só aceita 1 status por
+    // chamada). O usuário pode filtrar depois via UI, mas o sync traz TUDO pra que
+    // o filtro seja instantâneo (sem re-sync). Persistimos o status em cada item.
+    const STATUS_A_BUSCAR = ['active', 'paused', 'closed'];
     let allIds = [];
-    for(let offset=0; offset<200; offset+=50){
-      const r2 = await proxyFetch(`/users/${me.id}/items/search?status=active&limit=50&offset=${offset}`);
-      if(!r2.ok) break;
-      const d2 = await r2.json();
-      allIds = allIds.concat(d2.results || []);
-      if((d2.results||[]).length < 50) break;
+    const idToStatus = {};  // mapeia id → status pra guardar depois
+
+    for(const stFilter of STATUS_A_BUSCAR){
+      document.getElementById('ml-load-msg').textContent = `Buscando anúncios (${stFilter})...`;
+      for(let offset=0; offset<500; offset+=50){
+        const r2 = await proxyFetch(`/users/${me.id}/items/search?status=${stFilter}&limit=50&offset=${offset}`);
+        if(!r2.ok) break;
+        const d2 = await r2.json();
+        const ids = d2.results || [];
+        for(const id of ids){
+          if(!idToStatus[id]) { allIds.push(id); idToStatus[id] = stFilter; }
+        }
+        if(ids.length < 50) break;
+      }
     }
 
     if(!allIds.length){ mlItems=[]; setMLConn(true); renderMLList(); return; }
 
-    document.getElementById('ml-load-msg').textContent = `Carregando ${allIds.length} anúncios...`;
+    document.getElementById('ml-load-msg').textContent = `Carregando ${allIds.length} anúncios (ativos + pausados + encerrados)...`;
 
-    // Busca detalhes em lotes de 20 — inclui tipo do anúncio e frete
+    // Busca detalhes em lotes de 20 — inclui status também
     let all = [];
     for(let i=0; i<allIds.length; i+=20){
       const r3 = await proxyFetch(
-        `/items?ids=${allIds.slice(i,i+20).join(',')}&attributes=id,title,price,available_quantity,sold_quantity,listing_type_id,shipping,permalink,user_product_id,catalog_product_id,attributes,variations`
+        `/items?ids=${allIds.slice(i,i+20).join(',')}&attributes=id,title,price,status,available_quantity,sold_quantity,listing_type_id,shipping,permalink,user_product_id,catalog_product_id,attributes,variations`
       );
       if(r3.ok){ const d3=await r3.json(); all=all.concat(d3.filter(x=>x.code===200).map(x=>x.body)); }
     }
