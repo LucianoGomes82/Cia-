@@ -607,6 +607,23 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
               <option value="inactive">💤 Só inativos (pausados + encerrados)</option>
               <option value="all">🌐 Todos os status</option>
             </select>
+
+            <!-- v120: filtro de faixa de custo CIA (min-max) — espelho do v117 de Oportunidades -->
+            <div style="display:flex;align-items:center;gap:4px;padding-left:8px;border-left:1px solid var(--border);flex-wrap:wrap" title="Filtra anúncios pelo custo CIA (menor preço encontrado nas listas dos fornecedores)">
+              <span style="font-size:11px;color:var(--text3)">💰 Custo:</span>
+              <span style="font-size:11px;color:var(--text3)">R$</span>
+              <input type="number" id="ml-min-cost" placeholder="mín" step="50" min="0"
+                style="width:75px;padding:5px 8px;background:var(--bg2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-size:12px;font-family:'DM Mono',monospace;text-align:right"
+                oninput="_debounceMLCostRange()"
+                title="Custo CIA MÍNIMO por unidade. Deixe vazio para não limitar.">
+              <span style="font-size:11px;color:var(--text3)">até R$</span>
+              <input type="number" id="ml-max-cost" placeholder="máx" step="50" min="0"
+                style="width:75px;padding:5px 8px;background:var(--bg2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-size:12px;font-family:'DM Mono',monospace;text-align:right"
+                oninput="_debounceMLCostRange()"
+                title="Custo CIA MÁXIMO por unidade. Deixe vazio para não limitar.">
+              <button class="btn btn-sm" onclick="clearMLCostRange()" title="Limpar faixa de custo" style="padding:4px 8px;font-size:11px">✕</button>
+            </div>
+
             <input class="search" type="text" id="ml-search" placeholder="🔍 Buscar anúncio..." style="width:200px" oninput="renderMLList()">
             <select class="sort-sel" id="ml-filter" onchange="renderMLList()">
               <option value="all">Todos</option>
@@ -1933,6 +1950,46 @@ function _hydrateMLStatusFilter(){
   const sel = document.getElementById('ml-status-filter');
   if(sel && _mlStatusFilter) sel.value = _mlStatusFilter;
 }
+
+// v120: filtro de faixa de custo CIA na aba ML (espelho do v117 de Oportunidades).
+// Custo CIA = menor preço do produto nas listas dos fornecedores casado com o anúncio.
+// 0 em qualquer lado = sem limite naquele lado. Persistido em localStorage.
+let _mlMinCost = Number(localStorage.getItem('cia_ml_min_cost')) || 0;
+let _mlMaxCost = Number(localStorage.getItem('cia_ml_max_cost')) || 0;
+let _mlCostRangeTimer = null;
+
+function setMLCostRange(minVal, maxVal){
+  const mn = Number(minVal) || 0;
+  const mx = Number(maxVal) || 0;
+  _mlMinCost = mn > 0 ? mn : 0;
+  _mlMaxCost = mx > 0 ? mx : 0;
+  try {
+    localStorage.setItem('cia_ml_min_cost', String(_mlMinCost));
+    localStorage.setItem('cia_ml_max_cost', String(_mlMaxCost));
+  } catch {}
+  if(typeof renderMLList === 'function') renderMLList();
+}
+function _debounceMLCostRange(){
+  const mn = document.getElementById('ml-min-cost');
+  const mx = document.getElementById('ml-max-cost');
+  clearTimeout(_mlCostRangeTimer);
+  _mlCostRangeTimer = setTimeout(() => {
+    setMLCostRange(mn?.value || 0, mx?.value || 0);
+  }, 350);
+}
+function clearMLCostRange(){
+  const mn = document.getElementById('ml-min-cost');
+  const mx = document.getElementById('ml-max-cost');
+  if(mn) mn.value = '';
+  if(mx) mx.value = '';
+  setMLCostRange(0, 0);
+}
+function _hydrateMLCostRange(){
+  const mn = document.getElementById('ml-min-cost');
+  const mx = document.getElementById('ml-max-cost');
+  if(mn && _mlMinCost > 0) mn.value = String(_mlMinCost);
+  if(mx && _mlMaxCost > 0) mx.value = String(_mlMaxCost);
+}
 let catalogOnly = false;  // v114g: toggle "só meu catálogo" na aba Loja
 let mlConn   = false;
 let cfg      = { at:'', rt:'', ai:'', cs:'', tw:10, tc:5, shippingCost:25, fixedFee:0, commissionPremium:0.16, commissionClassico:0.11, minMargin:10,
@@ -2755,7 +2812,7 @@ function switchTab(id){
     }
   }
   if(id==='lojas') renderStores();
-  if(id==='ml'&&mlConn){ _hydrateMLStatusFilter(); renderMLList(); }
+  if(id==='ml'&&mlConn){ _hydrateMLStatusFilter(); _hydrateMLCostRange(); renderMLList(); }
   if(id==='estoque') renderEstoque();
   if(id==='compras') syncCompras();
   if(id==='vendas'){
@@ -5716,6 +5773,8 @@ function renderMLList(){
 
   // Filtra
   const minMarg = parseFloat(cfg.minMargin) || 10;
+  const mnC = _mlMinCost || 0;
+  const mxC = _mlMaxCost || 0;
   let items = mlItems.filter(item => {
     // v119: FILTRO MESTRE de status (aplicado ANTES dos outros)
     const st = item.status || 'active';
@@ -5724,6 +5783,18 @@ function renderMLList(){
     if(sf === 'closed'   && st !== 'closed')  return false;
     if(sf === 'inactive' && st === 'active')  return false;  // só pausados+encerrados
     // sf === 'all' passa tudo
+
+    // v120: FILTRO por FAIXA de custo CIA (menor preço nas listas dos fornecedores)
+    // Se algum limite está definido, o anúncio precisa ter match CIA E o custo precisa
+    // estar na faixa. Anúncios SEM match são escondidos quando há filtro ativo (não dá
+    // pra saber se estão na faixa se não têm custo).
+    if(mnC > 0 || mxC > 0){
+      const custoCIA = item._custoTotal !== null && item._custoML !== undefined
+        ? (item._custoTotal - item._custoML) : null;
+      if(custoCIA === null || custoCIA <= 0) return false;
+      if(mnC > 0 && custoCIA < mnC) return false;
+      if(mxC > 0 && custoCIA > mxC) return false;
+    }
 
     if(q && !item.title.toLowerCase().includes(q)) return false;
     if(f === 'danger')  return item._risk === 'danger';
