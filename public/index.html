@@ -4765,6 +4765,13 @@ function mergeProducts(storeObj, lines){
     if(clean.split(/\s+/).length > 4) return null;
     if(/\d{2,}/.test(clean)) return null;   // sem números longos (modelos)
 
+    // v118: rejeita se a linha contém emojis-keycap (números como emoji, ex: 1️⃣3️⃣/0️⃣5️⃣).
+    // Formato PL Atacado usa data em keycap no header ("*1️⃣3️⃣/0️⃣5️⃣/3️⃣6⃣*") que era
+    // detectado como seção e prefixava produtos com a data virando bug no Comparativo.
+    if(/[\u0030-\u0039]\uFE0F?\u20E3/.test(clean)) return null;
+    // v118: se depois de stripEmoji sobrar menos de 3 chars significativos, é só emoji
+    if(stripEmoji(clean).replace(/[\s\/\-.,:;]/g, '').length < 3) return null;
+
     // Tira "Lista de", "Lista" prefixo
     const listaMatch = clean.match(/^(?:Lista\s+(?:de\s+)?|Lista\s*:?\s*)(.+)$/i);
     if(listaMatch) clean = listaMatch[1].trim();
@@ -4779,7 +4786,10 @@ function mergeProducts(storeObj, lines){
 
     // Cabeçalho da Hakim/MB SHOP: "LISTA APPLE LACRADO", "APARELHOS SWAP" etc.
     // Esses são cabeçalhos GERAIS, não cabeçalhos de seção que vão prefixar produtos.
-    if(/\b(lista|aparelhos|atualizada|lacrad|importado|swap|original|semi novo)\b/i.test(cleanNorm)) return null;
+    // v118: bloquear também marcadores de tipo de venda ("SÓ ATACADO", "VAREJO", "PROMOÇÃO")
+    // que não são MARCAS mas o parser estava prefixando em produtos, gerando bugs no
+    // Comparativo (ex: "SÓ ATACADO X7 RAM 5G" atribuindo preço errado a Poco X7 Pro).
+    if(/\b(lista|aparelhos|atualizada|lacrad|importado|swap|original|semi\s*novo|atacado|varejo|promo|promocao|promoc|oferta|ofertas|liquidac|liquida|somente|so\s+atacado|so\s+varejo|apenas|exclusivo|destaque|black\s*friday|cyber|natal|dia\s*das)\b/i.test(cleanNorm)) return null;
 
     return clean;
   };
