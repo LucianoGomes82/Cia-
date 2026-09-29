@@ -14238,6 +14238,11 @@ function canPrintLabel(v){
       // Substatus retornado pelo ML que não conhecemos ainda — mostra o valor cru
       // (mas sem "Status:" na frente, pra ficar mais limpo)
       reason = `${sub}`;
+    } else if(v.shipment?.status && labels[String(v.shipment.status).toLowerCase()]){
+      // v123: quando substatus vem vazio mas shipment.status tem info, usa ele.
+      // Corrige bug de venda ENTREGUE mostrando "Pago (sem envio ainda)" — o ML
+      // devolve substatus vazio pra vendas antigas mas mantém shipment.status='delivered'.
+      reason = labels[String(v.shipment.status).toLowerCase()];
     } else if(v.status && ORDER_STATUS_LABELS[v.status]){
       reason = ORDER_STATUS_LABELS[v.status];
     } else if(v.status){
@@ -17337,14 +17342,23 @@ async function exportNFXLSX(){
     alert('Nenhuma venda selecionada.\n\nMarque as vendas com o checkbox antes de gerar a planilha.');
     return;
   }
-  const fonte = (vendasDataFull && vendasDataFull.length) ? vendasDataFull : vendasData;
+  // v123: busca em AMBOS os datasets (XLSX + API). Antes usava só XLSX se ele
+  // tinha algo carregado — mas se o usuário sincronizou API mas NÃO tem XLSX
+  // (ou vice-versa), a venda selecionada podia ser "não encontrada" sem motivo.
+  // Merge por id preferindo XLSX (que tem dados fiscais mais completos).
+  const byId = new Map();
+  for(const src of [vendasData || [], vendasDataFull || []]){
+    for(const item of src){
+      if(item && item.id !== undefined) byId.set(String(item.id), item);
+    }
+  }
   const selecionadas = [];
   const naoEncontradas = [];
   const descartadas = [];  // {id, motivo} — pra avisar
   // Status que indicam que a venda NÃO deve gerar NF (decisão do usuário)
   const STATUS_NAO_ENTREGUE = new Set(['not_delivered']);
   for(const id of _selectedVendaIds){
-    const v = fonte.find(x => String(x.id) === String(id));
+    const v = byId.get(String(id));
     if(!v){ naoEncontradas.push(id); continue; }
     // Detecção robusta de cancelamento (inclui shipment.status, tags, etc.)
     if(vendaFoiCancelada(v)){
