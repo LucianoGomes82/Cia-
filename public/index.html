@@ -5555,6 +5555,36 @@ function matchMLtoCIA(mlTitle, debugMode = false){
       penaltyLog.push(`nums[${missingNums.join(',')}]:+${p.toFixed(2)}`);
     }
 
+    // v121: Penalidade 2b — CÓDIGOS DE MODELO ALFA+NÚMERO (M1, T2, G56, A15, S23, X7, etc.)
+    // Diferente da penalidade #2 (que só olha números puros), aqui reconhecemos padrões
+    // "letra(s) + dígito(s)" como IDENTIFICADORES DE MODELO específicos. Fix pro bug do
+    // "Xiaomi Poco Pad M1" que casava com "Xiaomi Pad 7" (M1 ≠ Pad 7, sem penalidade antes).
+    // Padrão: 1-3 letras + 1-3 dígitos + opcional sufixo letra. Ex: M1, T2, G56, A15, S23e, X7, X8.
+    // Ignora modelos genéricos (RAM, HD, LTE, USB, etc.) e "5g/4g" (já tratados como network).
+    const MODEL_CODE_RX = /^[a-z]{1,3}\d{1,3}[a-z]?$/;
+    const GENERIC_CODES = new Set(['ram','hd','fhd','oled','led','usb','lte','nfc','fm','ai','ip68','ip67']);
+    const extractModels = (tokens) => tokens.filter(t =>
+      MODEL_CODE_RX.test(t) && !GENERIC_CODES.has(t) && !NETWORK.has(t)
+    );
+    const mlModels  = extractModels(mlTokens);
+    const ciaModels = extractModels(ciaTokens);
+    if(mlModels.length > 0 && ciaModels.length > 0){
+      // Ambos têm modelos — precisa ter INTERSEÇÃO. Se nenhum modelo bate, produto diferente.
+      const intersect = mlModels.some(m => ciaModels.includes(m));
+      if(!intersect){
+        penalty += 0.50;
+        penaltyLog.push(`modelo[ML=${mlModels.join('/')},CIA=${ciaModels.join('/')}]:+0.50`);
+      }
+    } else if(mlModels.length > 0 && ciaModels.length === 0){
+      // ML tem modelo específico (M1, T2), CIA é genérica — pode ser produto diferente
+      // Penalidade moderada — cuidado pra não quebrar matches legítimos onde CIA é
+      // mais genérica de propósito (ex: "iPhone 15" ML vs "iPhone 15" CIA sem sufixo).
+      // A regra `letra+número` NÃO pega "iphone" ou "15" sozinhos, então esse caso não
+      // dispara. Dispara só quando ML tem código tipo "M1", "T2" que a CIA não tem.
+      penalty += 0.35;
+      penaltyLog.push(`modelo[ML=${mlModels.join('/')},CIA=∅]:+0.35`);
+    }
+
     // Penalidade 3: sub-marca diferente
     const mlSubBrands  = mlTokens.filter(t => SUBBRAND.has(t));
     const ciaSubBrands = ciaTokens.filter(t => SUBBRAND.has(t));
@@ -18492,16 +18522,45 @@ function showRecibo(orderId){
        || vendasData.find(x => String(x.id) === oid);
   if(!v){ alert('Venda não encontrada.'); return; }
 
+  // v122: MERGE de dados entre XLSX e API — corrige bug de recibos sem dados do
+  // comprador. Se a venda tá em vendasDataFull (XLSX) mas AI tem MAIS dados de
+  // buyer/receiver (endereço, CPF, cidade), fazemos merge campo-a-campo preferindo
+  // valores NÃO-VAZIOS de qualquer origem. Antes o recibo pegava só do XLSX e
+  // deixava tudo em "—" quando a planilha tinha colunas diferentes/faltando.
+  const vApi = vendasData.find(x => String(x.id) === oid);
+  if(vApi && vApi !== v){
+    // Merge buyer: preferir valor não-vazio, campo a campo
+    const mergedBuyer = { ...(vApi.buyer || {}), ...Object.fromEntries(
+      Object.entries(v.buyer || {}).filter(([, val]) => val !== '' && val !== null && val !== undefined)
+    )};
+    // Merge receiver idem
+    const mergedRecv = { ...(vApi.receiver || {}), ...Object.fromEntries(
+      Object.entries(v.receiver || {}).filter(([, val]) => val !== '' && val !== null && val !== undefined)
+    )};
+    v = { ...v, buyer: mergedBuyer, receiver: mergedRecv };
+  }
+
   // ATENÇÃO: vendas importadas via XLSX têm metadados parciais — buyer pode não
   // ter firstName/lastName/docType/phone, receiver pode não ter address/zip/etc.
   // Tudo aqui usa fallbacks pra não quebrar e renderiza '—' quando falta dado.
   const buyer = v.buyer || {};
-  const buyerName = [(buyer.firstName||''), (buyer.lastName||'')].join(' ').trim() || buyer.nickname || '—';
+  const recv = v.receiver || {};
+  // v122: prioridade de nomes ordenada pra evitar nickname concatenado do ML
+  // (ex: "EDILENEJESUSFIALHO"). Ordem: XLSX namePerson/nameEnt > receiver.name > 
+  // firstName+lastName da API > nickname (último recurso).
+  const nameFromApi = [(buyer.firstName||''), (buyer.lastName||'')].join(' ').trim();
+  // Detecta "nickname disfarçado": só maiúsculas sem espaços, 5+ chars
+  const looksLikeNickname = nameFromApi && !/\s/.test(nameFromApi) && /^[A-Z]{5,}$/.test(nameFromApi);
+  const buyerName = buyer.namePerson || buyer.nameEnt
+                 || recv.name
+                 || (looksLikeNickname ? null : nameFromApi)
+                 || nameFromApi                        // usa mesmo assim se não houver alternativa
+                 || buyer.nickname
+                 || '—';
   const docLabel  = buyer.docType ? `${String(buyer.docType).toUpperCase()}: ` : '';
   const docNum    = buyer.docNumber || '—';
   const phoneStr  = buyer.phone ? `<div class="address"><span class="FontLatoBold">Tel:</span> ${escapeHTML(buyer.phone)}</div>` : '';
 
-  const recv = v.receiver || {};
   const recvAddr  = recv.address ? `${recv.address}${recv.comment ? ' — ' + recv.comment : ''}${recv.neighborhood ? ', ' + recv.neighborhood : ''}` : '—';
   const recvCity  = recv.city ? `${recv.city}${recv.state ? ' - ' + recv.state : ''}` : (recv.state || '—');
   const recvZip   = recv.zip || '—';
