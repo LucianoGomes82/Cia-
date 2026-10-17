@@ -1342,6 +1342,15 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             style="width:100%;padding:9px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace;text-align:center"
             title="Garante pelo menos N produtos distintos no plano. 1 = concentra tudo no melhor. 5-10 = divide risco. Ex: 5 → aloca 1 un de cada top-5 primeiro, depois distribui o restante.">
         </div>
+        <div style="flex:0 0 180px">
+          <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">💵 Teto por SKU (% do orçamento)</label>
+          <div style="position:relative">
+            <input type="number" id="opt-teto-pct" placeholder="ex: 10 = máx 10%" min="1" max="100" step="1"
+              style="width:100%;padding:9px 28px 9px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace;text-align:right"
+              title="Limita cada produto a X% do orçamento TOTAL. Força diversificação forte. Ex: 10% → mínimo 10 produtos. 5% → mínimo 20 produtos. Vazio = sem teto (default).">
+            <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:12px;font-weight:600;pointer-events:none">%</span>
+          </div>
+        </div>
       </div>
 
       <!-- Linha 2: Parâmetros de foco (min/max custo + período vendas) -->
@@ -21170,6 +21179,9 @@ function _hydrateOtimizador(){
   // v124d: diversidade (mín de produtos distintos)
   const diversidade = Number(localStorage.getItem('cia_opt_diversidade')) || 1;
   if(el('opt-diversidade') && diversidade > 0) el('opt-diversidade').value = String(diversidade);
+  // v124g: teto por SKU em % do orçamento
+  const tetoPct = Number(localStorage.getItem('cia_opt_teto_pct')) || 0;
+  if(el('opt-teto-pct') && tetoPct > 0) el('opt-teto-pct').value = String(tetoPct);
   _renderOptCategorias(cats);
 }
 
@@ -21224,6 +21236,7 @@ function clearOtimizador(){
   if(el('opt-criterio')) el('opt-criterio').value = 'score';
   if(el('opt-periodo')) el('opt-periodo').value = '60';
   if(el('opt-diversidade')) el('opt-diversidade').value = '';
+  if(el('opt-teto-pct')) el('opt-teto-pct').value = '';
   _renderOptCategorias([]);
   localStorage.removeItem('cia_opt_budget');
   localStorage.removeItem('cia_opt_criterio');
@@ -21232,6 +21245,7 @@ function clearOtimizador(){
   localStorage.removeItem('cia_opt_max_cost');
   localStorage.removeItem('cia_opt_cats');
   localStorage.removeItem('cia_opt_diversidade');
+  localStorage.removeItem('cia_opt_teto_pct');
   // Esconde resultados
   ['opt-summary','opt-plano','opt-sem-historico'].forEach(id => {
     const e = document.getElementById(id); if(e) e.style.display = 'none';
@@ -21360,6 +21374,8 @@ async function runOtimizador(){
   const minCost = _optMoneyParse(document.getElementById('opt-min-cost')?.value);
   const maxCost = _optMoneyParse(document.getElementById('opt-max-cost')?.value);
   const diversidade = Math.max(1, Number(document.getElementById('opt-diversidade')?.value) || 1);
+  // v124g: teto por SKU em % do orçamento (0 = sem teto)
+  const tetoPct = Math.max(0, Math.min(100, Number(document.getElementById('opt-teto-pct')?.value) || 0));
   const cats = _getOptCategoriasSelecionadas();
 
   // Validação
@@ -21381,6 +21397,7 @@ async function runOtimizador(){
     localStorage.setItem('cia_opt_max_cost', String(maxCost));
     localStorage.setItem('cia_opt_cats', JSON.stringify(cats));
     localStorage.setItem('cia_opt_diversidade', String(diversidade));
+    localStorage.setItem('cia_opt_teto_pct', String(tetoPct));
   } catch {}
 
   // v124f REFATORADO: Pré-requisitos agora olha vendas, não lista CIA
@@ -21493,10 +21510,15 @@ async function runOtimizador(){
   const planoMap = new Map(); // product.key → índice no plano
   let budgetRestante = budget;
 
-  // FASE 1: semeadura dos top-N
+  // v124g: teto por SKU em R$ (0 = sem teto). Limite rígido de investimento por produto.
+  const tetoPorSKU = tetoPct > 0 ? (budget * tetoPct / 100) : 0;
+
+  // FASE 1: semeadura dos top-N (respeita teto)
   const sementes = positivos.slice(0, diversidade);
   for(const c of sementes){
     if(budgetRestante < c.custo) continue;
+    // v124g: se teto definido E 1 unidade já estoura, pula (não dá pra semear)
+    if(tetoPorSKU > 0 && c.custo > tetoPorSKU) continue;
     const entry = { ...c, qtd: 1, custoTotal: c.custo, lucroTotal: c.lucroUn };
     plano.push(entry);
     planoMap.set(c.product.key, plano.length - 1);
@@ -21504,20 +21526,18 @@ async function runOtimizador(){
   }
 
   // FASE 2: preenchimento 1 unidade por vez, sempre o melhor score ponderado
-  // Candidatos elegíveis: já estão no plano OU são positivos novos (expandem diversidade)
-  const MAX_LOOPS = 10000; // segurança
+  const MAX_LOOPS = 10000;
   let loops = 0;
   while(budgetRestante >= 50 && loops++ < MAX_LOOPS){
-    // Monta pool: cada candidato positivo com seu score ponderado atual
     let melhor = null; let melhorScore = -Infinity;
     for(const c of positivos){
       if(budgetRestante < c.custo) continue;
       const inPlan = planoMap.has(c.product.key);
+      const custoAtual = inPlan ? plano[planoMap.get(c.product.key)].custoTotal : 0;
+      // v124g: respeita teto rígido por SKU
+      if(tetoPorSKU > 0 && (custoAtual + c.custo) > tetoPorSKU) continue;
       const qtdAtual = inPlan ? plano[planoMap.get(c.product.key)].qtd : 0;
-      // v124e: score ponderado pela quantidade atual (pra evitar concentração)
-      // Fator: diversidade=1 → sem penalidade (puro guloso)
-      //        diversidade>1 → cada unidade comprada diminui score desse produto
-      //                        em 1/diversidade (quanto maior div, mais equilíbrio)
+      // Score ponderado pela quantidade atual (pra evitar concentração)
       const divFactor = diversidade > 1 ? (1 + qtdAtual / diversidade) : 1;
       const scorePond = c.score / divFactor;
       if(scorePond > melhorScore){
@@ -21550,7 +21570,7 @@ async function runOtimizador(){
   plano.sort(sortFn);
 
   _optLastResult = {
-    budget, criterio, periodo, cats, minCost, maxCost, diversidade,
+    budget, criterio, periodo, cats, minCost, maxCost, diversidade, tetoPct,
     plano, semHistorico, negativos,
     totals: {
       investido: budget - budgetRestante,
@@ -21588,7 +21608,7 @@ function _renderOtimizadorResultado(r){
         <div style="padding:12px;background:rgba(167,139,250,.08);border-radius:6px;border-left:3px solid var(--purple)">
           <div style="font-size:10px;color:var(--text3);font-weight:600;letter-spacing:0.5px">📦 UNIDADES</div>
           <div style="font-size:20px;font-weight:700;color:var(--purple);font-family:'DM Mono',monospace;margin-top:4px">${r.totals.unidades}</div>
-          <div style="font-size:10px;color:var(--text3);margin-top:2px">em ${r.totals.produtos} produto(s) diferente(s)${r.diversidade > 1 ? ` ${r.totals.produtos >= r.diversidade ? '✓' : '⚠'} meta ${r.diversidade}` : ''}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">em ${r.totals.produtos} produto(s) diferente(s)${r.diversidade > 1 ? ` ${r.totals.produtos >= r.diversidade ? '✓' : '⚠'} meta ${r.diversidade}` : ''}${r.tetoPct > 0 ? ` · teto ${r.tetoPct}% (R$ ${fmt(r.budget * r.tetoPct/100)})` : ''}</div>
         </div>
         <div style="padding:12px;background:rgba(245,158,11,.08);border-radius:6px;border-left:3px solid var(--amber)">
           <div style="font-size:10px;color:var(--text3);font-weight:600;letter-spacing:0.5px">🎯 CRITÉRIO</div>
