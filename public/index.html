@@ -412,6 +412,7 @@ input:focus,select:focus{border-color:var(--green)}
   <button class="tab" onclick="switchTab('oport')">🎯 Oportunidades</button>
   <button class="tab" onclick="switchTab('estoque')">📦 Estoque</button>
   <button class="tab" onclick="switchTab('compras')">🛒 Lista de Compras</button>
+  <button class="tab" onclick="switchTab('otimizador')">💼 Otimizador</button>
   <button class="tab" onclick="switchTab('vendas')">💰 Vendas <span id="vendas-msg-badge" style="display:none;background:var(--red);color:white;font-size:10px;padding:1px 6px;border-radius:10px;margin-left:4px;font-weight:700">0</span></button>
   <button class="tab" onclick="switchTab('anunciar')">📝 Anunciar</button>
   <button class="tab" onclick="switchTab('tendencias')">📈 Tendências</button>
@@ -1296,6 +1297,113 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
           </table>
         </div>
         <div id="compras-empty" style="display:none;padding:24px;text-align:center;color:var(--text3);font-size:13px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── OTIMIZADOR DE ORÇAMENTO (v124) ─────────────────── -->
+  <div class="panel" id="tab-otimizador">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px">
+        <div>
+          <div class="sec" style="margin:0">💼 Otimizador de Orçamento</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:3px">
+            Dado seu orçamento, cruza Comparativo (custo CIA) + Ranking de Vendas (histórico) + ML pra sugerir a melhor combinação de produtos
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Entrada -->
+    <div class="card" style="margin-top:12px">
+      <!-- Linha 1: Orçamento + Critério -->
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin-bottom:14px">
+        <div style="flex:1 1 220px">
+          <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">💰 Orçamento disponível (R$)</label>
+          <input type="number" id="opt-budget" placeholder="ex: 10000" step="100" min="0"
+            style="width:100%;padding:9px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:16px;font-family:'DM Mono',monospace;text-align:right;font-weight:700">
+        </div>
+        <div style="flex:1 1 220px">
+          <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">🎯 Priorizar por</label>
+          <select id="opt-criterio" style="width:100%;padding:9px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+            <option value="score">⚖️ Score (lucro × giro) — Recomendado</option>
+            <option value="lucro">💰 Lucro total/un</option>
+            <option value="margem">📊 Margem % maior</option>
+            <option value="giro">⚡ Giro mais rápido</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Linha 2: Parâmetros de foco (min/max custo + período vendas) -->
+      <div style="padding:12px;background:rgba(167,139,250,.06);border-left:3px solid var(--purple);border-radius:4px">
+        <div style="font-size:11px;color:var(--purple);font-weight:700;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">🎯 Onde focar a otimização</div>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:end">
+          <div style="flex:1 1 180px">
+            <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">💰 Custo MÍN por produto (R$)</label>
+            <input type="number" id="opt-min-cost" placeholder="deixe vazio = sem limite" step="50" min="0"
+              style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace;text-align:right">
+          </div>
+          <div style="flex:1 1 180px">
+            <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">💰 Custo MÁX por produto (R$)</label>
+            <input type="number" id="opt-max-cost" placeholder="deixe vazio = sem limite" step="50" min="0"
+              style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace;text-align:right">
+          </div>
+          <div style="flex:0 0 170px">
+            <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">📅 Vendas últimos</label>
+            <select id="opt-periodo" style="width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+              <option value="30">30 dias</option>
+              <option value="60" selected>60 dias</option>
+              <option value="90">90 dias</option>
+              <option value="180">180 dias</option>
+              <option value="365">1 ano</option>
+              <option value="0">Todo histórico</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Categorias multi-select (celular, notebook, fone, etc) -->
+        <div style="margin-top:12px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+            <label style="font-size:11px;color:var(--text3);font-weight:600">📱 Categorias de produto <span id="opt-cat-count" style="color:var(--text3);font-weight:400;font-size:10px"></span></label>
+            <div style="display:flex;gap:8px">
+              <button type="button" onclick="_optCatToggleAll(true)" style="background:none;border:none;color:var(--blue);font-size:10px;cursor:pointer;padding:0">Todas</button>
+              <button type="button" onclick="_optCatToggleAll(false)" style="background:none;border:none;color:var(--text3);font-size:10px;cursor:pointer;padding:0">Nenhuma</button>
+            </div>
+          </div>
+          <div id="opt-categorias" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+        </div>
+
+        <div style="font-size:10px;color:var(--text3);margin-top:10px;font-style:italic">
+          💡 Use custo min/máx pra focar em faixas específicas (ex: R$ 800-1500 = smartphone intermediário). Marque múltiplas categorias pra combinar (ex: celular + fone). Nenhuma marcada = considera tudo.
+        </div>
+      </div>
+
+      <!-- Botão simular -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;gap:10px;flex-wrap:wrap">
+        <div style="font-size:11px;color:var(--text3)" id="opt-stats"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm" onclick="clearOtimizador()" title="Limpar parâmetros">✕ Limpar</button>
+          <button class="btn btn-p" onclick="runOtimizador()" style="padding:9px 22px;font-weight:700;font-size:14px">💡 Simular</button>
+        </div>
+      </div>
+      <div id="opt-prereq-warn" style="margin-top:10px;display:none"></div>
+    </div>
+
+    <!-- Resumo -->
+    <div id="opt-summary" style="display:none;margin-top:12px"></div>
+
+    <!-- Plano otimizado -->
+    <div id="opt-plano" style="display:none;margin-top:12px"></div>
+
+    <!-- Produtos sem histórico -->
+    <div id="opt-sem-historico" style="display:none;margin-top:12px"></div>
+
+    <!-- Vazio -->
+    <div id="opt-empty" class="card" style="margin-top:12px;padding:40px;text-align:center;color:var(--text3)">
+      <div style="font-size:40px;margin-bottom:12px">💼</div>
+      <div style="font-size:14px;margin-bottom:8px">Insira um orçamento acima e clique em <strong>Simular</strong></div>
+      <div style="font-size:11px;color:var(--text3);max-width:500px;margin:0 auto">
+        O otimizador vai cruzar todos os produtos cadastrados (lista CIA) com seu histórico de vendas (XLSX ou API) e sugerir a melhor combinação pra maximizar o retorno.
       </div>
     </div>
   </div>
@@ -2833,6 +2941,7 @@ function switchTab(id){
     if(typeof _hydrateOportCostRange === 'function') _hydrateOportCostRange();
     renderOportTop(); renderOportRare(); renderOportAll();
   }  // 3 cards
+  if(id==='otimizador'){ _hydrateOtimizador(); updateOptStats(); }
   if(id==='config'){ renderAccountsList(); renderBlockedStates(); renderFornecedoresWA(); refreshVendedorStatusBadge(); }
 }
 function showUpload(){ document.getElementById('upload-area').style.display='block'; document.getElementById('import-result').style.display='none'; switchTab('import'); }
@@ -20948,6 +21057,552 @@ function renderCompras(){
     </tr>`;
   }).join('');
   tbody.innerHTML = rowsHtml;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 💼 OTIMIZADOR DE ORÇAMENTO (v124)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Cruza 3 fontes: (1) state.products do Comparativo = custo CIA de cada produto,
+// (2) vendasData/vendasDataFull = histórico de vendas pra calcular lucro médio e
+// giro, (3) cfg (comissão + frete + minMargin) pra estimar lucro líquido.
+// Resolve knapsack guloso: dado o orçamento, escolhe o melhor conjunto de
+// produtos+qtd que maximiza score (lucro × giro × confiança).
+
+let _optLastResult = null;
+
+// Catálogo de categorias — cada uma com regex pra detectar no nome do produto
+const OPT_CATEGORIAS = [
+  { key:'celular',    label:'📱 Celular',       rx:/\b(iphone|xiaomi|redmi|poco|samsung|galaxy|moto\b|motorola|realme|nokia|smartphone|celular|infinix|tecno|honor|zte|asus\s*zenfone)\b/i },
+  { key:'tablet',     label:'📱 Tablet',        rx:/\b(ipad|tablet|\bpad\b|\btab\s*s\d|galaxy\s*tab|redmi\s*pad|poco\s*pad)\b/i },
+  { key:'notebook',   label:'💻 Notebook',       rx:/\b(macbook|notebook|laptop|chromebook|ultrabook)\b/i },
+  { key:'fone',       label:'🎧 Fone',          rx:/\b(airpods|fone|headphone|headset|earbud|buds|haylou|redmi\s*buds|galaxy\s*buds)\b/i },
+  { key:'smartwatch', label:'⌚ Smartwatch',    rx:/\b(watch|smartwatch|mi\s*band|amazfit|haylou|realme\s*watch|galaxy\s*watch|apple\s*watch)\b/i },
+  { key:'console',    label:'🎮 Console/Jogos', rx:/\b(playstation|ps[345]|xbox|nintendo|switch|console|controle\s*dualshock)\b/i },
+  { key:'tv',         label:'📺 TV/Home',       rx:/\b(smart\s*tv|\btv\s*led|\bsoundbar|chromecast|fire\s*stick|roku|apple\s*tv)\b/i },
+  { key:'acessorio',  label:'🔌 Acessório',     rx:/\b(cabo|carregador|fonte|capa|pel[ií]cula|suporte|hub|adaptador|dock|pendrive|cart[aã]o|hd\s*externo|ssd\s*externo|mouse|teclado|webcam)\b/i },
+  { key:'camera',     label:'📷 Câmera',        rx:/\b(camera|camera\s*ip|action\s*cam|gopro|dji|insta360|webcam)\b/i },
+  { key:'perfume',    label:'🌸 Perfume/Beleza',rx:/\b(perfume|col[oô]nia|fragr[aâ]ncia|body\s*splash|hidratante|desodorante)\b/i },
+];
+
+// Hidrata inputs com últimos valores usados (localStorage)
+function _hydrateOtimizador(){
+  const budget = Number(localStorage.getItem('cia_opt_budget')) || 0;
+  const criterio = localStorage.getItem('cia_opt_criterio') || 'score';
+  const periodo = localStorage.getItem('cia_opt_periodo') || '60';
+  const minCost = Number(localStorage.getItem('cia_opt_min_cost')) || 0;
+  const maxCost = Number(localStorage.getItem('cia_opt_max_cost')) || 0;
+  let cats = [];
+  try { cats = JSON.parse(localStorage.getItem('cia_opt_cats') || '[]'); } catch {}
+
+  const el = id => document.getElementById(id);
+  if(el('opt-budget') && budget > 0) el('opt-budget').value = String(budget);
+  if(el('opt-criterio')) el('opt-criterio').value = criterio;
+  if(el('opt-periodo')) el('opt-periodo').value = periodo;
+  if(el('opt-min-cost') && minCost > 0) el('opt-min-cost').value = String(minCost);
+  if(el('opt-max-cost') && maxCost > 0) el('opt-max-cost').value = String(maxCost);
+  _renderOptCategorias(cats);
+}
+
+// Renderiza chips/checkboxes de categorias
+function _renderOptCategorias(selected){
+  const el = document.getElementById('opt-categorias');
+  if(!el) return;
+  const sel = new Set(selected || []);
+  el.innerHTML = OPT_CATEGORIAS.map(c => {
+    const isOn = sel.has(c.key);
+    return `<label style="display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:${isOn ? 'rgba(167,139,250,.2)' : 'var(--bg2)'};border:1px solid ${isOn ? 'var(--purple)' : 'var(--border)'};border-radius:16px;cursor:pointer;font-size:12px;color:${isOn ? 'var(--purple)' : 'var(--text2)'};font-weight:${isOn ? '600' : '400'};user-select:none;transition:all 0.1s">
+      <input type="checkbox" data-opt-cat="${c.key}" ${isOn ? 'checked' : ''} onchange="_optCatOnChange()" style="margin:0;accent-color:var(--purple)">
+      <span>${c.label}</span>
+    </label>`;
+  }).join('');
+  _updateOptCatCount();
+}
+
+function _getOptCategoriasSelecionadas(){
+  return Array.from(document.querySelectorAll('[data-opt-cat]:checked')).map(c => c.dataset.optCat);
+}
+
+function _optCatOnChange(){
+  // Re-renderiza visualmente (pra atualizar background dos chips)
+  _renderOptCategorias(_getOptCategoriasSelecionadas());
+}
+function _updateOptCatCount(){
+  const el = document.getElementById('opt-cat-count');
+  if(!el) return;
+  const n = _getOptCategoriasSelecionadas().length;
+  el.textContent = n === 0 ? '(nenhuma = considera todas)' : `(${n} selecionada${n>1?'s':''})`;
+}
+function _optCatToggleAll(on){
+  _renderOptCategorias(on ? OPT_CATEGORIAS.map(c => c.key) : []);
+}
+
+// Classifica um produto nas categorias conhecidas
+function _getProductCategories(product){
+  const name = product.name || '';
+  const cats = [];
+  for(const c of OPT_CATEGORIAS){
+    if(c.rx.test(name)) cats.push(c.key);
+  }
+  return cats;
+}
+
+function clearOtimizador(){
+  const el = id => document.getElementById(id);
+  if(el('opt-budget')) el('opt-budget').value = '';
+  if(el('opt-min-cost')) el('opt-min-cost').value = '';
+  if(el('opt-max-cost')) el('opt-max-cost').value = '';
+  if(el('opt-criterio')) el('opt-criterio').value = 'score';
+  if(el('opt-periodo')) el('opt-periodo').value = '60';
+  _renderOptCategorias([]);
+  localStorage.removeItem('cia_opt_budget');
+  localStorage.removeItem('cia_opt_criterio');
+  localStorage.removeItem('cia_opt_periodo');
+  localStorage.removeItem('cia_opt_min_cost');
+  localStorage.removeItem('cia_opt_max_cost');
+  localStorage.removeItem('cia_opt_cats');
+  // Esconde resultados
+  ['opt-summary','opt-plano','opt-sem-historico'].forEach(id => {
+    const e = document.getElementById(id); if(e) e.style.display = 'none';
+  });
+  document.getElementById('opt-empty').style.display = 'block';
+  updateOptStats();
+}
+
+function updateOptStats(){
+  const el = document.getElementById('opt-stats');
+  if(!el) return;
+  const nProd = (state.products || []).filter(p => p.minPrice > 0).length;
+  const nVendas = (vendasData || []).length + (vendasDataFull || []).length;
+  const linhas = [];
+  if(nProd > 0) linhas.push(`${nProd} produtos CIA com custo`);
+  else linhas.push('⚠ Sem lista CIA carregada (aba Importar)');
+  if(nVendas > 0) linhas.push(`${nVendas} vendas no histórico`);
+  else linhas.push('⚠ Sem histórico de vendas (aba Vendas)');
+  el.innerHTML = linhas.join(' · ');
+}
+
+// Agrega estatísticas de venda por produto (normKey do título)
+// Retorna Map: normKey → { count, revenue, profit, lastSale, avgPrice }
+function _computeSalesStats(periodDias){
+  const map = new Map();
+  const cutoff = periodDias > 0 ? Date.now() - (periodDias * 24*60*60*1000) : 0;
+  const todas = [...(vendasData || []), ...(vendasDataFull || [])];
+
+  for(const v of todas){
+    // Respeita data (se período definido)
+    if(cutoff > 0){
+      const dt = v.date_created ? new Date(v.date_created).getTime() : 0;
+      if(!dt || dt < cutoff) continue;
+    }
+    // Pula vendas canceladas
+    if(typeof vendaFoiCancelada === 'function' && vendaFoiCancelada(v)) continue;
+
+    // Pega título do primeiro item (vendas ML geralmente têm 1 item)
+    const title = v.items?.[0]?.item?.title || '';
+    if(!title) continue;
+    const key = normKey(title);
+    if(!key) continue;
+
+    const price = Number(v.items?.[0]?.unit_price) || 0;
+    const qty = Number(v.items?.[0]?.quantity) || 1;
+    const lucro = typeof calcLucroVenda === 'function' ? calcLucroVenda(v) : 0;
+
+    if(!map.has(key)){
+      map.set(key, { count:0, revenue:0, profit:0, lastSale:0, prices:[], qty:0, title });
+    }
+    const s = map.get(key);
+    s.count++;
+    s.qty += qty;
+    s.revenue += price * qty;
+    s.profit += lucro;
+    s.prices.push(price);
+    const dt = v.date_created ? new Date(v.date_created).getTime() : 0;
+    if(dt > s.lastSale) s.lastSale = dt;
+  }
+
+  // Calcula médias
+  for(const s of map.values()){
+    s.avgPrice = s.prices.length ? s.prices.reduce((a,b) => a+b, 0) / s.prices.length : 0;
+    s.avgProfit = s.count > 0 ? s.profit / s.qty : 0;
+    s.marginPct = s.avgPrice > 0 ? (s.avgProfit / s.avgPrice * 100) : 0;
+  }
+  return map;
+}
+
+// Estima comissão + frete usando config
+function _estimateFees(preco){
+  const comissao = (preco * (Number(cfg?.commissionClassico) || 0.13)) + (Number(cfg?.fixedFee) || 6);
+  const frete = Number(cfg?.shippingCost) || 0;
+  return { comissao, frete };
+}
+
+// Filtra produto por categorias selecionadas (multi-select)
+// Se nenhuma categoria selecionada → aceita tudo
+// Se tem categorias → produto precisa bater em pelo menos UMA delas
+function _matchCategorias(product, cats){
+  if(!cats || cats.length === 0) return true;
+  const productCats = _getProductCategories(product);
+  return cats.some(c => productCats.includes(c));
+}
+
+// Função principal do otimizador
+async function runOtimizador(){
+  const budget = Number(document.getElementById('opt-budget')?.value) || 0;
+  const criterio = document.getElementById('opt-criterio')?.value || 'score';
+  const periodo = Number(document.getElementById('opt-periodo')?.value) || 60;
+  const minCost = Number(document.getElementById('opt-min-cost')?.value) || 0;
+  const maxCost = Number(document.getElementById('opt-max-cost')?.value) || 0;
+  const cats = _getOptCategoriasSelecionadas();
+
+  // Validação
+  if(budget <= 0){
+    alert('Informe um orçamento válido (R$ > 0).');
+    return;
+  }
+  if(minCost > 0 && maxCost > 0 && minCost > maxCost){
+    alert('Custo MÍNIMO não pode ser maior que o MÁXIMO.');
+    return;
+  }
+
+  // Persiste
+  try {
+    localStorage.setItem('cia_opt_budget', String(budget));
+    localStorage.setItem('cia_opt_criterio', criterio);
+    localStorage.setItem('cia_opt_periodo', String(periodo));
+    localStorage.setItem('cia_opt_min_cost', String(minCost));
+    localStorage.setItem('cia_opt_max_cost', String(maxCost));
+    localStorage.setItem('cia_opt_cats', JSON.stringify(cats));
+  } catch {}
+
+  // Pré-requisitos
+  const prereqEl = document.getElementById('opt-prereq-warn');
+  const products = (state.products || []).filter(p => p.minPrice > 0);
+  if(products.length === 0){
+    prereqEl.style.display = 'block';
+    prereqEl.innerHTML = `<div class="alert al-warn"><span>⚠</span><span>Lista CIA vazia. Importe listas de fornecedores em <strong>Importar</strong> primeiro.</span></div>`;
+    return;
+  }
+  prereqEl.style.display = 'none';
+
+  // Agrega vendas
+  const salesStats = _computeSalesStats(periodo);
+
+  // Monta candidatos: cruza produtos CIA com histórico de vendas
+  const candidatos = [];
+  const semHistorico = [];
+
+  for(const p of products){
+    const custo = p.minPrice;
+
+    // Filtros de custo
+    if(minCost > 0 && custo < minCost) continue;
+    if(maxCost > 0 && custo > maxCost) continue;
+    // Filtro de categorias (multi-select)
+    if(!_matchCategorias(p, cats)) continue;
+
+    const key = normKey(p.name);
+    const stats = salesStats.get(key);
+    const custoCIA = custo;
+    const fees = _estimateFees(stats ? stats.avgPrice : custoCIA * 1.3);
+
+    if(stats && stats.count > 0){
+      // Lucro por unidade: preço médio de venda - custo - comissão - frete
+      const lucroUn = stats.avgPrice - custoCIA - fees.comissao - fees.frete;
+      const marginPct = stats.avgPrice > 0 ? (lucroUn / stats.avgPrice * 100) : 0;
+      // Giro: unidades vendidas / dia (nos últimos N dias)
+      const diasPeriodo = periodo > 0 ? periodo : Math.max(1, (Date.now() - stats.lastSale) / (24*60*60*1000));
+      const giroDia = stats.qty / diasPeriodo;
+      // Score: lucro × giro × confiança (ter 3+ vendas = confiança 1.0)
+      const confianca = Math.min(1, stats.count / 3);
+      const score = Math.max(0, lucroUn) * giroDia * confianca;
+
+      candidatos.push({
+        product: p,
+        custo: custoCIA,
+        avgPrice: stats.avgPrice,
+        lucroUn,
+        marginPct,
+        giroDia,
+        unidadesVendidas: stats.qty,
+        nVendas: stats.count,
+        confianca,
+        score,
+        lojaCIA: p.offers?.[0]?.store || '?',
+      });
+    } else {
+      // Sem histórico — vai pra lista "avaliar"
+      semHistorico.push({
+        product: p,
+        custo: custoCIA,
+        lojaCIA: p.offers?.[0]?.store || '?',
+        storeCount: p.storeCount || (p.offers?.length || 1),
+      });
+    }
+  }
+
+  if(candidatos.length === 0 && semHistorico.length === 0){
+    prereqEl.style.display = 'block';
+    prereqEl.innerHTML = `<div class="alert al-warn"><span>⚠</span><span>Nenhum produto atende aos filtros. Afrouxe custo min/máx ou mude a marca.</span></div>`;
+    return;
+  }
+
+  // Ordena por critério
+  const sortFn = {
+    score:  (a,b) => b.score - a.score,
+    lucro:  (a,b) => b.lucroUn - a.lucroUn,
+    margem: (a,b) => b.marginPct - a.marginPct,
+    giro:   (a,b) => b.giroDia - a.giroDia,
+  }[criterio] || ((a,b) => b.score - a.score);
+  candidatos.sort(sortFn);
+
+  // Rejeita produtos com lucro <= 0 (não vale a pena)
+  const positivos = candidatos.filter(c => c.lucroUn > 0);
+  const negativos = candidatos.filter(c => c.lucroUn <= 0);
+
+  // Algoritmo guloso: pra cada candidato (do melhor pro pior), compra o máximo
+  // de unidades até: (a) estourar orçamento OU (b) satisfazer giro de 90 dias
+  const plano = [];
+  let budgetRestante = budget;
+  for(const c of positivos){
+    if(budgetRestante < c.custo) continue;
+    // Qtd razoável = projeção de giro × 90 dias (= estoque pra 3 meses)
+    // Mas respeita orçamento também. "Sem limite" por SKU conforme pedido.
+    const qtdOrcamento = Math.floor(budgetRestante / c.custo);
+    // Dica de giro: até 3 meses de giro, limita a quantidade "razoável"
+    // (mas se é o único candidato, enche tudo)
+    const qtd = qtdOrcamento;
+    if(qtd <= 0) continue;
+
+    const custoTotal = qtd * c.custo;
+    const lucroTotal = qtd * c.lucroUn;
+    const diasGiro = c.giroDia > 0 ? qtd / c.giroDia : 999;
+
+    plano.push({
+      ...c,
+      qtd, custoTotal, lucroTotal, diasGiro,
+    });
+    budgetRestante -= custoTotal;
+
+    if(budgetRestante < 50) break; // sobra irrelevante
+  }
+
+  _optLastResult = {
+    budget, criterio, periodo, cats, minCost, maxCost,
+    plano, semHistorico, negativos,
+    totals: {
+      investido: budget - budgetRestante,
+      sobrando: budgetRestante,
+      lucroTotal: plano.reduce((s,p) => s + p.lucroTotal, 0),
+      unidades: plano.reduce((s,p) => s + p.qtd, 0),
+      produtos: plano.length,
+    }
+  };
+
+  _renderOtimizadorResultado(_optLastResult);
+}
+
+function _renderOtimizadorResultado(r){
+  const fmt = n => (Number(n)||0).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
+  document.getElementById('opt-empty').style.display = 'none';
+
+  // ── Resumo ─────────────────────────────────────────────────
+  const marginPct = r.totals.investido > 0 ? (r.totals.lucroTotal / r.totals.investido * 100) : 0;
+  const sumEl = document.getElementById('opt-summary');
+  sumEl.innerHTML = `
+    <div class="card">
+      <div class="sec" style="margin-top:0">📊 Resumo da Simulação</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-top:10px">
+        <div style="padding:12px;background:rgba(96,165,250,.08);border-radius:6px;border-left:3px solid var(--blue)">
+          <div style="font-size:10px;color:var(--text3);font-weight:600;letter-spacing:0.5px">💰 INVESTIDO</div>
+          <div style="font-size:20px;font-weight:700;color:var(--blue);font-family:'DM Mono',monospace;margin-top:4px">R$ ${fmt(r.totals.investido)}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">de R$ ${fmt(r.budget)} (sobra R$ ${fmt(r.totals.sobrando)})</div>
+        </div>
+        <div style="padding:12px;background:rgba(62,207,142,.08);border-radius:6px;border-left:3px solid var(--green)">
+          <div style="font-size:10px;color:var(--text3);font-weight:600;letter-spacing:0.5px">📈 LUCRO ESPERADO</div>
+          <div style="font-size:20px;font-weight:700;color:var(--green);font-family:'DM Mono',monospace;margin-top:4px">R$ ${fmt(r.totals.lucroTotal)}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">margem média ${marginPct.toFixed(1)}%</div>
+        </div>
+        <div style="padding:12px;background:rgba(167,139,250,.08);border-radius:6px;border-left:3px solid var(--purple)">
+          <div style="font-size:10px;color:var(--text3);font-weight:600;letter-spacing:0.5px">📦 UNIDADES</div>
+          <div style="font-size:20px;font-weight:700;color:var(--purple);font-family:'DM Mono',monospace;margin-top:4px">${r.totals.unidades}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">em ${r.totals.produtos} produtos diferentes</div>
+        </div>
+        <div style="padding:12px;background:rgba(245,158,11,.08);border-radius:6px;border-left:3px solid var(--amber)">
+          <div style="font-size:10px;color:var(--text3);font-weight:600;letter-spacing:0.5px">🎯 CRITÉRIO</div>
+          <div style="font-size:14px;font-weight:700;color:var(--amber);margin-top:6px">${({score:'Score (lucro×giro)',lucro:'Lucro total',margem:'Margem %',giro:'Giro rápido'})[r.criterio]}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">últimos ${r.periodo === 0 ? 'todos os' : r.periodo} dias</div>
+        </div>
+      </div>
+    </div>
+  `;
+  sumEl.style.display = 'block';
+
+  // ── Plano ──────────────────────────────────────────────────
+  const planoEl = document.getElementById('opt-plano');
+  if(r.plano.length === 0){
+    planoEl.innerHTML = `<div class="card"><div class="alert al-warn"><span>⚠</span><span>Nenhum produto com histórico positivo cabe nesse orçamento. Afrouxe filtros ou aumente o orçamento.</span></div></div>`;
+  } else {
+    const rows = r.plano.map((p, idx) => {
+      const prodCats = _getProductCategories(p.product);
+      const catBadges = prodCats.slice(0,2).map(ck => {
+        const cat = OPT_CATEGORIAS.find(c => c.key === ck);
+        return cat ? `<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(167,139,250,.15);color:var(--purple);margin-right:3px">${cat.label}</span>` : '';
+      }).join('');
+      return `
+      <tr style="border-top:1px solid var(--border)">
+        <td style="padding:8px;text-align:center;color:var(--text3);font-size:11px">${idx+1}</td>
+        <td style="padding:8px">
+          <div style="font-weight:600;color:var(--text);font-size:12px">${escapeHTML(p.product.name)}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">${catBadges}${escapeHTML(p.lojaCIA)} · ${p.nVendas} venda(s) · ${p.unidadesVendidas} un vendidas</div>
+        </td>
+        <td style="padding:8px;text-align:center;font-weight:700;color:var(--purple);font-size:14px">${p.qtd}</td>
+        <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px">R$ ${fmt(p.custo)}</td>
+        <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;color:var(--text2)">R$ ${fmt(p.avgPrice)}</td>
+        <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;color:var(--green);font-weight:600">R$ ${fmt(p.lucroUn)}</td>
+        <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:13px;color:var(--green);font-weight:700">R$ ${fmt(p.lucroTotal)}</td>
+        <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px">${p.marginPct.toFixed(1)}%</td>
+        <td style="padding:8px;text-align:center;font-size:11px;color:${p.giroDia >= 0.3 ? 'var(--green)' : p.giroDia >= 0.1 ? 'var(--amber)' : 'var(--text3)'}">${p.giroDia >= 0.3 ? '⚡ Alto' : p.giroDia >= 0.1 ? '→ Médio' : '🐌 Baixo'}<br><span style="color:var(--text3);font-size:10px">${p.giroDia.toFixed(2)}/dia</span></td>
+        <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:11px;color:var(--text3)">${p.diasGiro < 999 ? Math.round(p.diasGiro) + ' dias' : '—'}</td>
+      </tr>
+    `;
+    }).join('');
+
+    planoEl.innerHTML = `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+          <div class="sec" style="margin:0">🏆 Plano Otimizado — ${r.plano.length} produtos</div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-sm" onclick="_optCopyToCompras()" title="Adiciona todos os produtos à Lista de Compras">📋 Copiar p/ Compras</button>
+            <button class="btn btn-sm" onclick="_optExportXLSX()" title="Exporta plano em XLSX">📥 Exportar XLSX</button>
+          </div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="background:var(--bg2)">
+                <th style="padding:8px;text-align:center;font-size:10px;color:var(--text3);font-weight:600">#</th>
+                <th style="padding:8px;text-align:left;font-size:10px;color:var(--text3);font-weight:600">PRODUTO</th>
+                <th style="padding:8px;text-align:center;font-size:10px;color:var(--text3);font-weight:600">QTD</th>
+                <th style="padding:8px;text-align:right;font-size:10px;color:var(--text3);font-weight:600">CUSTO/UN</th>
+                <th style="padding:8px;text-align:right;font-size:10px;color:var(--text3);font-weight:600">VENDA MÉDIA</th>
+                <th style="padding:8px;text-align:right;font-size:10px;color:var(--text3);font-weight:600">LUCRO/UN</th>
+                <th style="padding:8px;text-align:right;font-size:10px;color:var(--text3);font-weight:600">LUCRO TOTAL</th>
+                <th style="padding:8px;text-align:right;font-size:10px;color:var(--text3);font-weight:600">MARGEM</th>
+                <th style="padding:8px;text-align:center;font-size:10px;color:var(--text3);font-weight:600">GIRO</th>
+                <th style="padding:8px;text-align:right;font-size:10px;color:var(--text3);font-weight:600">PRAZO</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div style="margin-top:12px;padding:10px;background:var(--bg2);border-radius:6px;font-size:11px;color:var(--text3);line-height:1.6">
+          💡 <strong>Como ler:</strong> <strong>Giro</strong> = unidades vendidas por dia nos últimos ${r.periodo} dias. <strong>Prazo</strong> = quantos dias para zerar o estoque sugerido no ritmo atual. <strong>Lucro/un</strong> já desconta comissão (${((Number(cfg?.commissionClassico)||0.13)*100).toFixed(0)}%) + taxa fixa (R$ ${fmt(cfg?.fixedFee||6)}) + frete (R$ ${fmt(cfg?.shippingCost||0)}).
+        </div>
+      </div>
+    `;
+  }
+  planoEl.style.display = 'block';
+
+  // ── Sem histórico ──────────────────────────────────────────
+  const shEl = document.getElementById('opt-sem-historico');
+  if(r.semHistorico.length > 0){
+    const shRows = r.semHistorico.slice(0, 20).map(sh => `
+      <tr style="border-top:1px solid var(--border)">
+        <td style="padding:6px 8px">
+          <div style="font-weight:600;color:var(--text);font-size:12px">${escapeHTML(sh.product.name)}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">${sh.storeCount} fornecedor(es)</div>
+        </td>
+        <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;color:var(--blue)">R$ ${fmt(sh.custo)}</td>
+        <td style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text3)">${escapeHTML(sh.lojaCIA)}</td>
+      </tr>
+    `).join('');
+    shEl.innerHTML = `
+      <div class="card" style="border-left:3px solid var(--amber)">
+        <div class="sec" style="margin-top:0;color:var(--amber)">💡 Sem Histórico — Avaliar</div>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+          ${r.semHistorico.length} produto(s) com custo cadastrado mas <strong>nunca vendidos</strong> no período analisado. Pode valer a pena testar — mas sem dados históricos pra garantir retorno. ${r.semHistorico.length > 20 ? ' (mostrando os 20 primeiros)' : ''}
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="background:var(--bg2)">
+                <th style="padding:6px 8px;text-align:left;font-size:10px;color:var(--text3);font-weight:600">PRODUTO</th>
+                <th style="padding:6px 8px;text-align:right;font-size:10px;color:var(--text3);font-weight:600">CUSTO CIA</th>
+                <th style="padding:6px 8px;text-align:left;font-size:10px;color:var(--text3);font-weight:600">FORNECEDOR</th>
+              </tr>
+            </thead>
+            <tbody>${shRows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+    shEl.style.display = 'block';
+  } else {
+    shEl.style.display = 'none';
+  }
+}
+
+// Copia o plano pra Lista de Compras (reutiliza o estoque como pivô)
+function _optCopyToCompras(){
+  if(!_optLastResult || !_optLastResult.plano.length){
+    alert('Nenhum plano gerado ainda. Clique em Simular primeiro.');
+    return;
+  }
+  const lines = _optLastResult.plano.map(p =>
+    `${p.qtd}x ${p.product.name} - R$ ${(p.custo).toFixed(2)} (${p.lojaCIA})`
+  ).join('\n');
+  // Copia pro clipboard
+  if(navigator.clipboard){
+    navigator.clipboard.writeText(lines).then(() => {
+      alert(`✓ ${_optLastResult.plano.length} produtos copiados pro clipboard!\n\nCole no WhatsApp do fornecedor ou na sua lista de pedidos.`);
+    }).catch(() => {
+      prompt('Copie o texto abaixo:', lines);
+    });
+  } else {
+    prompt('Copie o texto abaixo:', lines);
+  }
+}
+
+// Exporta plano em XLSX usando SheetJS
+function _optExportXLSX(){
+  if(!_optLastResult || !_optLastResult.plano.length){
+    alert('Nenhum plano gerado ainda.');
+    return;
+  }
+  if(typeof XLSX === 'undefined'){
+    alert('Biblioteca XLSX não carregada.');
+    return;
+  }
+  const r = _optLastResult;
+  const rows = r.plano.map((p, i) => ({
+    '#': i+1,
+    'Produto': p.product.name,
+    'Fornecedor': p.lojaCIA,
+    'Qtd': p.qtd,
+    'Custo/un': Number(p.custo.toFixed(2)),
+    'Venda média': Number(p.avgPrice.toFixed(2)),
+    'Lucro/un': Number(p.lucroUn.toFixed(2)),
+    'Investimento': Number(p.custoTotal.toFixed(2)),
+    'Lucro total': Number(p.lucroTotal.toFixed(2)),
+    'Margem %': Number(p.marginPct.toFixed(1)),
+    'Giro/dia': Number(p.giroDia.toFixed(3)),
+    'Prazo (dias)': p.diasGiro < 999 ? Math.round(p.diasGiro) : '',
+    'Histórico (vendas)': p.nVendas,
+  }));
+  // Adiciona linha de total
+  rows.push({});
+  rows.push({
+    'Produto': 'TOTAL',
+    'Qtd': r.totals.unidades,
+    'Investimento': Number(r.totals.investido.toFixed(2)),
+    'Lucro total': Number(r.totals.lucroTotal.toFixed(2)),
+    'Margem %': r.totals.investido > 0 ? Number((r.totals.lucroTotal / r.totals.investido * 100).toFixed(1)) : 0,
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Plano Otimizado');
+  const ts = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `Otimizador_Orcamento_${ts}.xlsx`);
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
