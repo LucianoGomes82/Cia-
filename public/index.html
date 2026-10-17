@@ -21292,9 +21292,16 @@ function _computeSalesStats(periodDias){
     const price = Number(v.items?.[0]?.unit_price) || 0;
     const qty = Number(v.items?.[0]?.quantity) || 1;
     const lucro = typeof calcLucroVenda === 'function' ? calcLucroVenda(v) : 0;
+    // v124e: capta o investimento REAL da venda (custo pago pelos sócios).
+    // Se > 0, usa isso como "custo real" em vez do minPrice CIA (que pode
+    // ser de uma variante mais barata com nome parecido).
+    const invTotal = (typeof getInvestimento === 'function')
+      ? ((getInvestimento(v.id, 'luciano') || 0) + (getInvestimento(v.id, 'johnny') || 0))
+      : 0;
 
     if(!map.has(prodKey)){
-      map.set(prodKey, { count:0, revenue:0, profit:0, lastSale:0, prices:[], qty:0, title });
+      map.set(prodKey, { count:0, revenue:0, profit:0, lastSale:0, prices:[], qty:0, title,
+                         costTotal:0, costQty:0 });
     }
     const s = map.get(prodKey);
     s.count++;
@@ -21302,6 +21309,11 @@ function _computeSalesStats(periodDias){
     s.revenue += price * qty;
     s.profit += lucro;
     s.prices.push(price);
+    // Só agrega custo se investimento foi cadastrado (senão polui a média com 0)
+    if(invTotal > 0){
+      s.costTotal += invTotal;
+      s.costQty += qty;
+    }
     const dt = v.date_created ? new Date(v.date_created).getTime() : 0;
     if(dt > s.lastSale) s.lastSale = dt;
   }
@@ -21309,6 +21321,7 @@ function _computeSalesStats(periodDias){
   // Calcula médias
   for(const s of map.values()){
     s.avgPrice = s.prices.length ? s.prices.reduce((a,b) => a+b, 0) / s.prices.length : 0;
+    s.avgCost = s.costQty > 0 ? s.costTotal / s.costQty : 0;  // v124e: custo real médio
     s.avgProfit = s.count > 0 ? s.profit / s.qty : 0;
     s.marginPct = s.avgPrice > 0 ? (s.avgProfit / s.avgPrice * 100) : 0;
   }
@@ -21400,8 +21413,13 @@ async function runOtimizador(){
     const fees = _estimateFees(stats ? stats.avgPrice : custoCIA * 1.3);
 
     if(stats && stats.count > 0){
+      // v124e: usa CUSTO REAL (investimento cadastrado nas vendas) se disponível,
+      // senão cai pro minPrice da CIA. O custo real é mais preciso porque o CIA
+      // pode casar com uma variante mais barata (mesmo nome base, config menor).
+      const custoReal = stats.avgCost > 0 ? stats.avgCost : custoCIA;
+      const temCustoReal = stats.avgCost > 0;
       // Lucro por unidade: preço médio de venda - custo - comissão - frete
-      const lucroUn = stats.avgPrice - custoCIA - fees.comissao - fees.frete;
+      const lucroUn = stats.avgPrice - custoReal - fees.comissao - fees.frete;
       const marginPct = stats.avgPrice > 0 ? (lucroUn / stats.avgPrice * 100) : 0;
       // Giro: unidades vendidas / dia (nos últimos N dias)
       const diasPeriodo = periodo > 0 ? periodo : Math.max(1, (Date.now() - stats.lastSale) / (24*60*60*1000));
@@ -21415,7 +21433,10 @@ async function runOtimizador(){
         // v124d: título que veio do Ranking (venda real), geralmente mais descritivo
         // que o nome CIA (que vem de abreviações do fornecedor). Fallback pro CIA.
         titleRanking: stats.title || p.name,
-        custo: custoCIA,
+        // v124e: custo = REAL se tem investimento cadastrado, senão CIA
+        custo: custoReal,
+        custoCIA,                 // referência pro usuário comparar
+        temCustoReal,             // flag pra badge visual
         avgPrice: stats.avgPrice,
         lucroUn,
         marginPct,
@@ -21456,17 +21477,16 @@ async function runOtimizador(){
   const positivos = candidatos.filter(c => c.lucroUn > 0);
   const negativos = candidatos.filter(c => c.lucroUn <= 0);
 
-  // v124d: Algoritmo em DUAS FASES com diversidade:
-  //  FASE 1 — Semeadura: aloca 1 unidade de cada um dos top-N candidatos
-  //  (N = diversidade), garantindo pelo menos N produtos distintos no plano.
-  //  Se um candidato não cabe (custo > orçamento restante), pula pro próximo
-  //  até esgotar a lista.
-  //  FASE 2 — Preenchimento guloso: distribui o restante pegando sempre o
-  //  produto com MAIOR score que ainda cabe. Pode adicionar unidades aos já
-  //  semeados ou aumentar diversidade além do mínimo (se mais candidatos
-  //  positivos existem e cabem).
+  // v124e: Algoritmo em DUAS FASES com diversidade EQUILIBRADA:
+  //  FASE 1 — Semeadura: aloca 1 un de cada top-N candidatos (N = diversidade).
+  //  FASE 2 — Preenchimento equilibrado: distribui o restante PASSO A PASSO,
+  //  escolhendo em cada iteração o produto cujo score DIVIDIDO pela qtd atual
+  //  é maior. Isso simula um round-robin ponderado: um produto com giro 2x
+  //  outro vai ter 2x unidades, mas nenhum vai dominar sozinho.
+  //  Diferente do v124d que concentrava quase tudo no top-1.
+  //  Quando diversidade=1 → comporta como guloso puro (sem equilíbrio).
   const plano = [];
-  const planoMap = new Map(); // product.key → índice no plano (pra adicionar unidades)
+  const planoMap = new Map(); // product.key → índice no plano
   let budgetRestante = budget;
 
   // FASE 1: semeadura dos top-N
@@ -21479,32 +21499,42 @@ async function runOtimizador(){
     budgetRestante -= c.custo;
   }
 
-  // FASE 2: preenchimento guloso (sem limite por SKU) com os candidatos positivos
-  // Loop até não caber mais nada (ou sobra for irrelevante)
-  while(budgetRestante >= 50){
-    let adicionou = false;
+  // FASE 2: preenchimento 1 unidade por vez, sempre o melhor score ponderado
+  // Candidatos elegíveis: já estão no plano OU são positivos novos (expandem diversidade)
+  const MAX_LOOPS = 10000; // segurança
+  let loops = 0;
+  while(budgetRestante >= 50 && loops++ < MAX_LOOPS){
+    // Monta pool: cada candidato positivo com seu score ponderado atual
+    let melhor = null; let melhorScore = -Infinity;
     for(const c of positivos){
       if(budgetRestante < c.custo) continue;
-      // Qts que cabem desse candidato
-      const qtdExtra = Math.floor(budgetRestante / c.custo);
-      if(qtdExtra <= 0) continue;
-      // Se já tá no plano, adiciona unidades; senão cria entrada nova
-      let entry;
-      if(planoMap.has(c.product.key)){
-        entry = plano[planoMap.get(c.product.key)];
-        entry.qtd += qtdExtra;
-        entry.custoTotal = entry.qtd * c.custo;
-        entry.lucroTotal = entry.qtd * c.lucroUn;
-      } else {
-        entry = { ...c, qtd: qtdExtra, custoTotal: qtdExtra * c.custo, lucroTotal: qtdExtra * c.lucroUn };
-        plano.push(entry);
-        planoMap.set(c.product.key, plano.length - 1);
+      const inPlan = planoMap.has(c.product.key);
+      const qtdAtual = inPlan ? plano[planoMap.get(c.product.key)].qtd : 0;
+      // v124e: score ponderado pela quantidade atual (pra evitar concentração)
+      // Fator: diversidade=1 → sem penalidade (puro guloso)
+      //        diversidade>1 → cada unidade comprada diminui score desse produto
+      //                        em 1/diversidade (quanto maior div, mais equilíbrio)
+      const divFactor = diversidade > 1 ? (1 + qtdAtual / diversidade) : 1;
+      const scorePond = c.score / divFactor;
+      if(scorePond > melhorScore){
+        melhorScore = scorePond;
+        melhor = c;
       }
-      budgetRestante -= qtdExtra * c.custo;
-      adicionou = true;
-      break; // volta pro top da lista (candidato de maior score ganha de novo)
     }
-    if(!adicionou) break;
+    if(!melhor) break;
+
+    // Adiciona 1 unidade do escolhido
+    if(planoMap.has(melhor.product.key)){
+      const entry = plano[planoMap.get(melhor.product.key)];
+      entry.qtd += 1;
+      entry.custoTotal = entry.qtd * melhor.custo;
+      entry.lucroTotal = entry.qtd * melhor.lucroUn;
+    } else {
+      const entry = { ...melhor, qtd: 1, custoTotal: melhor.custo, lucroTotal: melhor.lucroUn };
+      plano.push(entry);
+      planoMap.set(melhor.product.key, plano.length - 1);
+    }
+    budgetRestante -= melhor.custo;
   }
 
   // Calcula diasGiro final (depois que qtd foi definida)
@@ -21577,6 +21607,13 @@ function _renderOtimizadorResultado(r){
         const cat = OPT_CATEGORIAS.find(c => c.key === ck);
         return cat ? `<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(167,139,250,.15);color:var(--purple);margin-right:3px">${cat.label}</span>` : '';
       }).join('');
+      // v124e: badge que indica fonte do custo
+      const custoBadge = p.temCustoReal
+        ? `<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(62,207,142,.15);color:var(--green);margin-left:4px" title="Custo médio das suas vendas (investimento cadastrado)">💰 real</span>`
+        : `<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(245,158,11,.15);color:var(--amber);margin-left:4px" title="Custo estimado = menor preço da lista CIA (fornecedor). Cadastre investimento nas vendas pra usar o custo real.">⚠ estimado</span>`;
+      // Se custoReal diverge muito do custoCIA, nota diferença
+      const diffCIA = p.temCustoReal && Math.abs(p.custo - p.custoCIA) > 0.01
+        ? ` · CIA R$ ${fmt(p.custoCIA)}` : '';
       return `
       <tr style="border-top:1px solid var(--border)">
         <td style="padding:8px;text-align:center;color:var(--text3);font-size:11px">${idx+1}</td>
@@ -21585,7 +21622,7 @@ function _renderOtimizadorResultado(r){
           <div style="font-size:10px;color:var(--text3);margin-top:2px">${catBadges}CIA: ${escapeHTML(p.product.name)} · ${escapeHTML(p.lojaCIA)} · ${p.nVendas} venda(s) · ${p.unidadesVendidas} un vendidas</div>
         </td>
         <td style="padding:8px;text-align:center;font-weight:700;color:var(--purple);font-size:14px">${p.qtd}</td>
-        <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px">R$ ${fmt(p.custo)}</td>
+        <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px">R$ ${fmt(p.custo)}${custoBadge}<div style="font-size:9px;color:var(--text3);font-family:inherit">${diffCIA}</div></td>
         <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;color:var(--text2)">R$ ${fmt(p.avgPrice)}</td>
         <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;color:var(--green);font-weight:600">R$ ${fmt(p.lucroUn)}</td>
         <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:13px;color:var(--green);font-weight:700">R$ ${fmt(p.lucroTotal)}</td>
