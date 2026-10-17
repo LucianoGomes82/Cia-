@@ -1306,9 +1306,9 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px">
         <div>
-          <div class="sec" style="margin:0">💼 Otimizador de Orçamento</div>
+          <div class="sec" style="margin:0">💼 Otimizador de Orçamento <span style="font-size:10px;background:rgba(167,139,250,.15);color:var(--purple);padding:2px 6px;border-radius:3px;font-weight:600;vertical-align:middle;margin-left:6px">MVP</span></div>
           <div style="font-size:11px;color:var(--text3);margin-top:3px">
-            Dado seu orçamento, cruza Comparativo (custo CIA) + Ranking de Vendas (histórico) + ML pra sugerir a melhor combinação de produtos
+            Baseado no <strong>Ranking de Vendas</strong> (vendas reais + investimento cadastrado). Dado seu orçamento, sugere a melhor combinação pra <strong>repetir os produtos que mais retornaram</strong>.
           </div>
         </div>
       </div>
@@ -21243,73 +21243,80 @@ function clearOtimizador(){
 function updateOptStats(){
   const el = document.getElementById('opt-stats');
   if(!el) return;
-  const nProd = (state.products || []).filter(p => p.minPrice > 0).length;
   const nVendas = (vendasData || []).length + (vendasDataFull || []).length;
+  // Conta vendas com investimento cadastrado
+  let nComCusto = 0;
+  if(typeof getInvestimento === 'function' && nVendas > 0){
+    const todas = [...(vendasData||[]), ...(vendasDataFull||[])];
+    for(const v of todas){
+      if(!v || v._isManual) continue;
+      const inv = (getInvestimento(v.id, 'luciano') || 0) + (getInvestimento(v.id, 'johnny') || 0);
+      if(inv > 0) nComCusto++;
+    }
+  }
   const linhas = [];
-  if(nProd > 0) linhas.push(`${nProd} produtos CIA com custo`);
-  else linhas.push('⚠ Sem lista CIA carregada (aba Importar)');
   if(nVendas > 0) linhas.push(`${nVendas} vendas no histórico`);
   else linhas.push('⚠ Sem histórico de vendas (aba Vendas)');
+  if(nComCusto > 0) linhas.push(`<strong style="color:var(--green)">${nComCusto}</strong> com invest cadastrado`);
+  else if(nVendas > 0) linhas.push('⚠ Nenhuma com invest — cadastre em Vendas → Lançamentos');
   el.innerHTML = linhas.join(' · ');
 }
 
-// Agrega estatísticas de venda por produto CIA
-// v124b: usa matchMLtoCIA (matching aproximado) em vez de normKey exato,
-// porque títulos das vendas no ML são longos ("Xiaomi Redmi 15 12gb Ram 128gb
-// Dual Sim 50mp Fm...") enquanto a lista CIA tem nomes curtos ("Redmi 15 12gb").
-// Cache por normKey(title) evita rematch do mesmo título repetidas vezes.
-// Retorna Map: product.key → { count, revenue, profit, lastSale, avgPrice, ... }
+// v124f REFATORADO: agora o Otimizador trabalha DIRETAMENTE a partir do Ranking
+// de Vendas (vendasData + vendasDataFull), sem depender da lista CIA nem do
+// matchMLtoCIA. Vantagens:
+//  - Dados precisos (custo real da venda, não estimativa CIA)
+//  - Não falha por mismatch de nome (CIA abreviada vs título ML longo)
+//  - Simplicidade: "quanto você vendeu, quanto pagou, o que repetir"
+// Trade-off: só sugere produtos JÁ VENDIDOS (não descobre novos).
+//
+// Agrega vendas por titulo (lowercase trimmed), igual ao Ranking de Vendas da
+// aba Vendas. Retorna Map: tituloKey → { count, qty, revenue, prices, costTotal,
+// costQty, lastSale, title, mlbs }
 function _computeSalesStats(periodDias){
   const map = new Map();
-  const matchCache = new Map(); // normKey(title) → product.key | null
   const cutoff = periodDias > 0 ? Date.now() - (periodDias * 24*60*60*1000) : 0;
   const todas = [...(vendasData || []), ...(vendasDataFull || [])];
 
   for(const v of todas){
+    if(!v || v._isManual) continue;
+    // Pula vendas canceladas
+    if(typeof vendaFoiCancelada === 'function' && vendaFoiCancelada(v)) continue;
     // Respeita data (se período definido)
     if(cutoff > 0){
       const dt = v.date_created ? new Date(v.date_created).getTime() : 0;
       if(!dt || dt < cutoff) continue;
     }
-    // Pula vendas canceladas
-    if(typeof vendaFoiCancelada === 'function' && vendaFoiCancelada(v)) continue;
 
-    const title = v.items?.[0]?.item?.title || '';
+    // Mesma agregação do renderVendasRanking: título do primeiro item
+    const title = (v.firstItem?.title || v.items?.[0]?.item?.title || v.items?.[0]?.title || '').trim();
     if(!title) continue;
-
-    // ── Resolve produto CIA via match aproximado (cache por título) ──
-    const titleKey = normKey(title);
-    let prodKey = matchCache.get(titleKey);
-    if(prodKey === undefined){
-      try {
-        const match = matchMLtoCIA(title, false);
-        prodKey = match && match.product ? match.product.key : null;
-      } catch { prodKey = null; }
-      matchCache.set(titleKey, prodKey);
-    }
-    if(!prodKey) continue; // sem match CIA = produto não cadastrado na lista
+    const key = title.toLowerCase();
 
     const price = Number(v.items?.[0]?.unit_price) || 0;
     const qty = Number(v.items?.[0]?.quantity) || 1;
-    const lucro = typeof calcLucroVenda === 'function' ? calcLucroVenda(v) : 0;
-    // v124e: capta o investimento REAL da venda (custo pago pelos sócios).
-    // Se > 0, usa isso como "custo real" em vez do minPrice CIA (que pode
-    // ser de uma variante mais barata com nome parecido).
+    const mlbId = v.firstItem?.item_id || v.items?.[0]?.item?.id || null;
+
+    // Investimento REAL cadastrado nas vendas (custo pago pelos sócios)
     const invTotal = (typeof getInvestimento === 'function')
       ? ((getInvestimento(v.id, 'luciano') || 0) + (getInvestimento(v.id, 'johnny') || 0))
       : 0;
+    // Lucro líquido (igual lógica do Ranking: respeita bloqueados c/ invest)
+    const lucro = typeof calcLucroVenda === 'function' ? calcLucroVenda(v) : 0;
 
-    if(!map.has(prodKey)){
-      map.set(prodKey, { count:0, revenue:0, profit:0, lastSale:0, prices:[], qty:0, title,
-                         costTotal:0, costQty:0 });
+    if(!map.has(key)){
+      map.set(key, {
+        key, title, prices:[], count:0, qty:0, revenue:0, profit:0,
+        costTotal:0, costQty:0, lastSale:0, mlbs:new Set(),
+      });
     }
-    const s = map.get(prodKey);
+    const s = map.get(key);
     s.count++;
     s.qty += qty;
     s.revenue += price * qty;
     s.profit += lucro;
     s.prices.push(price);
-    // Só agrega custo se investimento foi cadastrado (senão polui a média com 0)
+    if(mlbId) s.mlbs.add(mlbId);
     if(invTotal > 0){
       s.costTotal += invTotal;
       s.costQty += qty;
@@ -21321,7 +21328,7 @@ function _computeSalesStats(periodDias){
   // Calcula médias
   for(const s of map.values()){
     s.avgPrice = s.prices.length ? s.prices.reduce((a,b) => a+b, 0) / s.prices.length : 0;
-    s.avgCost = s.costQty > 0 ? s.costTotal / s.costQty : 0;  // v124e: custo real médio
+    s.avgCost = s.costQty > 0 ? s.costTotal / s.costQty : 0;
     s.avgProfit = s.count > 0 ? s.profit / s.qty : 0;
     s.marginPct = s.avgPrice > 0 ? (s.avgProfit / s.avgPrice * 100) : 0;
   }
@@ -21376,93 +21383,90 @@ async function runOtimizador(){
     localStorage.setItem('cia_opt_diversidade', String(diversidade));
   } catch {}
 
-  // Pré-requisitos
+  // v124f REFATORADO: Pré-requisitos agora olha vendas, não lista CIA
   const prereqEl = document.getElementById('opt-prereq-warn');
-  const products = (state.products || []).filter(p => p.minPrice > 0);
-  if(products.length === 0){
+  const totalVendas = (vendasData || []).length + (vendasDataFull || []).length;
+  if(totalVendas === 0){
     prereqEl.style.display = 'block';
-    prereqEl.innerHTML = `<div class="alert al-warn"><span>⚠</span><span>Lista CIA vazia. Importe listas de fornecedores em <strong>Importar</strong> primeiro.</span></div>`;
+    prereqEl.innerHTML = `<div class="alert al-warn"><span>⚠</span><span>Nenhuma venda no histórico. Sincronize ou importe XLSX em <strong>Vendas</strong> primeiro.</span></div>`;
     return;
   }
-  // v124b: feedback visual durante matching (pode levar segundos com milhares de vendas)
   prereqEl.style.display = 'block';
-  prereqEl.innerHTML = `<div class="alert" style="background:rgba(96,165,250,.08);border-left:3px solid var(--blue);color:var(--blue)"><span>⏳</span><span>Processando ${products.length} produtos × histórico de vendas…</span></div>`;
-  // Delay pra UI renderizar o aviso antes do processamento pesado
+  prereqEl.innerHTML = `<div class="alert" style="background:rgba(96,165,250,.08);border-left:3px solid var(--blue);color:var(--blue)"><span>⏳</span><span>Agregando ${totalVendas} vendas do histórico…</span></div>`;
   await new Promise(r => setTimeout(r, 30));
 
-  // Agrega vendas
+  // Agrega vendas por título (igual Ranking de Vendas da aba Vendas)
   const salesStats = _computeSalesStats(periodo);
   prereqEl.style.display = 'none';
 
-  // Monta candidatos: cruza produtos CIA com histórico de vendas
+  // v124f: candidatos vêm DIRETAMENTE do Ranking (sem CIA)
+  // Divisão:
+  //  - candidatos: vendas COM invest cadastrado (temos custo real → lucro calculável)
+  //  - semCusto: vendas SEM invest (não temos como calcular lucro)
   const candidatos = [];
-  const semHistorico = [];
+  const semCusto = [];
 
-  for(const p of products){
-    const custo = p.minPrice;
+  for(const stats of salesStats.values()){
+    // Filtro por categorias (regex no título, não precisa de produto CIA)
+    const pseudoProduct = { name: stats.title };
+    if(!_matchCategorias(pseudoProduct, cats)) continue;
 
-    // Filtros de custo
-    if(minCost > 0 && custo < minCost) continue;
-    if(maxCost > 0 && custo > maxCost) continue;
-    // Filtro de categorias (multi-select)
-    if(!_matchCategorias(p, cats)) continue;
+    const temCustoReal = stats.avgCost > 0;
+    const custoReal = temCustoReal ? stats.avgCost : 0;
 
-    // v124b: stats agora é indexado por product.key (não normKey do nome)
-    const stats = salesStats.get(p.key);
-    const custoCIA = custo;
-    const fees = _estimateFees(stats ? stats.avgPrice : custoCIA * 1.3);
-
-    if(stats && stats.count > 0){
-      // v124e: usa CUSTO REAL (investimento cadastrado nas vendas) se disponível,
-      // senão cai pro minPrice da CIA. O custo real é mais preciso porque o CIA
-      // pode casar com uma variante mais barata (mesmo nome base, config menor).
-      const custoReal = stats.avgCost > 0 ? stats.avgCost : custoCIA;
-      const temCustoReal = stats.avgCost > 0;
-      // Lucro por unidade: preço médio de venda - custo - comissão - frete
-      const lucroUn = stats.avgPrice - custoReal - fees.comissao - fees.frete;
-      const marginPct = stats.avgPrice > 0 ? (lucroUn / stats.avgPrice * 100) : 0;
-      // Giro: unidades vendidas / dia (nos últimos N dias)
-      const diasPeriodo = periodo > 0 ? periodo : Math.max(1, (Date.now() - stats.lastSale) / (24*60*60*1000));
-      const giroDia = stats.qty / diasPeriodo;
-      // Score: lucro × giro × confiança (ter 3+ vendas = confiança 1.0)
-      const confianca = Math.min(1, stats.count / 3);
-      const score = Math.max(0, lucroUn) * giroDia * confianca;
-
-      candidatos.push({
-        product: p,
-        // v124d: título que veio do Ranking (venda real), geralmente mais descritivo
-        // que o nome CIA (que vem de abreviações do fornecedor). Fallback pro CIA.
-        titleRanking: stats.title || p.name,
-        // v124e: custo = REAL se tem investimento cadastrado, senão CIA
-        custo: custoReal,
-        custoCIA,                 // referência pro usuário comparar
-        temCustoReal,             // flag pra badge visual
-        avgPrice: stats.avgPrice,
-        lucroUn,
-        marginPct,
-        giroDia,
-        unidadesVendidas: stats.qty,
-        nVendas: stats.count,
-        confianca,
-        score,
-        lojaCIA: p.offers?.[0]?.store || '?',
-      });
-    } else {
-      // Sem histórico — vai pra lista "avaliar"
-      semHistorico.push({
-        product: p,
-        custo: custoCIA,
-        lojaCIA: p.offers?.[0]?.store || '?',
-        storeCount: p.storeCount || (p.offers?.length || 1),
-      });
+    // Filtros de custo: só aplica quando tem custo real pra comparar
+    if(temCustoReal){
+      if(minCost > 0 && custoReal < minCost) continue;
+      if(maxCost > 0 && custoReal > maxCost) continue;
     }
+
+    if(!temCustoReal){
+      // Sem custo cadastrado → não dá pra sugerir compra
+      semCusto.push({
+        titleRanking: stats.title,
+        avgPrice: stats.avgPrice,
+        nVendas: stats.count,
+        unidadesVendidas: stats.qty,
+        mlbs: [...stats.mlbs],
+      });
+      continue;
+    }
+
+    const fees = _estimateFees(stats.avgPrice);
+    const lucroUn = stats.avgPrice - custoReal - fees.comissao - fees.frete;
+    const marginPct = stats.avgPrice > 0 ? (lucroUn / stats.avgPrice * 100) : 0;
+    const diasPeriodo = periodo > 0 ? periodo : Math.max(1, (Date.now() - stats.lastSale) / (24*60*60*1000));
+    const giroDia = stats.qty / diasPeriodo;
+    const confianca = Math.min(1, stats.count / 3);
+    const score = Math.max(0, lucroUn) * giroDia * confianca;
+
+    candidatos.push({
+      // v124f: product reduzido — só identificação (não há mais produto CIA)
+      product: { key: stats.key, name: stats.title },
+      titleRanking: stats.title,
+      custo: custoReal,
+      custoCIA: 0,
+      temCustoReal: true,
+      avgPrice: stats.avgPrice,
+      lucroUn,
+      marginPct,
+      giroDia,
+      unidadesVendidas: stats.qty,
+      nVendas: stats.count,
+      confianca,
+      score,
+      lojaCIA: '—',  // não há mais fornecedor conhecido
+      mlbs: [...stats.mlbs],
+    });
   }
 
-  if(candidatos.length === 0 && semHistorico.length === 0){
+  if(candidatos.length === 0 && semCusto.length === 0){
     prereqEl.style.display = 'block';
-    prereqEl.innerHTML = `<div class="alert al-warn"><span>⚠</span><span>Nenhum produto atende aos filtros. Afrouxe custo min/máx ou mude a marca.</span></div>`;
+    prereqEl.innerHTML = `<div class="alert al-warn"><span>⚠</span><span>Nenhum produto atende aos filtros. Afrouxe custo min/máx, mude as categorias ou aumente o período.</span></div>`;
     return;
   }
+  // Compatibilidade: resto do código ainda usa `semHistorico` → aliasa
+  const semHistorico = semCusto;
 
   // Ordena por critério
   const sortFn = {
@@ -21607,22 +21611,17 @@ function _renderOtimizadorResultado(r){
         const cat = OPT_CATEGORIAS.find(c => c.key === ck);
         return cat ? `<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(167,139,250,.15);color:var(--purple);margin-right:3px">${cat.label}</span>` : '';
       }).join('');
-      // v124e: badge que indica fonte do custo
-      const custoBadge = p.temCustoReal
-        ? `<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(62,207,142,.15);color:var(--green);margin-left:4px" title="Custo médio das suas vendas (investimento cadastrado)">💰 real</span>`
-        : `<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(245,158,11,.15);color:var(--amber);margin-left:4px" title="Custo estimado = menor preço da lista CIA (fornecedor). Cadastre investimento nas vendas pra usar o custo real.">⚠ estimado</span>`;
-      // Se custoReal diverge muito do custoCIA, nota diferença
-      const diffCIA = p.temCustoReal && Math.abs(p.custo - p.custoCIA) > 0.01
-        ? ` · CIA R$ ${fmt(p.custoCIA)}` : '';
+      // v124f: fonte agora é 100% Ranking → sempre tem custo real cadastrado
+      const mlbsStr = p.mlbs?.length ? ` · MLB ${p.mlbs.slice(0,2).join(', ')}${p.mlbs.length > 2 ? '…' : ''}` : '';
       return `
       <tr style="border-top:1px solid var(--border)">
         <td style="padding:8px;text-align:center;color:var(--text3);font-size:11px">${idx+1}</td>
         <td style="padding:8px">
           <div style="font-weight:600;color:var(--text);font-size:12px">${escapeHTML(p.titleRanking || p.product.name)}</div>
-          <div style="font-size:10px;color:var(--text3);margin-top:2px">${catBadges}CIA: ${escapeHTML(p.product.name)} · ${escapeHTML(p.lojaCIA)} · ${p.nVendas} venda(s) · ${p.unidadesVendidas} un vendidas</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">${catBadges}${p.nVendas} venda(s) · ${p.unidadesVendidas} un vendidas${mlbsStr}</div>
         </td>
         <td style="padding:8px;text-align:center;font-weight:700;color:var(--purple);font-size:14px">${p.qtd}</td>
-        <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px">R$ ${fmt(p.custo)}${custoBadge}<div style="font-size:9px;color:var(--text3);font-family:inherit">${diffCIA}</div></td>
+        <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px">R$ ${fmt(p.custo)}</td>
         <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;color:var(--text2)">R$ ${fmt(p.avgPrice)}</td>
         <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;color:var(--green);font-weight:600">R$ ${fmt(p.lucroUn)}</td>
         <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:13px;color:var(--green);font-weight:700">R$ ${fmt(p.lucroTotal)}</td>
@@ -21670,31 +21669,34 @@ function _renderOtimizadorResultado(r){
   planoEl.style.display = 'block';
 
   // ── Sem histórico ──────────────────────────────────────────
+  // v124f: seção agora é "Sem Custo Cadastrado" — vendas que não têm invest
+  // cadastrado (não dá pra calcular lucro real). O usuário precisa cadastrar
+  // investimento pra elas entrarem na otimização.
   const shEl = document.getElementById('opt-sem-historico');
   if(r.semHistorico.length > 0){
     const shRows = r.semHistorico.slice(0, 20).map(sh => `
       <tr style="border-top:1px solid var(--border)">
         <td style="padding:6px 8px">
-          <div style="font-weight:600;color:var(--text);font-size:12px">${escapeHTML(sh.product.name)}</div>
-          <div style="font-size:10px;color:var(--text3);margin-top:2px">${sh.storeCount} fornecedor(es)</div>
+          <div style="font-weight:600;color:var(--text);font-size:12px">${escapeHTML(sh.titleRanking || '(sem título)')}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">${sh.nVendas} venda(s) · ${sh.unidadesVendidas} un vendidas</div>
         </td>
-        <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;color:var(--blue)">R$ ${fmt(sh.custo)}</td>
-        <td style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text3)">${escapeHTML(sh.lojaCIA)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;color:var(--blue)">R$ ${fmt(sh.avgPrice)}</td>
+        <td style="padding:6px 8px;text-align:center;font-size:10px;color:var(--text3)">${sh.mlbs?.length ? sh.mlbs.slice(0,2).map(m => escapeHTML(m)).join(', ') : '—'}</td>
       </tr>
     `).join('');
     shEl.innerHTML = `
       <div class="card" style="border-left:3px solid var(--amber)">
-        <div class="sec" style="margin-top:0;color:var(--amber)">💡 Sem Histórico — Avaliar</div>
+        <div class="sec" style="margin-top:0;color:var(--amber)">💡 Sem Custo Cadastrado — Precisa Investimento</div>
         <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
-          ${r.semHistorico.length} produto(s) com custo cadastrado mas <strong>nunca vendidos</strong> no período analisado. Pode valer a pena testar — mas sem dados históricos pra garantir retorno. ${r.semHistorico.length > 20 ? ' (mostrando os 20 primeiros)' : ''}
+          ${r.semHistorico.length} produto(s) com vendas no período mas <strong>sem investimento (custo) cadastrado</strong>. Pra entrarem na otimização, cadastre o investimento Luciano/Johnny em pelo menos uma venda de cada (aba <strong>Vendas → Lançamentos</strong>). ${r.semHistorico.length > 20 ? ' (mostrando os 20 primeiros)' : ''}
         </div>
         <div style="overflow-x:auto">
           <table style="width:100%;border-collapse:collapse;font-size:12px">
             <thead>
               <tr style="background:var(--bg2)">
-                <th style="padding:6px 8px;text-align:left;font-size:10px;color:var(--text3);font-weight:600">PRODUTO</th>
-                <th style="padding:6px 8px;text-align:right;font-size:10px;color:var(--text3);font-weight:600">CUSTO CIA</th>
-                <th style="padding:6px 8px;text-align:left;font-size:10px;color:var(--text3);font-weight:600">FORNECEDOR</th>
+                <th style="padding:6px 8px;text-align:left;font-size:10px;color:var(--text3);font-weight:600">PRODUTO (Ranking)</th>
+                <th style="padding:6px 8px;text-align:right;font-size:10px;color:var(--text3);font-weight:600">VENDA MÉDIA</th>
+                <th style="padding:6px 8px;text-align:center;font-size:10px;color:var(--text3);font-weight:600">MLB</th>
               </tr>
             </thead>
             <tbody>${shRows}</tbody>
