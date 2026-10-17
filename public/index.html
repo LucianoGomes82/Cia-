@@ -1342,7 +1342,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             style="width:100%;padding:9px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace;text-align:center"
             title="Garante pelo menos N produtos distintos no plano. 1 = concentra tudo no melhor. 5-10 = divide risco. Ex: 5 → aloca 1 un de cada top-5 primeiro, depois distribui o restante.">
         </div>
-        <div style="flex:0 0 180px">
+        <div style="flex:0 0 200px">
           <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">💵 Teto por SKU (% do orçamento)</label>
           <div style="position:relative">
             <input type="number" id="opt-teto-pct" placeholder="ex: 10 = máx 10%" min="1" max="100" step="1"
@@ -1350,6 +1350,10 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
               title="Limita cada produto a X% do orçamento TOTAL. Força diversificação forte. Ex: 10% → mínimo 10 produtos. 5% → mínimo 20 produtos. Vazio = sem teto (default).">
             <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:12px;font-weight:600;pointer-events:none">%</span>
           </div>
+          <label style="display:flex;align-items:center;gap:5px;margin-top:5px;cursor:pointer;font-size:10px;color:var(--text3)" title="Se sobrar orçamento depois de atingir o teto em todos os produtos, continua comprando (ignorando o teto nos campeões) até usar tudo.">
+            <input type="checkbox" id="opt-usar-sobra" style="margin:0;accent-color:var(--purple)" checked>
+            <span>Usar 100% da sobra (relaxa teto)</span>
+          </label>
         </div>
       </div>
 
@@ -21182,6 +21186,10 @@ function _hydrateOtimizador(){
   // v124g: teto por SKU em % do orçamento
   const tetoPct = Number(localStorage.getItem('cia_opt_teto_pct')) || 0;
   if(el('opt-teto-pct') && tetoPct > 0) el('opt-teto-pct').value = String(tetoPct);
+  // v124h: usar sobra (relaxa teto se sobrar orçamento) — default true
+  const usarSobraRaw = localStorage.getItem('cia_opt_usar_sobra');
+  const usarSobra = usarSobraRaw === null ? true : usarSobraRaw === 'true';
+  if(el('opt-usar-sobra')) el('opt-usar-sobra').checked = usarSobra;
   _renderOptCategorias(cats);
 }
 
@@ -21237,6 +21245,7 @@ function clearOtimizador(){
   if(el('opt-periodo')) el('opt-periodo').value = '60';
   if(el('opt-diversidade')) el('opt-diversidade').value = '';
   if(el('opt-teto-pct')) el('opt-teto-pct').value = '';
+  if(el('opt-usar-sobra')) el('opt-usar-sobra').checked = true;
   _renderOptCategorias([]);
   localStorage.removeItem('cia_opt_budget');
   localStorage.removeItem('cia_opt_criterio');
@@ -21246,6 +21255,7 @@ function clearOtimizador(){
   localStorage.removeItem('cia_opt_cats');
   localStorage.removeItem('cia_opt_diversidade');
   localStorage.removeItem('cia_opt_teto_pct');
+  localStorage.removeItem('cia_opt_usar_sobra');
   // Esconde resultados
   ['opt-summary','opt-plano','opt-sem-historico'].forEach(id => {
     const e = document.getElementById(id); if(e) e.style.display = 'none';
@@ -21376,6 +21386,8 @@ async function runOtimizador(){
   const diversidade = Math.max(1, Number(document.getElementById('opt-diversidade')?.value) || 1);
   // v124g: teto por SKU em % do orçamento (0 = sem teto)
   const tetoPct = Math.max(0, Math.min(100, Number(document.getElementById('opt-teto-pct')?.value) || 0));
+  // v124h: usar sobra (FASE 3 relaxa teto se sobrou orçamento)
+  const usarSobra = document.getElementById('opt-usar-sobra')?.checked !== false;
   const cats = _getOptCategoriasSelecionadas();
 
   // Validação
@@ -21398,6 +21410,7 @@ async function runOtimizador(){
     localStorage.setItem('cia_opt_cats', JSON.stringify(cats));
     localStorage.setItem('cia_opt_diversidade', String(diversidade));
     localStorage.setItem('cia_opt_teto_pct', String(tetoPct));
+    localStorage.setItem('cia_opt_usar_sobra', String(usarSobra));
   } catch {}
 
   // v124f REFATORADO: Pré-requisitos agora olha vendas, não lista CIA
@@ -21561,6 +21574,44 @@ async function runOtimizador(){
     budgetRestante -= melhor.custo;
   }
 
+  // v124h: FASE 3 — se sobrou orçamento E "usar sobra" está marcado E tinha teto,
+  // relaxa o teto e continua comprando até usar tudo. Mantém a mesma lógica de
+  // score ponderado por qtd, mas SEM o filtro de teto. Isso resolve o caso:
+  // "defini teto 10% mas só tinha 5 produtos positivos → sobrou 50% do orçamento".
+  let fase3Rodou = false;
+  let budgetBeforeFase3 = budgetRestante;
+  if(usarSobra && tetoPorSKU > 0 && budgetRestante >= Math.max(50, budget * 0.02)){
+    fase3Rodou = true;
+    loops = 0;
+    while(budgetRestante >= 50 && loops++ < MAX_LOOPS){
+      let melhor = null; let melhorScore = -Infinity;
+      for(const c of positivos){
+        if(budgetRestante < c.custo) continue;
+        const inPlan = planoMap.has(c.product.key);
+        const qtdAtual = inPlan ? plano[planoMap.get(c.product.key)].qtd : 0;
+        // SEM teto aqui — só o fator diversidade pra ainda equilibrar um pouco
+        const divFactor = diversidade > 1 ? (1 + qtdAtual / diversidade) : 1;
+        const scorePond = c.score / divFactor;
+        if(scorePond > melhorScore){
+          melhorScore = scorePond;
+          melhor = c;
+        }
+      }
+      if(!melhor) break;
+      if(planoMap.has(melhor.product.key)){
+        const entry = plano[planoMap.get(melhor.product.key)];
+        entry.qtd += 1;
+        entry.custoTotal = entry.qtd * melhor.custo;
+        entry.lucroTotal = entry.qtd * melhor.lucroUn;
+      } else {
+        const entry = { ...melhor, qtd: 1, custoTotal: melhor.custo, lucroTotal: melhor.lucroUn };
+        plano.push(entry);
+        planoMap.set(melhor.product.key, plano.length - 1);
+      }
+      budgetRestante -= melhor.custo;
+    }
+  }
+
   // Calcula diasGiro final (depois que qtd foi definida)
   for(const entry of plano){
     entry.diasGiro = entry.giroDia > 0 ? entry.qtd / entry.giroDia : 999;
@@ -21570,7 +21621,9 @@ async function runOtimizador(){
   plano.sort(sortFn);
 
   _optLastResult = {
-    budget, criterio, periodo, cats, minCost, maxCost, diversidade, tetoPct,
+    budget, criterio, periodo, cats, minCost, maxCost, diversidade, tetoPct, usarSobra,
+    fase3Rodou, budgetBeforeFase3,
+    totalCandidatosPositivos: positivos.length,
     plano, semHistorico, negativos,
     totals: {
       investido: budget - budgetRestante,
@@ -21590,6 +21643,22 @@ function _renderOtimizadorResultado(r){
 
   // ── Resumo ─────────────────────────────────────────────────
   const marginPct = r.totals.investido > 0 ? (r.totals.lucroTotal / r.totals.investido * 100) : 0;
+  // v124h: diagnóstico quando sobra orçamento significativa
+  const sobraPct = r.budget > 0 ? (r.totals.sobrando / r.budget * 100) : 0;
+  let avisoSobra = '';
+  if(sobraPct > 5){
+    const msgs = [];
+    if(r.tetoPct > 0 && !r.usarSobra){
+      msgs.push(`Teto de ${r.tetoPct}% foi aplicado rigidamente. Marque <strong>"Usar 100% da sobra"</strong> pra relaxar o teto e usar tudo.`);
+    } else if(r.totalCandidatosPositivos < 10){
+      msgs.push(`Só <strong>${r.totalCandidatosPositivos} produto(s)</strong> positivos encontrados nos filtros. Afrouxe custo min/máx, aumente o período ou marque mais categorias pra ter mais candidatos.`);
+    } else {
+      msgs.push(`Todos os produtos positivos com invest cadastrado já foram incluídos. Cadastre invest em mais vendas (Vendas → Lançamentos) pra expandir o pool.`);
+    }
+    avisoSobra = `<div style="margin-top:10px;padding:10px 12px;background:rgba(245,158,11,.1);border-left:3px solid var(--amber);border-radius:4px;font-size:11px;color:var(--text2)">
+      ⚠ <strong style="color:var(--amber)">Sobrou R$ ${fmt(r.totals.sobrando)} (${sobraPct.toFixed(1)}% do orçamento).</strong> ${msgs.join(' ')}
+    </div>`;
+  }
   const sumEl = document.getElementById('opt-summary');
   sumEl.innerHTML = `
     <div class="card">
@@ -21616,6 +21685,10 @@ function _renderOtimizadorResultado(r){
           <div style="font-size:10px;color:var(--text3);margin-top:2px">últimos ${r.periodo === 0 ? 'todos os' : r.periodo} dias</div>
         </div>
       </div>
+      ${avisoSobra}
+      ${r.fase3Rodou ? `<div style="margin-top:8px;padding:8px 12px;background:rgba(167,139,250,.1);border-left:3px solid var(--purple);border-radius:4px;font-size:11px;color:var(--text2)">
+        🔁 <strong style="color:var(--purple)">Relaxamento de teto ativado:</strong> ${r.tetoPct}% do teto foi usado como alvo, mas sobrou R$ ${fmt(r.budgetBeforeFase3)} depois de atingir o teto em todos — distribuído gulosamente nos melhores candidatos (alguns ultrapassaram ${r.tetoPct}%).
+      </div>` : ''}
     </div>
   `;
   sumEl.style.display = 'block';
