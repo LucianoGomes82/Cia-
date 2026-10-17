@@ -21574,41 +21574,55 @@ async function runOtimizador(){
     budgetRestante -= melhor.custo;
   }
 
-  // v124h: FASE 3 — se sobrou orçamento E "usar sobra" está marcado E tinha teto,
-  // relaxa o teto e continua comprando até usar tudo. Mantém a mesma lógica de
-  // score ponderado por qtd, mas SEM o filtro de teto. Isso resolve o caso:
-  // "defini teto 10% mas só tinha 5 produtos positivos → sobrou 50% do orçamento".
+  // v124i: FASE 3 — se sobrou orçamento E "usar sobra" marcado E tinha teto,
+  // RELAXA o teto progressivamente em passes de 2x, 3x, 4x do teto original.
+  // Isso resolve o bug onde um produto absorvia TUDO sozinho (ex: 449 un =
+  // 63% do orçamento com teto configurado em 5%).
+  // Estratégia: cada passe aumenta o multiplicador do teto; para quando usa
+  // tudo OU chega no múltiplo máximo (teto × 5 = 25% com teto base 5%).
   let fase3Rodou = false;
+  let fase3Multiplicador = 1;
   let budgetBeforeFase3 = budgetRestante;
   if(usarSobra && tetoPorSKU > 0 && budgetRestante >= Math.max(50, budget * 0.02)){
     fase3Rodou = true;
-    loops = 0;
-    while(budgetRestante >= 50 && loops++ < MAX_LOOPS){
-      let melhor = null; let melhorScore = -Infinity;
-      for(const c of positivos){
-        if(budgetRestante < c.custo) continue;
-        const inPlan = planoMap.has(c.product.key);
-        const qtdAtual = inPlan ? plano[planoMap.get(c.product.key)].qtd : 0;
-        // SEM teto aqui — só o fator diversidade pra ainda equilibrar um pouco
-        const divFactor = diversidade > 1 ? (1 + qtdAtual / diversidade) : 1;
-        const scorePond = c.score / divFactor;
-        if(scorePond > melhorScore){
-          melhorScore = scorePond;
-          melhor = c;
+    // Passes 2×, 3×, 4×, 5× do teto. Para na primeira iteração que não consegue
+    // comprar nada (todos no limite ou sem orçamento).
+    for(let mult = 2; mult <= 5; mult++){
+      const tetoRelaxado = tetoPorSKU * mult;
+      let adicionouNoPasse = false;
+      loops = 0;
+      while(budgetRestante >= 50 && loops++ < MAX_LOOPS){
+        let melhor = null; let melhorScore = -Infinity;
+        for(const c of positivos){
+          if(budgetRestante < c.custo) continue;
+          const inPlan = planoMap.has(c.product.key);
+          const custoAtual = inPlan ? plano[planoMap.get(c.product.key)].custoTotal : 0;
+          // Teto relaxado deste passe
+          if((custoAtual + c.custo) > tetoRelaxado) continue;
+          const qtdAtual = inPlan ? plano[planoMap.get(c.product.key)].qtd : 0;
+          const divFactor = diversidade > 1 ? (1 + qtdAtual / diversidade) : 1;
+          const scorePond = c.score / divFactor;
+          if(scorePond > melhorScore){
+            melhorScore = scorePond;
+            melhor = c;
+          }
         }
+        if(!melhor) break;
+        adicionouNoPasse = true;
+        if(planoMap.has(melhor.product.key)){
+          const entry = plano[planoMap.get(melhor.product.key)];
+          entry.qtd += 1;
+          entry.custoTotal = entry.qtd * melhor.custo;
+          entry.lucroTotal = entry.qtd * melhor.lucroUn;
+        } else {
+          const entry = { ...melhor, qtd: 1, custoTotal: melhor.custo, lucroTotal: melhor.lucroUn };
+          plano.push(entry);
+          planoMap.set(melhor.product.key, plano.length - 1);
+        }
+        budgetRestante -= melhor.custo;
       }
-      if(!melhor) break;
-      if(planoMap.has(melhor.product.key)){
-        const entry = plano[planoMap.get(melhor.product.key)];
-        entry.qtd += 1;
-        entry.custoTotal = entry.qtd * melhor.custo;
-        entry.lucroTotal = entry.qtd * melhor.lucroUn;
-      } else {
-        const entry = { ...melhor, qtd: 1, custoTotal: melhor.custo, lucroTotal: melhor.lucroUn };
-        plano.push(entry);
-        planoMap.set(melhor.product.key, plano.length - 1);
-      }
-      budgetRestante -= melhor.custo;
+      if(adicionouNoPasse) fase3Multiplicador = mult;
+      if(budgetRestante < 50) break; // acabou o orçamento
     }
   }
 
@@ -21622,7 +21636,7 @@ async function runOtimizador(){
 
   _optLastResult = {
     budget, criterio, periodo, cats, minCost, maxCost, diversidade, tetoPct, usarSobra,
-    fase3Rodou, budgetBeforeFase3,
+    fase3Rodou, fase3Multiplicador, budgetBeforeFase3,
     totalCandidatosPositivos: positivos.length,
     plano, semHistorico, negativos,
     totals: {
@@ -21686,9 +21700,12 @@ function _renderOtimizadorResultado(r){
         </div>
       </div>
       ${avisoSobra}
-      ${r.fase3Rodou ? `<div style="margin-top:8px;padding:8px 12px;background:rgba(167,139,250,.1);border-left:3px solid var(--purple);border-radius:4px;font-size:11px;color:var(--text2)">
-        🔁 <strong style="color:var(--purple)">Relaxamento de teto ativado:</strong> ${r.tetoPct}% do teto foi usado como alvo, mas sobrou R$ ${fmt(r.budgetBeforeFase3)} depois de atingir o teto em todos — distribuído gulosamente nos melhores candidatos (alguns ultrapassaram ${r.tetoPct}%).
-      </div>` : ''}
+      ${r.fase3Rodou ? (() => {
+        const tetoEfetivoPct = (r.tetoPct * (r.fase3Multiplicador || 1)).toFixed(1);
+        return `<div style="margin-top:8px;padding:8px 12px;background:rgba(167,139,250,.1);border-left:3px solid var(--purple);border-radius:4px;font-size:11px;color:var(--text2)">
+        🔁 <strong style="color:var(--purple)">Relaxamento progressivo de teto:</strong> teto inicial ${r.tetoPct}% foi atingido em todos; sobrou R$ ${fmt(r.budgetBeforeFase3)} e o algoritmo relaxou pra ${tetoEfetivoPct}% (${r.fase3Multiplicador || 1}× do teto base) pra distribuir o restante com equilíbrio. Nenhum produto ultrapassa ${tetoEfetivoPct}% do orçamento.
+      </div>`;
+      })() : ''}
     </div>
   `;
   sumEl.style.display = 'block';
