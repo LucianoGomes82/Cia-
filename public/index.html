@@ -1336,6 +1336,12 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
             <option value="giro">⚡ Giro mais rápido</option>
           </select>
         </div>
+        <div style="flex:0 0 180px">
+          <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">🎲 Diversidade (mín produtos)</label>
+          <input type="number" id="opt-diversidade" placeholder="1 = concentrado" min="1" max="50" step="1"
+            style="width:100%;padding:9px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'DM Mono',monospace;text-align:center"
+            title="Garante pelo menos N produtos distintos no plano. 1 = concentra tudo no melhor. 5-10 = divide risco. Ex: 5 → aloca 1 un de cada top-5 primeiro, depois distribui o restante.">
+        </div>
       </div>
 
       <!-- Linha 2: Parâmetros de foco (min/max custo + período vendas) -->
@@ -21161,6 +21167,9 @@ function _hydrateOtimizador(){
   _optMoneySet('opt-max-cost', maxCost);
   if(el('opt-criterio')) el('opt-criterio').value = criterio;
   if(el('opt-periodo')) el('opt-periodo').value = periodo;
+  // v124d: diversidade (mín de produtos distintos)
+  const diversidade = Number(localStorage.getItem('cia_opt_diversidade')) || 1;
+  if(el('opt-diversidade') && diversidade > 0) el('opt-diversidade').value = String(diversidade);
   _renderOptCategorias(cats);
 }
 
@@ -21214,6 +21223,7 @@ function clearOtimizador(){
   if(el('opt-max-cost')) el('opt-max-cost').value = '';
   if(el('opt-criterio')) el('opt-criterio').value = 'score';
   if(el('opt-periodo')) el('opt-periodo').value = '60';
+  if(el('opt-diversidade')) el('opt-diversidade').value = '';
   _renderOptCategorias([]);
   localStorage.removeItem('cia_opt_budget');
   localStorage.removeItem('cia_opt_criterio');
@@ -21221,6 +21231,7 @@ function clearOtimizador(){
   localStorage.removeItem('cia_opt_min_cost');
   localStorage.removeItem('cia_opt_max_cost');
   localStorage.removeItem('cia_opt_cats');
+  localStorage.removeItem('cia_opt_diversidade');
   // Esconde resultados
   ['opt-summary','opt-plano','opt-sem-historico'].forEach(id => {
     const e = document.getElementById(id); if(e) e.style.display = 'none';
@@ -21328,6 +21339,7 @@ async function runOtimizador(){
   const periodo = Number(document.getElementById('opt-periodo')?.value) || 60;
   const minCost = _optMoneyParse(document.getElementById('opt-min-cost')?.value);
   const maxCost = _optMoneyParse(document.getElementById('opt-max-cost')?.value);
+  const diversidade = Math.max(1, Number(document.getElementById('opt-diversidade')?.value) || 1);
   const cats = _getOptCategoriasSelecionadas();
 
   // Validação
@@ -21348,6 +21360,7 @@ async function runOtimizador(){
     localStorage.setItem('cia_opt_min_cost', String(minCost));
     localStorage.setItem('cia_opt_max_cost', String(maxCost));
     localStorage.setItem('cia_opt_cats', JSON.stringify(cats));
+    localStorage.setItem('cia_opt_diversidade', String(diversidade));
   } catch {}
 
   // Pré-requisitos
@@ -21399,6 +21412,9 @@ async function runOtimizador(){
 
       candidatos.push({
         product: p,
+        // v124d: título que veio do Ranking (venda real), geralmente mais descritivo
+        // que o nome CIA (que vem de abreviações do fornecedor). Fallback pro CIA.
+        titleRanking: stats.title || p.name,
         custo: custoCIA,
         avgPrice: stats.avgPrice,
         lucroUn,
@@ -21440,35 +21456,67 @@ async function runOtimizador(){
   const positivos = candidatos.filter(c => c.lucroUn > 0);
   const negativos = candidatos.filter(c => c.lucroUn <= 0);
 
-  // Algoritmo guloso: pra cada candidato (do melhor pro pior), compra o máximo
-  // de unidades até: (a) estourar orçamento OU (b) satisfazer giro de 90 dias
+  // v124d: Algoritmo em DUAS FASES com diversidade:
+  //  FASE 1 — Semeadura: aloca 1 unidade de cada um dos top-N candidatos
+  //  (N = diversidade), garantindo pelo menos N produtos distintos no plano.
+  //  Se um candidato não cabe (custo > orçamento restante), pula pro próximo
+  //  até esgotar a lista.
+  //  FASE 2 — Preenchimento guloso: distribui o restante pegando sempre o
+  //  produto com MAIOR score que ainda cabe. Pode adicionar unidades aos já
+  //  semeados ou aumentar diversidade além do mínimo (se mais candidatos
+  //  positivos existem e cabem).
   const plano = [];
+  const planoMap = new Map(); // product.key → índice no plano (pra adicionar unidades)
   let budgetRestante = budget;
-  for(const c of positivos){
+
+  // FASE 1: semeadura dos top-N
+  const sementes = positivos.slice(0, diversidade);
+  for(const c of sementes){
     if(budgetRestante < c.custo) continue;
-    // Qtd razoável = projeção de giro × 90 dias (= estoque pra 3 meses)
-    // Mas respeita orçamento também. "Sem limite" por SKU conforme pedido.
-    const qtdOrcamento = Math.floor(budgetRestante / c.custo);
-    // Dica de giro: até 3 meses de giro, limita a quantidade "razoável"
-    // (mas se é o único candidato, enche tudo)
-    const qtd = qtdOrcamento;
-    if(qtd <= 0) continue;
-
-    const custoTotal = qtd * c.custo;
-    const lucroTotal = qtd * c.lucroUn;
-    const diasGiro = c.giroDia > 0 ? qtd / c.giroDia : 999;
-
-    plano.push({
-      ...c,
-      qtd, custoTotal, lucroTotal, diasGiro,
-    });
-    budgetRestante -= custoTotal;
-
-    if(budgetRestante < 50) break; // sobra irrelevante
+    const entry = { ...c, qtd: 1, custoTotal: c.custo, lucroTotal: c.lucroUn };
+    plano.push(entry);
+    planoMap.set(c.product.key, plano.length - 1);
+    budgetRestante -= c.custo;
   }
 
+  // FASE 2: preenchimento guloso (sem limite por SKU) com os candidatos positivos
+  // Loop até não caber mais nada (ou sobra for irrelevante)
+  while(budgetRestante >= 50){
+    let adicionou = false;
+    for(const c of positivos){
+      if(budgetRestante < c.custo) continue;
+      // Qts que cabem desse candidato
+      const qtdExtra = Math.floor(budgetRestante / c.custo);
+      if(qtdExtra <= 0) continue;
+      // Se já tá no plano, adiciona unidades; senão cria entrada nova
+      let entry;
+      if(planoMap.has(c.product.key)){
+        entry = plano[planoMap.get(c.product.key)];
+        entry.qtd += qtdExtra;
+        entry.custoTotal = entry.qtd * c.custo;
+        entry.lucroTotal = entry.qtd * c.lucroUn;
+      } else {
+        entry = { ...c, qtd: qtdExtra, custoTotal: qtdExtra * c.custo, lucroTotal: qtdExtra * c.lucroUn };
+        plano.push(entry);
+        planoMap.set(c.product.key, plano.length - 1);
+      }
+      budgetRestante -= qtdExtra * c.custo;
+      adicionou = true;
+      break; // volta pro top da lista (candidato de maior score ganha de novo)
+    }
+    if(!adicionou) break;
+  }
+
+  // Calcula diasGiro final (depois que qtd foi definida)
+  for(const entry of plano){
+    entry.diasGiro = entry.giroDia > 0 ? entry.qtd / entry.giroDia : 999;
+  }
+
+  // Reordena plano pelo critério escolhido (pra exibição)
+  plano.sort(sortFn);
+
   _optLastResult = {
-    budget, criterio, periodo, cats, minCost, maxCost,
+    budget, criterio, periodo, cats, minCost, maxCost, diversidade,
     plano, semHistorico, negativos,
     totals: {
       investido: budget - budgetRestante,
@@ -21506,7 +21554,7 @@ function _renderOtimizadorResultado(r){
         <div style="padding:12px;background:rgba(167,139,250,.08);border-radius:6px;border-left:3px solid var(--purple)">
           <div style="font-size:10px;color:var(--text3);font-weight:600;letter-spacing:0.5px">📦 UNIDADES</div>
           <div style="font-size:20px;font-weight:700;color:var(--purple);font-family:'DM Mono',monospace;margin-top:4px">${r.totals.unidades}</div>
-          <div style="font-size:10px;color:var(--text3);margin-top:2px">em ${r.totals.produtos} produtos diferentes</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">em ${r.totals.produtos} produto(s) diferente(s)${r.diversidade > 1 ? ` ${r.totals.produtos >= r.diversidade ? '✓' : '⚠'} meta ${r.diversidade}` : ''}</div>
         </div>
         <div style="padding:12px;background:rgba(245,158,11,.08);border-radius:6px;border-left:3px solid var(--amber)">
           <div style="font-size:10px;color:var(--text3);font-weight:600;letter-spacing:0.5px">🎯 CRITÉRIO</div>
@@ -21533,8 +21581,8 @@ function _renderOtimizadorResultado(r){
       <tr style="border-top:1px solid var(--border)">
         <td style="padding:8px;text-align:center;color:var(--text3);font-size:11px">${idx+1}</td>
         <td style="padding:8px">
-          <div style="font-weight:600;color:var(--text);font-size:12px">${escapeHTML(p.product.name)}</div>
-          <div style="font-size:10px;color:var(--text3);margin-top:2px">${catBadges}${escapeHTML(p.lojaCIA)} · ${p.nVendas} venda(s) · ${p.unidadesVendidas} un vendidas</div>
+          <div style="font-weight:600;color:var(--text);font-size:12px">${escapeHTML(p.titleRanking || p.product.name)}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">${catBadges}CIA: ${escapeHTML(p.product.name)} · ${escapeHTML(p.lojaCIA)} · ${p.nVendas} venda(s) · ${p.unidadesVendidas} un vendidas</div>
         </td>
         <td style="padding:8px;text-align:center;font-weight:700;color:var(--purple);font-size:14px">${p.qtd}</td>
         <td style="padding:8px;text-align:right;font-family:'DM Mono',monospace;font-size:12px">R$ ${fmt(p.custo)}</td>
@@ -21630,7 +21678,7 @@ function _optCopyToCompras(){
     return;
   }
   const lines = _optLastResult.plano.map(p =>
-    `${p.qtd}x ${p.product.name} - R$ ${(p.custo).toFixed(2)} (${p.lojaCIA})`
+    `${p.qtd}x ${p.titleRanking || p.product.name} - R$ ${(p.custo).toFixed(2)} (${p.lojaCIA})`
   ).join('\n');
   // Copia pro clipboard
   if(navigator.clipboard){
@@ -21657,7 +21705,8 @@ function _optExportXLSX(){
   const r = _optLastResult;
   const rows = r.plano.map((p, i) => ({
     '#': i+1,
-    'Produto': p.product.name,
+    'Produto (Ranking)': p.titleRanking || p.product.name,
+    'Produto (CIA)': p.product.name,
     'Fornecedor': p.lojaCIA,
     'Qtd': p.qtd,
     'Custo/un': Number(p.custo.toFixed(2)),
@@ -21673,7 +21722,7 @@ function _optExportXLSX(){
   // Adiciona linha de total
   rows.push({});
   rows.push({
-    'Produto': 'TOTAL',
+    'Produto (Ranking)': 'TOTAL',
     'Qtd': r.totals.unidades,
     'Investimento': Number(r.totals.investido.toFixed(2)),
     'Lucro total': Number(r.totals.lucroTotal.toFixed(2)),
