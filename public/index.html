@@ -1566,6 +1566,7 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
                 <option value="unread">🔴 Apenas não lidas</option>
                 <option value="any">💬 Com qualquer mensagem</option>
                 <option value="none">⚪ Sem mensagem</option>
+                <option value="lacre_pendente">🛡️ A caminho sem aviso de lacre</option>
               </select>
             </div>
 
@@ -1592,6 +1593,8 @@ Samsung A15 128GB R$799 ⚫ Preto | 🔵 Azul | 🟢 Verde" style="width:100%;pa
               <button class="btn btn-sm" onclick="setFilterPeriod('clear')" title="Limpar filtros de data" style="font-size:10px;padding:4px 8px;background:rgba(239,68,68,.1);color:var(--red);border:1px solid var(--red)">✕</button>
               <!-- Atalho rápido para mensagens pendentes -->
               <button id="vendas-shortcut-pending" class="btn btn-sm" onclick="toggleFiltroMsgsPendentes()" title="Mostrar apenas vendas com mensagens em aberto pra responder" style="font-size:10px;padding:4px 8px;background:rgba(245,158,11,.1);color:var(--amber);border:1px solid var(--amber);margin-left:6px">💬 Pendentes <span id="vendas-shortcut-pending-count" style="font-weight:700"></span></button>
+              <!-- v126: atalho — vendas a caminho que ainda não receberam o aviso de lacre -->
+              <button id="vendas-shortcut-lacre" class="btn btn-sm" onclick="toggleFiltroLacrePendente()" title="Vendas a caminho (já despachadas, ainda não entregues) que ainda não receberam o aviso de lacre de segurança" style="font-size:10px;padding:4px 8px;background:rgba(62,207,142,.1);color:var(--green);border:1px solid var(--green)">🛡️ Sem aviso de lacre <span id="vendas-shortcut-lacre-count" style="font-weight:700"></span></button>
             </div>
 
             <span id="vendas-filter-count" style="margin-left:auto;font-size:10px;color:var(--text3);font-style:italic"></span>
@@ -14459,6 +14462,29 @@ function toggleFiltroMsgsPendentes(){
   renderVendas();
 }
 
+// v126: atalho do filtro "a caminho sem aviso de lacre"
+function toggleFiltroLacrePendente(){
+  const sel = document.getElementById('vendas-filter-msgs');
+  if(!sel) return;
+  sel.value = (sel.value === 'lacre_pendente') ? 'all' : 'lacre_pendente';
+  renderVendas();
+}
+
+// v126: venda já despachada e ainda não entregue ("a caminho").
+// Usa substatus (API ou XLSX normalizado) e cai pro shipment.status.
+const _SUB_A_CAMINHO = new Set(['shipped','in_transit','out_for_delivery','forwarded','in_hub','in_warehouse','picked_up','dropped_off','waiting_for_withdrawal','soon_deliver','delayed']);
+const _SUB_FINALIZADO = new Set(['delivered','not_delivered','returning_to_sender','returned','cancelled']);
+function isVendaACaminho(v){
+  if(!v || v._isManual || v.status === 'cancelled') return false;
+  const sub = String(v.shipment?.substatus || v.substatus || '').toLowerCase();
+  const st  = String(v.shipment?.status || '').toLowerCase();
+  if(v.date_delivered || st === 'delivered' || _SUB_FINALIZADO.has(sub)) return false;
+  return _SUB_A_CAMINHO.has(sub) || st === 'shipped';
+}
+function isLacrePendente(v){
+  return isVendaACaminho(v) && !getAvisoLacreEnviado(v.id);
+}
+
 async function setVendasView(mode){
   _vendasView = mode;
   // Atualiza visual dos botões
@@ -16428,6 +16454,7 @@ function renderVendas(){
   if(filterMsgs !== 'all'){
     items = items.filter(v => {
       if(v._isManual) return false;  // lançamentos manuais não têm conversa
+      if(filterMsgs === 'lacre_pendente') return isLacrePendente(v);  // v126
       const conv = vendaConversations.get(String(v.id));
       const unread  = conv?.unreadCount > 0;
       const pending = !!conv?.lastMsgFromBuyer;  // comprador falou por último
@@ -16446,6 +16473,16 @@ function renderVendas(){
     const conv = vendaConversations.get(String(v.id));
     return (conv?.unreadCount > 0) || !!conv?.lastMsgFromBuyer;
   }).length;
+  // v126: contagem do atalho "sem aviso de lacre"
+  const lacreBtn = document.getElementById('vendas-shortcut-lacre');
+  const lacreCountEl = document.getElementById('vendas-shortcut-lacre-count');
+  if(lacreBtn && lacreCountEl){
+    const nLacre = sourceData.filter(isLacrePendente).length;
+    lacreCountEl.textContent = nLacre > 0 ? `(${nLacre})` : '';
+    const ativo = filterMsgs === 'lacre_pendente';
+    lacreBtn.style.background = ativo ? 'rgba(62,207,142,.3)' : 'rgba(62,207,142,.1)';
+    lacreBtn.style.fontWeight = ativo ? '700' : '';
+  }
   const pendingShortcut = document.getElementById('vendas-shortcut-pending');
   const pendingCountEl  = document.getElementById('vendas-shortcut-pending-count');
   if(pendingShortcut && pendingCountEl){
@@ -18339,6 +18376,15 @@ const MENSAGEM_TEMPLATES = [
       'Oi {nome}! Seu {produto} foi enviado com lacre de segurança. Se, na entrega, a embalagem estiver aberta, violada ou visivelmente danificada, você pode recusar o recebimento. Nesse caso, registre a ocorrência pelos canais da compra e nos avise por aqui para que a situação seja analisada.',
       'Olá {nome}, tudo bem? Seu pedido saiu daqui com lacre de segurança. Ao receber, confira a embalagem: se ela estiver aberta, violada ou visivelmente danificada, pode recusar a entrega. Depois, acompanhe pelos canais da própria compra e nos avise nesta conversa para analisarmos a ocorrência.',
       'Oi {nome}! Um aviso: enviamos seu {produto} com lacre de segurança. Caso o pacote chegue aberto, violado ou visivelmente danificado, a orientação é recusar o recebimento, registrar a ocorrência pelos canais disponíveis na compra e nos avisar por aqui para que o caso seja analisado.',
+      'Oi {nome}, tudo certo? Seu {produto} já está a caminho, embalado com lacre de segurança. Se ao receber o pacote estiver aberto, violado ou visivelmente danificado, você pode recusar a entrega. Depois é só registrar pelos canais da compra e nos chamar aqui para analisarmos.',
+      'Olá {nome}! Passando para avisar que seu pedido foi lacrado antes do envio. Caso a embalagem chegue aberta, rasgada ou com sinais de violação, você pode recusar o recebimento na hora. Registre a ocorrência pelos canais da compra e nos avise nesta conversa.',
+      'Oi {nome}! Cuidamos do seu {produto} com lacre de segurança. Um pedido: confira o pacote no momento da entrega. Se ele estiver aberto, violado ou visivelmente danificado, pode recusar, registrar a ocorrência pelos canais da compra e nos avisar por aqui.',
+      'Olá {nome}, tudo bem? Seu pacote saiu lacrado. Se, na entrega, perceber que ele foi aberto, violado ou está visivelmente danificado, a orientação é recusar o recebimento. Em seguida, registre pelos canais disponíveis na compra e nos mande uma mensagem aqui para análise.',
+      'Oi {nome}! Seu {produto} está a caminho com lacre de segurança. Se o pacote chegar com o lacre rompido, aberto ou visivelmente danificado, você pode recusar a entrega. Nesse caso, registre a ocorrência pela própria compra e nos avise aqui para que seja analisada.',
+      'Olá {nome}! Uma dica rápida para a entrega: seu pedido foi enviado lacrado. Se a embalagem estiver aberta, violada ou visivelmente danificada quando chegar, você pode recusar o recebimento, registrar pelos canais da compra e nos contar aqui para analisarmos.',
+      'Oi {nome}, tudo bem? Embalamos seu {produto} com lacre de segurança. Ao receber, dê uma olhada na embalagem: se houver sinais visíveis de abertura, violação ou dano, pode recusar a entrega, registrar a ocorrência pelos canais da compra e nos avisar nesta conversa.',
+      'Olá {nome}! Seu pedido já foi despachado com lacre de segurança. Caso o pacote seja entregue aberto, violado ou visivelmente danificado, você pode recusar o recebimento. Depois, registre pelos canais disponíveis na compra e nos avise por aqui para a análise do caso.',
+      'Oi {nome}! Para sua segurança, seu {produto} foi lacrado antes de sair. Se no recebimento a embalagem estiver aberta, violada ou visivelmente danificada, recuse a entrega, registre a ocorrência pelos canais da compra e nos envie uma mensagem aqui para analisarmos.',
     ],
   },
 ];
@@ -18364,7 +18410,7 @@ function getAvisoLacreEnviado(orderId){
   return _loadAvisosLacre()[String(orderId)] || null;
 }
 function _marcarAvisoLacreSeAplicavel(orderId, text){
-  if(!/lacre de seguran/i.test(String(text || ''))) return;
+  if(!/\blacr(?:e|ad[oa])\b/i.test(String(text || ''))) return;  // v126: cobre 'lacre' e 'lacrado'
   const m = _loadAvisosLacre();
   m[String(orderId)] = Date.now();
   try { localStorage.setItem('cia_aviso_lacre', JSON.stringify(m)); } catch {}
