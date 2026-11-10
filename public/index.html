@@ -18034,13 +18034,16 @@ async function openVendaChat(orderId){
   const productTitle = venda.firstItem?.title || venda.items?.[0]?.item?.title || '';
   const blockedBadge = venda._isBlockedState ? `<span style="background:rgba(239,68,68,.15);color:var(--red);font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;font-weight:700">🚫 ${escapeHTML(venda._blockedUF || 'Bloqueado')}</span>` : '';
   const fakeBadge = venda._isFake ? `<span style="background:rgba(245,158,11,.15);color:var(--amber);font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;font-weight:700">⚠ FAKE</span>` : '';
+  // v125: mostra se o aviso de lacre já foi enviado nesta venda
+  const avisoLacreTs = getAvisoLacreEnviado(orderId);
+  const lacreBadge = avisoLacreTs ? `<span style="background:rgba(62,207,142,.12);color:var(--green);font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;font-weight:700" title="Aviso de lacre de segurança já enviado">🛡️ Aviso enviado ${new Date(avisoLacreTs).toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit' })}</span>` : '';
 
   modal.innerHTML = `<div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;max-width:700px;width:100%;max-height:90vh;display:flex;flex-direction:column">
     <!-- Cabeçalho -->
     <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:start;gap:12px">
       <div style="flex:1;min-width:0">
         <div style="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-          💬 Conversa — ${escapeHTML(buyerName)}${blockedBadge}${fakeBadge}
+          💬 Conversa — ${escapeHTML(buyerName)}${blockedBadge}${fakeBadge}${lacreBadge}
         </div>
         <div style="font-size:11px;color:var(--text3);margin-top:3px">Venda <code>${escapeHTML(String(orderId))}</code> · ${escapeHTML(productTitle.slice(0, 70))}${productTitle.length>70?'...':''}</div>
       </div>
@@ -18068,6 +18071,7 @@ async function openVendaChat(orderId){
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;flex-wrap:wrap">
         <div style="font-size:10px;color:var(--text3)">💡 Mensagens são enviadas via API do Mercado Livre.</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button onclick="inserirAvisoLacre('${escapeHTML(orderId)}')" class="btn btn-sm" style="font-size:11px;background:rgba(62,207,142,.12);color:var(--green);border:1px solid rgba(62,207,142,.3)" title="Insere o aviso de lacre de segurança / pacote violado (texto validado com o suporte ML). Revise e clique Enviar.">🛡️ Aviso de lacre</button>
           <button onclick="openMensagemSugestoes('${escapeHTML(orderId)}')" class="btn btn-sm" style="font-size:11px;background:rgba(168,85,247,.15);color:var(--purple);border:1px solid rgba(168,85,247,.3)" title="Sugestões de mensagens prontas (sem dados pessoais)">💡 Sugestões</button>
           <button onclick="markVendaChatRead('${escapeHTML(orderId)}')" class="btn btn-sm" style="font-size:11px" title="Marca todas as mensagens como lidas (sem enviar resposta)">👁 Marcar lidas</button>
           <button onclick="sendVendaChatReply('${escapeHTML(orderId)}', this)" class="btn btn-p btn-sm" style="font-size:11px">📤 Enviar</button>
@@ -18321,7 +18325,64 @@ const MENSAGEM_TEMPLATES = [
     label: 'Resposta a problema',
     text: 'Oi {nome}, tudo bem? Vi sua mensagem e lamento pelo transtorno 😔 Pode me contar com mais detalhes o que aconteceu? Vou resolver isso pelo Mercado Livre o quanto antes!',
   },
+  // v125: aviso preventivo de pacote violado — texto validado com o suporte ML
+  // em 09/11/2026. Regras combinadas com o suporte: (1) a recusa só vale quando
+  // houver problema VISÍVEL no pacote no momento da entrega; (2) orientar a
+  // registrar pelos canais da compra; (3) não prometer resultado antes da análise.
+  // Tem várias variantes pra não repetir texto idêntico entre vendas
+  // (evita moderação de "mensagem automática").
+  {
+    id: 'aviso_lacre',
+    icon: '🛡️',
+    label: 'Aviso de lacre (pacote violado)',
+    variants: [
+      'Oi {nome}! Seu {produto} foi enviado com lacre de segurança. Se, na entrega, a embalagem estiver aberta, violada ou visivelmente danificada, você pode recusar o recebimento. Nesse caso, registre a ocorrência pelos canais da compra e nos avise por aqui para que a situação seja analisada.',
+      'Olá {nome}, tudo bem? Seu pedido saiu daqui com lacre de segurança. Ao receber, confira a embalagem: se ela estiver aberta, violada ou visivelmente danificada, pode recusar a entrega. Depois, acompanhe pelos canais da própria compra e nos avise nesta conversa para analisarmos a ocorrência.',
+      'Oi {nome}! Um aviso: enviamos seu {produto} com lacre de segurança. Caso o pacote chegue aberto, violado ou visivelmente danificado, a orientação é recusar o recebimento, registrar a ocorrência pelos canais disponíveis na compra e nos avisar por aqui para que o caso seja analisado.',
+    ],
+  },
 ];
+
+// v125: escolhe o texto do template. Templates com `variants` alternam a
+// variante por venda (determinístico pelo id + quantos avisos já foram
+// enviados), pra vendas diferentes não receberem o mesmo texto.
+function getTemplateText(tpl, venda){
+  if(!Array.isArray(tpl.variants) || !tpl.variants.length) return tpl.text;
+  const id = String(venda?.pack_id || venda?.id || '');
+  let h = 0;
+  for(const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const enviados = Object.keys(_loadAvisosLacre()).length;
+  return tpl.variants[(h + enviados) % tpl.variants.length];
+}
+
+// v125: controle de quais vendas já receberam o aviso de lacre
+function _loadAvisosLacre(){
+  try { return JSON.parse(localStorage.getItem('cia_aviso_lacre') || '{}') || {}; }
+  catch { return {}; }
+}
+function getAvisoLacreEnviado(orderId){
+  return _loadAvisosLacre()[String(orderId)] || null;
+}
+function _marcarAvisoLacreSeAplicavel(orderId, text){
+  if(!/lacre de seguran/i.test(String(text || ''))) return;
+  const m = _loadAvisosLacre();
+  m[String(orderId)] = Date.now();
+  try { localStorage.setItem('cia_aviso_lacre', JSON.stringify(m)); } catch {}
+}
+
+// v125: atalho do chat — insere o aviso de lacre no campo de resposta
+function inserirAvisoLacre(orderId){
+  const dataset = vendasDataFull || vendasData;
+  const venda = dataset.find(v => String(v.id) === String(orderId));
+  if(!venda) return;
+  const ja = getAvisoLacreEnviado(orderId);
+  if(ja){
+    const quando = new Date(ja).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+    if(!confirm(`O aviso de lacre já foi enviado para esta venda em ${quando}.\n\nInserir de novo mesmo assim?`)) return;
+  }
+  const tpl = MENSAGEM_TEMPLATES.find(t => t.id === 'aviso_lacre');
+  aplicarSugestao(orderId, fillTemplate(getTemplateText(tpl, venda), venda));
+}
 
 // Aplica variáveis do template ao texto. Faltou nome? Usa "tudo bem".
 function fillTemplate(text, venda){
@@ -18350,7 +18411,7 @@ function openMensagemSugestoes(orderId){
   modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
 
   const items = MENSAGEM_TEMPLATES.map(tpl => {
-    const preview = fillTemplate(tpl.text, venda);
+    const preview = fillTemplate(getTemplateText(tpl, venda), venda);
     const len = preview.length;
     const lenColor = len > 350 ? 'var(--red)' : len > 280 ? 'var(--amber)' : 'var(--text3)';
     // Codifica preview pra atributo data-* (evita aspas problemáticas)
@@ -18506,7 +18567,7 @@ async function sendActionGuideTemplate(orderId, optionId, btn){
       throw new Error(`HTTP ${r.status}: ${errBody.slice(0, 200)}`);
     }
     if(ta) ta.value = '';
-    if(isFreeText && text) recordSentMessage(text);
+    if(isFreeText && text){ recordSentMessage(text); _marcarAvisoLacreSeAplicavel(orderId, text); }
     btn.textContent = '✓';
     showToast(`Mensagem enviada (motivo: ${optionId})`);
     setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 1500);
@@ -18611,6 +18672,7 @@ async function sendVendaChatReply(orderId, btn){
 
     ta.value = '';
     recordSentMessage(text);
+    _marcarAvisoLacreSeAplicavel(orderId, text);
     btn.textContent = usedFallback ? '✓ Enviada (motivo OTHER)' : '✓ Enviada';
     setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
 
